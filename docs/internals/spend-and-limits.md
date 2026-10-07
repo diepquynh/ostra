@@ -334,6 +334,6 @@ because the running server holds the session. In that case, use the board or the
 | How a raise folds | `SessionState::budget_answered` in [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
 | YOLO and the budget gate | `Planner::next_steps` in [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) and `perform_yolo` in [`crates/ostra-engine/src/runner/judges.rs`](../../crates/ostra-engine/src/runner/judges.rs) |
 | YOLO handling of each other gate | `yolo_leaves_open` and `yolo_plan` in [`crates/ostra-default-plugin/src/judge_input/yolo.rs`](../../crates/ostra-default-plugin/src/judge_input/yolo.rs) |
-| Init caps | [`crates/ostra-default-plugin/src/init.rs`](../../crates/ostra-default-plugin/src/init.rs) |
+| Init caps | [`crates/ostra-default-plugin/src/stages/init/planner.rs`](../../crates/ostra-default-plugin/src/stages/init/planner.rs) |
 | Prices and the cost formula | [`crates/ostra-core/src/pricing.rs`](../../crates/ostra-core/src/pricing.rs), [`crates/ostra-server/src/prices.rs`](../../crates/ostra-server/src/prices.rs) |
 | Harness transcript usage | [`crates/ostra-exec-harness/src/transcript.rs`](../../crates/ostra-exec-harness/src/transcript.rs) |

@@ -41,9 +41,10 @@ ostra-sdk         the plugin SDK: the Plugin trait's helpers, typed result contr
                   registry, workflow builders, and the stdio transport
 ostra-standard    the definitions of the standard plugin `ostra`, written with ostra-sdk: the built-in agents
                   (from assets/agents/) and the default workflows (from assets/workflows/)
-ostra-default-plugin  the standard plugin's pipeline: the built-in stages' state (`data.rs`), fold (`fold/`),
-                  planner (`planner/`), judges (`judge.rs`, `judge_input/`), views (`view/`), step effects
-                  (`pipeline/`), the docs stage (`book/`), and the spawn factory (`factory.rs`)
+ostra-default-plugin  the standard plugin's pipeline: one folder per built-in stage (`stages/<stage>/`) with
+                  its state, fold, planner rules, judges, and gates; the dispatchers and shared code in
+                  `data.rs`, `fold/`, `planner/`, `judge_input/`, `view/`, and `pipeline/`; the spawn factory
+                  (`factory.rs`)
 ostra-server      the `ostra` binary: axum, auth, REST, WebSocket, embedded web build, CLI
 ```
 
@@ -62,8 +63,9 @@ method, not a dependency. The same holds for `ostra-workspace`: it reaches the s
 
 **1. Every state change is an event.** A session's state is `SessionState::fold(pipeline, id, events)`
 (`crates/ostra-engine/src/state.rs`). Nothing mutates session state except `SessionState::apply`, which calls
-the pipeline's fold hooks for the events the built-in stages read (`crates/ostra-default-plugin/src/fold/`,
-state in `SessionState::ext`). Nothing appends events except `Inner::append` in
+the pipeline's fold hooks for the events the built-in stages read (the dispatchers in
+`crates/ostra-default-plugin/src/fold/` hand each event to its stage in `stages/<stage>/`, state in
+`SessionState::ext`). Nothing appends events except `Inner::append` in
 `crates/ostra-engine/src/runner/driver.rs`, which stores, folds, broadcasts, and wakes the driver in one place.
 The pipeline's step effects append through `StepHost::append`, which calls it. The fold must stay a pure
 function of the log: if a fact from outside the log changes how an event folds, record it in the event.
@@ -73,7 +75,7 @@ because the fold cannot read `project.toml`.
 **2. The planner is pure.** `next_steps(&SessionState, &PlanCtx) -> Vec<Step>` in
 `crates/ostra-engine/src/plan.rs` decides what happens next; the runner performs steps and appends what
 happened. The engine plans the generic parts (YOLO, the workflow walk, custom and plugin stages, messages), and
-the pipeline plans each built-in stage (`crates/ostra-default-plugin/src/planner/<stage>.rs`). A step only the
+the pipeline plans each built-in stage (`crates/ostra-default-plugin/src/stages/<stage>/planner.rs`). A step only the
 pipeline plans is `Step::Pipeline` (`OstraStep` in `steps.rs`), performed by `Pipeline::perform`. Settings reach
 the planner only through `PlanCtx`. Each `Step` has a `key()` so an in-flight step is never started twice. When
 you add behavior, add it as fold state plus a planner rule, never as logic inside the runner.
@@ -118,31 +120,34 @@ where it shows a behavior. Describe only what the code does now, and fix a page 
 an existing page in `docs/` only. A new page also needs a `NAV` entry in `site/src/docs/pages.ts` (recipe
 below).
 
-**10. Files stay small and are split by feature.** Keep a source file under about 800 lines, because a person
-and an agent read one feature in one place. Inside each area, put each feature in its own file. In the standard
-plugin, `fold/` and `planner/` split by stage, such as `planner/spec.rs` and `fold/research.rs`.
-Code that several stages use goes in the area's `shared.rs`. Put each trait in its own
-file. Split a large `impl` into a folder by area, with one `impl` block per file. When a file grows past the
-limit, split it in a separate `refactor:` commit that only moves code.
+**10. Files stay small and group by feature.** Keep a source file under about 800 lines, because a person and
+an agent read one feature in one place. Group code by feature, not by layer. In the standard plugin, each stage
+has a folder `stages/<stage>/` with only the files it needs: `data.rs` (its state), `fold.rs`, `runs.rs`,
+`gates.rs`, and `judges.rs` (how events change it), `planner.rs` (its rules), and `judge_input.rs`. A `match`
+over every stage stays a short dispatcher in `fold/`, `planner/`, or `judge_input/`, and each arm calls the
+stage. Code that several stages use stays in those folders and in `data.rs`. Put each trait in its own file.
+When a file grows past the limit, split it in a separate `refactor:` commit that only moves code.
 
 ## Recipes
 
 **Add a gate kind.** Add the variant to `GatePayload` (`ostra-core/src/event.rs`) with `stage()` and
-`kind_str()` arms. The rest is in `crates/ostra-default-plugin/src/`: record it in the fold (`on_gate_opened`,
-`on_gate_answered` in `fold/gates.rs`, which fold every gate kind but `BudgetReached`, which the engine folds); open it from the stage's planner file;
+`kind_str()` arms. The rest is in `crates/ostra-default-plugin/src/`: record it in the fold: add an arm to the
+dispatchers `on_gate_opened` and `on_gate_answered` in `fold/gates.rs`, which call the stage's
+`stages/<stage>/gates.rs` (the engine folds `BudgetReached` itself); open it from the stage's `planner.rs`;
 decide its YOLO handling in `judge_input/yolo.rs` (`yolo_plan`: fixed answer, judge, or `None` for gates YOLO
 must not answer, plus `yolo_leaves_open`); accept its answer shape in `fold::validate_answer`. A gate that the
 pipeline does not validate gets its answer shape in the engine's `runner/control.rs` `validate_answer`. Add a
 fixture; regenerate TypeScript (below).
 
 **Add or change a judge.** The `JudgeKind` variant in `ostra-core/src/event.rs`; in
-`crates/ostra-default-plugin/src/`: the output struct and schema in `judge.rs`, the input builder in
-`judge_input/`, the planner step that asks, the fold that applies the decision (`fold/decisions.rs`), and
+`crates/ostra-default-plugin/src/`: the output struct and schema in `judge.rs`, the input builder in the
+stage's `judge_input.rs` with an arm in `judge_input/inputs.rs`, the planner step that asks, the fold that
+applies the decision (the stage's `judges.rs`, with an arm in `fold/decisions.rs`), and
 whether it can be overridden (`can_override` in `fold/shared.rs`); the prompt in `assets/judges/<name>.md`.
 
 **Change an agent.** Edit `assets/agents/<name>/prompt.md` and `agent.toml` (tier, effort per executor,
 capabilities, timeout). If the return changes, change its submit struct and the fold that reads it
-(`crates/ostra-default-plugin/src/fold/`). Prompts
+(`runs.rs` in the stage's folder under `crates/ostra-default-plugin/src/stages/`). Prompts
 follow the writing rules below and keep every rule ID.
 
 **Add a native tool.** Implement it in `ostra-tools`, give it a definition modeled on Claude Code's own tool

@@ -100,8 +100,8 @@ pub fn fold(pipeline: crate::pipeline::PipelineRef, id: SessionId, events: &[Sto
 executions, messages, workflow stages, checkpoints, the budget, and pause. For each event that a built-in stage
 reads, `apply` calls the pipeline at the same point (`Pipeline::event`, `started`, `finished`, `decision`,
 `gate_opened`, `gate_answered`). The standard pipeline keeps its state in `SessionState::ext`
-(`OstraState` in `crates/ostra-default-plugin/src/data.rs`), and its fold is in
-`crates/ostra-default-plugin/src/fold/`. Together, the two parts set the data that the planner reads:
+(`OstraState` in `crates/ostra-default-plugin/src/data.rs`), and its fold is in the dispatchers of
+`crates/ostra-default-plugin/src/fold/` and in each stage folder of `crates/ostra-default-plugin/src/stages/`. Together, the two parts set the data that the planner reads:
 
 - The explore tasks and their research documents.
 - The spec and plan tracks: runs, fact-check passes, pending answers, and approval.
@@ -145,7 +145,7 @@ if matches!(req.purpose, ExecPurpose::Review { .. }) && let Value::Object(map) =
 The fold reads the list from the event, not from the file:
 
 ```rust
-// crates/ostra-default-plugin/src/fold/loops.rs, loop_finished
+// crates/ostra-default-plugin/src/stages/build/loops.rs, loop_finished
 // Recorded at spawn from the project's Review Rule Set, so the fold stays a pure function
 // of the event log.
 let autofix_ids: BTreeSet<String> = rec.params.get(AUTO_FIXABLE_PARAM) ...
@@ -241,7 +241,7 @@ planner decides the next step. For the work loop of a phase, the fold sets the n
 re-run (`WorkKind::Rerun`) with the same instructions:
 
 ```rust
-// crates/ostra-default-plugin/src/fold/loops.rs
+// crates/ostra-default-plugin/src/stages/build/loops.rs
 if status == ExecutionStatus::Interrupted {
     // Re-run with the same spawn block (HANDOVER 11.2).
     l.next = match in_flight { LoopNext::Work { instructions, .. } => LoopNext::Work {
@@ -381,7 +381,7 @@ project, because it is part of the repository and lives longer than one workspac
 | --- | --- |
 | Event and gate types | `crates/ostra-core/src/event.rs` |
 | The fold and `SessionState` | `crates/ostra-engine/src/state.rs` |
-| The fold of the built-in stages and `OstraState` | `crates/ostra-default-plugin/src/fold/`, `crates/ostra-default-plugin/src/data.rs` |
+| The fold of the built-in stages and `OstraState` | `crates/ostra-default-plugin/src/fold/` (dispatchers), `crates/ostra-default-plugin/src/stages/<stage>/` (`fold.rs`, `runs.rs`, `gates.rs`, `judges.rs`), `crates/ostra-default-plugin/src/data.rs` |
 | Messages in the fold, and old coordination events | `crates/ostra-engine/src/coord.rs` |
 | Workflow and plugin stage fold | `crates/ostra-engine/src/workflow.rs`, `crates/ostra-engine/src/plugin_stage.rs` |
 | `Inner::append` | `crates/ostra-engine/src/runner/driver.rs` |

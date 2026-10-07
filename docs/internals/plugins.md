@@ -168,15 +168,21 @@ each session state carries it.
 A plugin stage decides one step at a time over stdio, and Ostra records each decision as an event. The pipeline
 runs in the process instead. It folds its own state and plans its own steps, the same as the engine:
 
+- The code of each built-in stage is in its own folder,
+  [`stages/<stage>/`](../../crates/ostra-default-plugin/src/stages/): its state (`data.rs`), how events change
+  it (`fold.rs`, `runs.rs`, `gates.rs`, `judges.rs`), its planner rules (`planner.rs`), and its judge inputs
+  (`judge_input.rs`). A stage has only the files it needs.
 - The engine keeps the state of the pipeline in each session as an opaque box, `SessionState::ext`. The
   standard pipeline keeps `OstraState` in it
   ([`crates/ostra-default-plugin/src/data.rs`](../../crates/ostra-default-plugin/src/data.rs)): the research
   tasks, the spec and plan tracks, the phases and their loops, and each project's closing and docs track.
-- The fold calls the pipeline for each event that the built-in stages read
-  ([`fold/`](../../crates/ostra-default-plugin/src/fold/)). The fold stays a pure function of the log, because
-  the pipeline is deterministic Rust code.
-- The planner calls `Pipeline::builtin_stage` for each built-in node of the workflow
-  ([`planner/`](../../crates/ostra-default-plugin/src/planner/), split by stage, with track and stakes in `shared.rs`). A step that only the
+  `data.rs` holds the types that several stages use, and each stage's own types are in its `data.rs`.
+- The fold calls the pipeline for each event that the built-in stages read. The dispatchers in
+  [`fold/`](../../crates/ostra-default-plugin/src/fold/) give each run, gate, and judge decision to the stage
+  that owns it. The fold stays a pure function of the log, because the pipeline is deterministic Rust code.
+- The planner calls `Pipeline::builtin_stage` for each built-in node of the workflow. `builtin_stage` in
+  [`planner/shared.rs`](../../crates/ostra-default-plugin/src/planner/shared.rs) calls the stage's
+  `planner.rs`. A step that only the
   pipeline plans is `Step::Pipeline`, with a key and a summary from the pipeline. The runner hands it back to
   `Pipeline::perform` ([`pipeline/effects.rs`](../../crates/ostra-default-plugin/src/pipeline/effects.rs)), for
   example the format command, an autofix, or the docs scan.
@@ -185,7 +191,8 @@ runs in the process instead. It folds its own state and plans its own steps, the
   (`AgentsFactory` in [`factory.rs`](../../crates/ostra-default-plugin/src/factory.rs)) reads them.
 - The judges, their inputs, the YOLO answers, and the checks of gate answers are in the pipeline
   ([`judge.rs`](../../crates/ostra-default-plugin/src/judge.rs),
-  [`judge_input/`](../../crates/ostra-default-plugin/src/judge_input/)).
+  [`judge_input/`](../../crates/ostra-default-plugin/src/judge_input/), and the `judge_input.rs` of each stage
+  that asks a judge).
 - `Pipeline::check_submit` adds checks to a submit at submit time, after the shape check. The executors call it
   through `ExecutionHost::check_submit`. The standard pipeline checks a `documentation` submit there.
 - The board, the run labels, and the artifacts of a session come from the pipeline

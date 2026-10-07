@@ -12,8 +12,8 @@ Two facts apply to every section below.
 - **Code runs the pipeline, not a model.** The planner decides which stage comes next, when a loop stops, and
   how many agents run at the same time. The engine's planner in
   [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) walks the workflow. The rules of
-  each built-in stage on this page are in the standard plugin's pipeline, split by stage, with track and stakes in `shared.rs` in
-  [`crates/ostra-default-plugin/src/planner/`](../../crates/ostra-default-plugin/src/planner/)
+  each built-in stage on this page are in the standard plugin's pipeline, one folder for each stage in
+  [`crates/ostra-default-plugin/src/stages/`](../../crates/ostra-default-plugin/src/stages/)
   ([Plugins](plugins.md#the-pipeline)). The planner is a pure function from the
   session's state to a list of next steps. Models do the work inside a stage and answer a small set of named
   questions. These questions are the judges, which [Gates and judges](gates-and-judges.md) describes. No agent
@@ -152,7 +152,7 @@ restarts the running work, and you cannot withdraw it:
 ![The Add context box with Send now and Queue for the next step](../images/console/add-context.png)
 
 When a task fails, the engine retries it automatically one time (`ERROR_RETRIES = 1` in
-[`data.rs`](../../crates/ostra-default-plugin/src/data.rs)). Then it opens an execution-failed gate. If every task
+[`data.rs`](../../crates/ostra-default-plugin/src/data.rs) of the standard plugin). Then it opens an execution-failed gate. If every task
 fails or is abandoned, the session fails with the message "there is no research document to write a spec from".
 The reason is Rule D1, which forbids a spec without research.
 
@@ -549,7 +549,8 @@ state:
 
 ### The implement and review loop
 
-Each phase is a loop, `WorkLoop` in [`data.rs`](../../crates/ostra-default-plugin/src/data.rs):
+Each phase is a loop, `WorkLoop` in
+[`stages/build/data.rs`](../../crates/ostra-default-plugin/src/stages/build/data.rs):
 
 1. The `implementer` runs with `Phase file:`, which points at its phase, or with `No plan:` and a reason (Hard
    rule 13). It edits the code and submits its changed files and report path.
@@ -560,7 +561,7 @@ Each phase is a loop, `WorkLoop` in [`data.rs`](../../crates/ostra-default-plugi
      instruction to remove the problem. This loop has no cap, and no gate can waive it (Hard rule 21). Also, the
      project's documentation does not run when a BLOCKER is open.
    - **Auto-fixable**: the engine applies these findings itself
-     ([`autofix.rs`](../../crates/ostra-default-plugin/src/autofix.rs)), with no agent run. A finding is auto-fixable
+     ([`stages/build/autofix.rs`](../../crates/ostra-default-plugin/src/stages/build/autofix.rs)), with no agent run. A finding is auto-fixable
      when the project marks its rule ID auto-fixable and its fix text is exactly
      ``Change `x` to `y` on line N`` or ``Add `text` above line N: `anchor` ``.
    - **HIGH and MEDIUM** go to the fix agent exactly as written, with the path of the review ledger. For each
@@ -923,10 +924,10 @@ the book write itself, and the docs of one project can run at the same time as t
 A session from a log without a recorded workflow does the same. This path is deprecated, and the workflow
 carries a notice that tells you to add the node ([Workflows](workflows.md#a-workflow-without-the-book-stage)).
 
-The code of the stage is in the standard plugin: the planner in
-[`planner/book.rs`](../../crates/ostra-default-plugin/src/planner/book.rs), the docs track and the checks in
-[`book/`](../../crates/ostra-default-plugin/src/book/), and the scan in
-[`docs_scan.rs`](../../crates/ostra-default-plugin/src/docs_scan.rs). The book format and its storage stay in
+The code of the stage is in the standard plugin's
+[`stages/book/`](../../crates/ostra-default-plugin/src/stages/book/): the planner in `planner.rs`, the state and
+the docs track in `data.rs` and `track.rs`, how runs and gates change it in `runs.rs` and `gates.rs`, the checks
+in `checks.rs`, and the scan in `scan.rs`. The book format and its storage stay in
 [`crates/ostra-core/src/book.rs`](../../crates/ostra-core/src/book.rs), because the engine, the console, and the
 book search all read them.
 
@@ -953,7 +954,7 @@ in rounds until the book meets a definition of done:
    reason. Each mechanism that two or more pages use, such as the slot limiter, gets its own item. An item also
    lists its `settings` (the keys, environment variables, and CLI flags that a user sets) and its `names` (1 to
    4 code names that belong to it alone). The plan has 1 to 30 broad pages (`MAX_DOCS_PAGES` in
-   [`book/mod.rs`](../../crates/ostra-default-plugin/src/book/mod.rs)) in groups such as `How it works` and `Security`,
+   [`stages/book/mod.rs`](../../crates/ostra-default-plugin/src/stages/book/mod.rs)) in groups such as `How it works` and `Security`,
    like the pages of this documentation.
 2. **First drafts.** One run with `Docs mode: page` writes each planned page. A writer gets its page, the whole
    plan, and the inventory items that its page owns.
@@ -998,7 +999,7 @@ The synthesis pass judges nine checks, which copy what this documentation does:
 | Self-contained parts | Each `##` part answers the questions that a reader asks about its sub-topic in full, because the book search returns each part alone. |
 
 The pipeline does not trust the pass alone. It runs its own checks on the drafts (`mechanical_issues` in
-[`book/checks.rs`](../../crates/ostra-default-plugin/src/book/checks.rs)): a link
+[`stages/book/checks.rs`](../../crates/ostra-default-plugin/src/stages/book/checks.rs)): a link
 to `<page id>.md` that names no page, the words "would", "should", and "might", "e.g.", "i.e.", and "etc.", a
 semicolon or an em dash in prose, an inventory item without an owning page, and a module of the reference sheet
 that no inventory item covers. An item covers a module when one of its sources lies inside the module, or the
@@ -1266,7 +1267,7 @@ A completion report names the stages that did not run and how to run them. It al
 | Review passes per loop | 3, or 10 under YOLO | `REVIEW_CAP`, `YOLO_REVIEW_BUDGET` |
 | Automatic retries after an error | 1 | `ERROR_RETRIES` |
 | Failing builds before build commands are refused | 5 | `DENY_THRESHOLD` in `build.rs` |
-| Pages one docs survey may plan | 30 | `MAX_DOCS_PAGES` in the standard plugin's `book/mod.rs` |
+| Pages one docs survey may plan | 30 | `MAX_DOCS_PAGES` in the standard plugin's `stages/book/mod.rs` |
 | Init scouts | 6 | `init::MAX_SCOUTS` |
 | Skills generated by default at init | 8 | `init::MAX_DEFAULT_GENERATE` |
 | Attached files per request | 50 | `MAX_CONTEXT_FILES` |

@@ -896,7 +896,8 @@ audits, and the notes are all done.
 | The builder and the composite editor in the console | [`web/src/features/builder/`](../../web/src/features/builder/) |
 | `WorkflowResolved`, `StageSkipped`, `NodeRan`, `StageReview`, the `Stage` purpose | [`crates/ostra-core/src/event.rs`](../../crates/ostra-core/src/event.rs) |
 | The walk: `workflow_flow`, `phase_stages` | [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) |
-| The built-in stages: `builtin_stage`, `build_done`, `book_flow`, the closing and book values | [`crates/ostra-default-plugin/src/planner/`](../../crates/ostra-default-plugin/src/planner/) |
+| The built-in stages: `builtin_stage` and the closing and book values | [`crates/ostra-default-plugin/src/planner/shared.rs`](../../crates/ostra-default-plugin/src/planner/shared.rs) |
+| `build_done`, `book_flow` | [`stages/build/planner.rs`](../../crates/ostra-default-plugin/src/stages/build/planner.rs), [`stages/book/planner.rs`](../../crates/ostra-default-plugin/src/stages/book/planner.rs) |
 | The deprecation notices of a workflow | `WorkflowDef::notices` in [`crates/ostra-core/src/workflow.rs`](../../crates/ostra-core/src/workflow.rs) |
 | The stage fold, stage actions, node values, `skip_step`, `data_stage_action`, `check_runnable`, shapes and `check_types`, `agent_for`, `results_due`, `result_view`, partners | [`crates/ostra-engine/src/workflow.rs`](../../crates/ostra-engine/src/workflow.rs) |
 | `Step::ResolveWorkflow`, `Step::HandleResult`, `Step::SkipStage`, `Step::RunNode` | `perform` in [`crates/ostra-engine/src/runner/driver.rs`](../../crates/ostra-engine/src/runner/driver.rs) |

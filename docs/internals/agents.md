@@ -373,7 +373,7 @@ creates the project before the user approves the plan that needs it:
 ### What the advisor is given
 
 The engine keeps little context about the cause of a failed step. Thus, the spawn of the advisor carries what
-the step saw and did. `advisor_request` in [`init.rs`](../../crates/ostra-default-plugin/src/init.rs) builds it:
+the step saw and did. `advisor_request` in [`stages/init/planner.rs`](../../crates/ostra-default-plugin/src/stages/init/planner.rs) builds it:
 
 | Line | Content |
 | --- | --- |

@@ -24,7 +24,7 @@ pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step>
 
 The engine's planner holds the generic parts: the YOLO answers, the workflow walk, custom and plugin stages,
 transform and prompt nodes, and messages between subagents. The rules of the built-in stages are in the pipeline
-of the standard plugin, split by stage, with track and stakes in `shared.rs` in `crates/ostra-default-plugin/src/planner/`
+of the standard plugin, in the `planner.rs` of each stage folder in `crates/ostra-default-plugin/src/stages/`
 ([Plugins](plugins.md#the-pipeline)). The planner calls the pipeline (`Pipeline::plan` and
 `Pipeline::builtin_stage`) with the same `Planner`, so both parts push steps into one list. The pipeline is
 deterministic Rust code, so the function stays pure.
@@ -459,14 +459,15 @@ Fixtures cannot see such logic, and a restart loses it.
 | --- | --- |
 | `next_steps`, `PlanCtx`, `Step`, `key()` | `crates/ostra-engine/src/plan.rs` |
 | The `Pipeline` trait | `crates/ostra-engine/src/pipeline.rs` |
-| The rules of the built-in stages, split by stage, with track and stakes in `shared.rs` | `crates/ostra-default-plugin/src/planner/` |
-| Loop state the planner reads (`WorkLoop`, `LoopNext`) | `crates/ostra-default-plugin/src/data.rs` |
+| The rules of the built-in stages, one folder for each stage | `crates/ostra-default-plugin/src/stages/<stage>/planner.rs` (track and stakes in their `mod.rs`) |
+| Loop state the planner reads (`WorkLoop`, `LoopNext`) | `crates/ostra-default-plugin/src/stages/build/data.rs` |
 | Driver loop, `perform`, slots | `crates/ostra-engine/src/runner/driver.rs` |
 | `validate_answer` | `crates/ostra-engine/src/runner/control.rs` |
 | The pipeline's own steps (`OstraStep`) and their effects | `crates/ostra-default-plugin/src/steps.rs`, `crates/ostra-default-plugin/src/pipeline/effects.rs` |
 | Spawn parameters from planner inputs | `crates/ostra-default-plugin/src/factory.rs` |
 | The workflow walk (`workflow_flow`, `phase_stages`) | `crates/ostra-engine/src/plan.rs` |
-| `builtin_stage`, `build_done`, `book_flow` | `crates/ostra-default-plugin/src/planner/` |
+| `builtin_stage` | `crates/ostra-default-plugin/src/planner/shared.rs` |
+| `build_done`, `book_flow` | `crates/ostra-default-plugin/src/stages/build/planner.rs`, `crates/ostra-default-plugin/src/stages/book/planner.rs` |
 | Custom stage fold and actions | `crates/ostra-engine/src/workflow.rs` |
 | Plugin stage planning and the stage view | `crates/ostra-engine/src/plugin_stage.rs` |
 | Messages in the fold, `wakes_due`, `continuations_due`, `helpers_due` | `crates/ostra-engine/src/coord.rs` |
