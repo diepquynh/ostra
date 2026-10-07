@@ -73,7 +73,7 @@ pub trait PlannerBook<'a> {
 impl<'a> PlannerBook<'a> for Planner<'a> {
     fn docs_stage(&mut self, project: &str, passed: &[&PhaseRun]) {
         let s = self.s;
-        let track = &s.ext.os().project_tracks[project];
+        let track = &s.ext.os().project_tracks[project].book;
         // Hard rule 21: an open BLOCKER blocks documentation.
         if blocker_open(passed) {
             return;
@@ -404,7 +404,7 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
             if !docs_on || blocker_open(&passed) {
                 continue;
             }
-            match track.docs_aggregate() {
+            match track.book.docs_aggregate() {
                 DocsState::Done(_) => parts.push(key.clone()),
                 DocsState::Abandoned => {}
                 _ => return None,
@@ -443,7 +443,10 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
             }
             let passed = passed_phases(s, key);
             self.docs_stage(key, &passed);
-            settled &= s.ext.os().project_tracks[key].docs_aggregate().is_settled();
+            settled &= s.ext.os().project_tracks[key]
+                .book
+                .docs_aggregate()
+                .is_settled();
         }
         self.book_stage();
         settled

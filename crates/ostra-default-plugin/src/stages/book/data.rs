@@ -66,3 +66,25 @@ pub struct DocsRound {
     pub targets: BTreeMap<String, Vec<String>>,
     pub revisions: BTreeMap<String, DocsState>,
 }
+
+/// Rule B10: one docs pipeline: the scan, the survey, the drafts, the rounds, and the gate.
+#[derive(Debug, Clone, Default)]
+pub struct DocsPipeline {
+    /// The writer of a whole part, from a log written before topics (Rule B10).
+    pub docs: DocsState,
+    /// Rule B10: the modules and constants the scan found, before the survey.
+    pub docs_scan: Option<DocsScan>,
+    /// Rule B10: the survey of what is available, and the page plan.
+    pub survey: DocsState,
+    /// Rule B10: inventory items the synthesis passes added, latest last.
+    pub inventory_added: Vec<ostra_core::book::InventoryItem>,
+    /// Rule B10: each planned page, by page ID.
+    pub page_docs: BTreeMap<String, PageDraft>,
+    /// Rule B10: the synthesis rounds, oldest first.
+    pub docs_rounds: Vec<DocsRound>,
+    /// Rule B10: the open gate after a multiple of `DOCS_ROUNDS` rounds, the round the user last
+    /// chose another round at, and whether the user accepted the book as it is.
+    pub docs_gate: Option<GateId>,
+    pub docs_continued: u32,
+    pub docs_accepted: bool,
+}

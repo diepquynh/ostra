@@ -78,6 +78,7 @@ impl BookRuns for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .docs_run(page.as_deref(), *round) = DocsState::Running(id.clone());
             }
             ExecPurpose::DocsSurvey { project } => {
@@ -86,6 +87,7 @@ impl BookRuns for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .survey = DocsState::Running(id.clone());
             }
             ExecPurpose::DocsCheck {
@@ -98,6 +100,7 @@ impl BookRuns for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .round_mut(*round)
                     .checks
                     .insert(page.clone(), CheckState::Running(id.clone()));
@@ -108,6 +111,7 @@ impl BookRuns for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .round_mut(*round)
                     .synthesis = DocsState::Running(id.clone());
             }
@@ -123,12 +127,13 @@ impl BookRuns for SessionState {
                 page,
                 round,
             } => {
-                let t = self
+                let t = &mut self
                     .ext
                     .os_mut()
                     .project_tracks
                     .entry(project.clone())
-                    .or_default();
+                    .or_default()
+                    .book;
                 let mut run = stage_run(
                     status,
                     parse::<DocumentationSubmit>(&result.submit),
@@ -148,12 +153,13 @@ impl BookRuns for SessionState {
                 *t.docs_run(page.as_deref(), *round) = run;
             }
             ExecPurpose::DocsSurvey { project } => {
-                let t = self
+                let t = &mut self
                     .ext
                     .os_mut()
                     .project_tracks
                     .entry(project.clone())
-                    .or_default();
+                    .or_default()
+                    .book;
                 t.survey = expect_step(
                     stage_run(
                         status,
@@ -192,17 +198,19 @@ impl BookRuns for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .round_mut(*round)
                     .checks
                     .insert(page.clone(), run);
             }
             ExecPurpose::DocsSynthesis { project, round } => {
-                let t = self
+                let t = &mut self
                     .ext
                     .os_mut()
                     .project_tracks
                     .entry(project.clone())
-                    .or_default();
+                    .or_default()
+                    .book;
                 let run = expect_step(
                     stage_run(
                         status,

@@ -10,6 +10,7 @@ use ostra_engine::state::SessionState;
 
 /// The documentation card of project `key`, once its docs started.
 pub(crate) fn docs_card(s: &SessionState, key: &str, t: &ProjectTrack, out: &mut Vec<StageCard>) {
+    let t = &t.book;
     let docs = t.docs_aggregate();
     let Some(st) = run_status(&docs) else {
         return;

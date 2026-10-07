@@ -1,7 +1,7 @@
 //! Rule B10: the docs pipeline's view of a project's track: the survey, the drafts, the rounds,
 //! and the project's docs as one run.
 
-use crate::data::{CheckState, DocsRound, DocsState, ProjectTrack};
+use crate::data::{CheckState, DocsPipeline, DocsRound, DocsState};
 use ostra_core::book::{DocSection, DocumentationSubmit, InventoryItem, PlannedPage};
 use std::collections::BTreeMap;
 
@@ -48,7 +48,7 @@ pub trait DocsTrack {
     fn docs_aggregate(&self) -> DocsState;
 }
 
-impl DocsTrack for ProjectTrack {
+impl DocsTrack for DocsPipeline {
     fn survey_plan(&self) -> Option<&DocumentationSubmit> {
         match &self.survey {
             DocsState::Done(s) => Some(s),

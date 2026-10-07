@@ -221,7 +221,7 @@ impl<'a> PlannerClosing<'a> for Planner<'a> {
             if docs
                 && !book_node(s)
                 && !blocker_open(&passed)
-                && !track.docs_aggregate().is_settled()
+                && !track.book.docs_aggregate().is_settled()
             {
                 return false;
             }

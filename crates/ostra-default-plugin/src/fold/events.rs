@@ -133,6 +133,7 @@ impl OstraEvents for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .docs_scan = Some(DocsScan {
                     modules: modules.clone(),
                     refs: refs.clone(),

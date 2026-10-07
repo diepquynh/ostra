@@ -66,10 +66,11 @@ impl FoldBook for SessionState {
             .os()
             .project_tracks
             .iter()
-            .filter_map(|(k, t)| match t.docs_aggregate() {
+            .filter_map(|(k, t)| match t.book.docs_aggregate() {
                 DocsState::Done(d) => {
                     // Rule B10: every planned page, with the draft this session wrote or `None`
                     // to keep it.
+                    let t = &t.book;
                     let plan: Option<Vec<_>> = t.survey_plan().map(|survey| {
                         survey
                             .pages

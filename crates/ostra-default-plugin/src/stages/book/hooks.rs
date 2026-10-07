@@ -98,7 +98,7 @@ pub(crate) fn spawn_files(st: &SessionState, req: &SpawnRequest) {
 
 /// Rule B10: the drafts of a project as Markdown, the inventory, and an index of the page plan.
 pub(crate) fn write_docs_drafts(st: &SessionState, project: &str) {
-    let Some(track) = st.ext.os().project_tracks.get(project) else {
+    let Some(track) = st.ext.os().project_tracks.get(project).map(|t| &t.book) else {
         return;
     };
     let dir = st.docs_drafts_dir(project);

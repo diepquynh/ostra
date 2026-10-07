@@ -36,6 +36,7 @@ impl BookGates for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .docs_run(page.as_deref(), *round)
                 {
                     *g = Some(gate.clone());
@@ -48,6 +49,7 @@ impl BookGates for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .survey
                 {
                     *g = Some(gate.clone());
@@ -64,6 +66,7 @@ impl BookGates for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .round_mut(*round)
                     .checks
                     .get_mut(page)
@@ -78,6 +81,7 @@ impl BookGates for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .round_mut(*round)
                     .synthesis
                 {
@@ -101,6 +105,7 @@ impl BookGates for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .docs_run(page.as_deref(), *round) = if retry {
                     DocsState::NotStarted
                 } else {
@@ -113,6 +118,7 @@ impl BookGates for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .survey = if retry {
                     DocsState::NotStarted
                 } else {
@@ -134,6 +140,7 @@ impl BookGates for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .round_mut(*round)
                     .checks
                     .insert(page.clone(), st);
@@ -144,6 +151,7 @@ impl BookGates for SessionState {
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
+                    .book
                     .round_mut(*round)
                     .synthesis = if retry {
                     DocsState::NotStarted
@@ -161,17 +169,19 @@ impl BookGates for SessionState {
             .project_tracks
             .entry(project.to_string())
             .or_default()
+            .book
             .docs_gate = Some(id.clone());
     }
 
     fn docs_rounds_answered(&mut self, project: &str, rounds: u32, choice: Choice<'_>) {
         // Rule B10: another round, or the book as it is.
-        let t = self
+        let t = &mut self
             .ext
             .os_mut()
             .project_tracks
             .entry(project.to_string())
-            .or_default();
+            .or_default()
+            .book;
         t.docs_gate = None;
         match choice {
             Some(("accept", _)) => t.docs_accepted = true,

@@ -244,7 +244,7 @@ pub struct PhaseRun {
     pub revision: Option<Revision>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ProjectTrack {
     /// `Some(exit code)` once format ran. `Some(None)` means no format command.
     pub format: Option<Option<i32>>,
@@ -252,43 +252,8 @@ pub struct ProjectTrack {
     pub running: Option<(CommandPurpose, String)>,
     pub closing_gate: Option<GateId>,
     pub closing: Option<(bool, bool)>,
-    /// The writer of a whole part, from a log written before topics (Rule B10).
-    pub docs: DocsState,
-    /// Rule B10: the modules and constants the scan found, before the survey.
-    pub docs_scan: Option<DocsScan>,
-    /// Rule B10: the survey of what is available, and the page plan.
-    pub survey: DocsState,
-    /// Rule B10: inventory items the synthesis passes added, latest last.
-    pub inventory_added: Vec<ostra_core::book::InventoryItem>,
-    /// Rule B10: each planned page, by page ID.
-    pub page_docs: BTreeMap<String, PageDraft>,
-    /// Rule B10: the synthesis rounds, oldest first.
-    pub docs_rounds: Vec<DocsRound>,
-    /// Rule B10: the open gate after a multiple of `DOCS_ROUNDS` rounds, the round the user last
-    /// chose another round at, and whether the user accepted the book as it is.
-    pub docs_gate: Option<GateId>,
-    pub docs_continued: u32,
-    pub docs_accepted: bool,
-}
-
-impl Default for ProjectTrack {
-    fn default() -> Self {
-        ProjectTrack {
-            format: None,
-            running: None,
-            closing_gate: None,
-            closing: None,
-            docs: DocsState::NotStarted,
-            docs_scan: None,
-            survey: DocsState::NotStarted,
-            inventory_added: vec![],
-            page_docs: BTreeMap::new(),
-            docs_rounds: vec![],
-            docs_gate: None,
-            docs_continued: 0,
-            docs_accepted: false,
-        }
-    }
+    /// Rule B10: the project's docs pipeline.
+    pub book: DocsPipeline,
 }
 
 /// The built-in stages' part of one session's state.

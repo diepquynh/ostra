@@ -135,7 +135,7 @@ pub(crate) fn completion_input(s: &SessionState) -> (String, String) {
                 .closing
                 .map(|(a, b)| format!("tests {}, docs {}", yes(a), yes(b)))
                 .unwrap_or_else(|| "not reached".into());
-            let docs = match &t.docs_aggregate() {
+            let docs = match &t.book.docs_aggregate() {
                 DocsState::Done(d) => format!(
                     "docs written ({} sections): {}",
                     d.sections.len(),
