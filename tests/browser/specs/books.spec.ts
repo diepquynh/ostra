@@ -19,10 +19,6 @@ test("the Docs list and the book reader", async ({ page, state, guard }) => {
   await page.locator(".docs-nav").getByRole("button", { name: "Glossary", exact: true }).click();
   await audit(page, guard, "PW-MARKER-book-def", "book glossary");
 
-  await page.locator(".docs-nav").getByRole("button", { name: "System architecture", exact: true }).click();
-  await audit(page, guard, "PW-MARKER-book-arch", "book architecture");
-  await expect(page.locator(".docs-main .md-diagram svg")).toHaveCount(1);
-
   await page.locator(".docs-nav").getByText("PW-book-title", { exact: false }).first().click();
   await audit(page, guard, "PW-MARKER-book-cell", "book section");
   // Two of each unit's three diagrams parse and draw as SVG text; the third shows its source.
@@ -71,15 +67,14 @@ test("the exported HTML file", async ({ page, context, state, guard }) => {
   for (const marker of [
     "PW-MARKER-book-overview",
     "PW-MARKER-book-def",
-    "PW-MARKER-book-arch",
     "PW-MARKER-book-cell",
     "PW-MARKER-page-body",
   ])
     await expect(view.getByText(marker).first()).toBeVisible();
-  await expect(view.locator(".md-diagram svg")).toHaveCount(7);
-  await expect(view.locator(".bk-export__toc a")).toHaveCount(5);
-  await view.locator(".bk-export__toc a", { hasText: "System architecture" }).click();
-  expect(new URL(view.url()).hash).toBe("#architecture");
+  await expect(view.locator(".md-diagram svg")).toHaveCount(6);
+  await expect(view.locator(".bk-export__toc a")).toHaveCount(4);
+  await view.locator(".bk-export__toc a", { hasText: "Glossary" }).click();
+  expect(new URL(view.url()).hash).toBe("#glossary");
   expect(await domProblems(view)).toEqual([]);
   expect(await view.evaluate(() => document.scripts.length)).toBe(0);
   expect(await view.evaluate(() => typeof (window as unknown as { __pwned?: unknown }).__pwned)).toBe("undefined");

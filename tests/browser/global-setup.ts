@@ -254,14 +254,6 @@ function writeBook(ws: string, fake: string) {
     projects: ["app"],
     updated_at: now,
     sessions: [],
-    architecture: {
-      overview: markdown("book-arch", fake),
-      diagram: diagrams[0],
-      components: [{ name: inline("book-c"), project: "app", role: inline("book-role"), owns: [inline("book-own")] }],
-      links: [{ from: inline("book-c"), to: inline("book-c"), protocol: inline("book-proto"), mode: "sync", payload: inline("book-pay") }],
-      failure_recovery: [{ failure: inline("book-f"), detection: inline("book-d"), recovery: inline("book-r") }],
-      scalability: [{ component: inline("book-c"), scales_by: inline("book-s"), limit: inline("book-l") }],
-    },
     parts: [{ project: "app", overview: markdown("book-overview", fake), updated_at: now, sections: [{ ...unit("book"), subsections: [unit("book-sub")] }, freePage] }],
     glossary: [{ term: inline("book-term"), definition: markdown("book-def", fake), code_ref: inline("book-code") }],
   };
