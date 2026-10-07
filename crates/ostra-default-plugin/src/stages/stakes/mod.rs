@@ -1,6 +1,7 @@
 //! The Stakes judge, which can skip the plan of an `IMPLEMENT` request.
 
 pub mod judge_input;
+pub mod view;
 
 pub use judge_input::*;
 

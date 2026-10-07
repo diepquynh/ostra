@@ -7,6 +7,7 @@ pub mod judge_input;
 pub mod judges;
 pub mod loops;
 pub mod planner;
+pub mod view;
 
 pub use data::*;
 pub use gates::*;

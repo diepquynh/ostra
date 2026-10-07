@@ -1,15 +1,12 @@
 //! The session's summary, detail, and tree, assembled from the built-in stages' state.
 
 use super::*;
-#[allow(unused_imports)]
-use crate::book::DocsTrack;
-use crate::data::{EpaState, LoopNext};
-use crate::planner::removed_phases;
 use crate::prelude::*;
+use crate::stages::{build, closing, plan, spec};
 use ostra_core::api::{
     ContextAddition, DecisionView, ExecutionGroupView, ExecutionView, FactCheckView, GateView,
-    PhaseStatus, PhaseView, SessionDetail, SessionStatus, SessionSummary, StageCard, StageStatus,
-    TreeGroup, TreeRun, TreeSession,
+    SessionDetail, SessionStatus, SessionSummary, StageCard, StageStatus, TreeGroup, TreeRun,
+    TreeSession,
 };
 use ostra_core::event::CommandPurpose;
 use ostra_core::exec::ExecutionStatus;
@@ -84,25 +81,9 @@ pub fn inferred_stage(s: &SessionState) -> (Lane, String) {
         return (g.payload.stage().lane(), format!("Waiting: {}", g.title));
     }
     if let Some(r) = s.running_executions().last() {
-        let label = match &r.purpose {
-            ostra_core::event::ExecPurpose::Implement { phase, .. } => {
-                format!("Implementing phase {phase}")
-            }
-            ostra_core::event::ExecPurpose::Review {
-                phase,
-                tests: false,
-                iteration,
-            } => format!("Reviewing phase {phase}, pass {iteration}"),
-            ostra_core::event::ExecPurpose::Review {
-                phase,
-                tests: true,
-                iteration,
-            } => format!("Reviewing tests of phase {phase}, pass {iteration}"),
-            ostra_core::event::ExecPurpose::WriteTest { phase, .. } => {
-                format!("Writing tests for phase {phase}")
-            }
-            _ => stage_label(r.stage).to_string(),
-        };
+        let label = build::view::running_label(&r.purpose)
+            .or_else(|| closing::view::running_label(&r.purpose))
+            .unwrap_or_else(|| stage_label(r.stage).to_string());
         return (r.stage.lane(), label);
     }
     if let Some((key, purpose)) = s
@@ -192,53 +173,6 @@ pub(crate) fn completion_card(s: &SessionState) -> StageCard {
             StageStatus::Pending
         },
     )
-}
-
-pub fn phases(s: &SessionState) -> Vec<PhaseView> {
-    let removed = removed_phases(s);
-    s.ext
-        .os()
-        .phases
-        .values()
-        .map(|p| {
-            let l = &p.impl_loop;
-            let status = if removed.contains(&p.info.id) {
-                PhaseStatus::Removed
-            } else if l.is_blocked() {
-                PhaseStatus::Blocked
-            } else if l.is_done() {
-                PhaseStatus::Passed
-            } else if l.is_idle() {
-                PhaseStatus::Queued
-            } else if matches!(
-                l.next,
-                LoopNext::Review | LoopNext::Autofix { .. } | LoopNext::Stage
-            ) || l.running.as_ref().is_some_and(|r| {
-                s.executions.get(r).is_some_and(|e| {
-                    matches!(e.purpose, ostra_core::event::ExecPurpose::Review { .. })
-                })
-            }) {
-                PhaseStatus::Reviewing
-            } else {
-                PhaseStatus::Implementing
-            };
-            let tests = match (&p.epa, &p.test_loop.next) {
-                (EpaState::NotStarted, _) if p.test_loop.is_idle() => "none",
-                (EpaState::Abandoned, _) => "skipped",
-                (_, LoopNext::Done) => "passed",
-                (_, LoopNext::Blocked { .. }) => "blocked",
-                (EpaState::Done(_), LoopNext::Idle) => "queued",
-                _ => "running",
-            };
-            PhaseView {
-                info: p.info.clone(),
-                status,
-                review_iterations: l.iterations,
-                tests: tests.into(),
-                security_block: l.blocker_open || p.test_loop.blocker_open,
-            }
-        })
-        .collect()
 }
 
 /// Executions grouped by agent and project, in order of each group's first start.
@@ -416,24 +350,29 @@ pub fn detail(
 }
 
 pub fn fact_checks(s: &SessionState) -> Vec<FactCheckView> {
-    fn track<T>(t: &crate::data::ArtifactTrack<T>, target: &str) -> Vec<FactCheckView> {
-        t.checks
-            .iter()
-            .map(|c| FactCheckView {
-                execution: c.exec.clone(),
-                target: target.into(),
-                version: c.version,
-                current: c.version == t.version,
-                verdict: c.result.as_ref().map(|r| r.verdict),
-                findings: c
-                    .result
-                    .as_ref()
-                    .map(|r| r.findings.clone())
-                    .unwrap_or_default(),
-            })
-            .collect()
-    }
-    let mut out = track(&s.ext.os().spec, "spec");
-    out.extend(track(&s.ext.os().plan, "plan"));
+    let mut out = spec::view::fact_checks(s);
+    out.extend(plan::view::fact_checks(s));
     out
+}
+
+/// The fact-checks of one artifact, each marked current when it checked the current version.
+pub(crate) fn fact_check_views<T>(
+    t: &crate::data::ArtifactTrack<T>,
+    target: &str,
+) -> Vec<FactCheckView> {
+    t.checks
+        .iter()
+        .map(|c| FactCheckView {
+            execution: c.exec.clone(),
+            target: target.into(),
+            version: c.version,
+            current: c.version == t.version,
+            verdict: c.result.as_ref().map(|r| r.verdict),
+            findings: c
+                .result
+                .as_ref()
+                .map(|r| r.findings.clone())
+                .unwrap_or_default(),
+        })
+        .collect()
 }

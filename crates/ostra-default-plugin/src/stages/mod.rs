@@ -1,4 +1,4 @@
-//! The built-in stages, one folder each: its fold, its planner rules, and its own helpers. Code
+//! The built-in stages, one folder each: its fold, its planner rules, its view, and its own helpers. Code
 //! that several stages use lives in `fold/`, `planner/`, `judge_input/`, `view/`, and `pipeline/`.
 
 pub mod book;

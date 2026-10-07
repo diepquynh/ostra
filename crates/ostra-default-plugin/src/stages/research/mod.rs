@@ -8,6 +8,7 @@ pub mod judge_input;
 pub mod judges;
 pub mod planner;
 pub mod runs;
+pub mod view;
 
 pub use data::*;
 pub use fold::*;

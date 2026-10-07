@@ -5,6 +5,7 @@ pub mod fold;
 pub mod gates;
 pub mod judge_input;
 pub mod planner;
+pub mod view;
 
 pub use data::*;
 pub use fold::*;

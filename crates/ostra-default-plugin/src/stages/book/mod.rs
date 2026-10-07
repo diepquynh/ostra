@@ -10,6 +10,7 @@ pub mod planner;
 pub mod runs;
 pub mod scan;
 pub mod track;
+pub mod view;
 
 use ostra_core::Contract;
 use ostra_core::book::{

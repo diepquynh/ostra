@@ -1,128 +1,67 @@
-//! Run labels, the artifacts list, and the changed files of each run.
+//! Run labels and the artifacts list, which each stage adds its own artifacts to.
 
-use super::*;
-#[allow(unused_imports)]
-use crate::book::DocsTrack;
-use crate::data::EpaState;
 use crate::prelude::*;
+use crate::stages::{book, build, plan, research, spec};
 use ostra_core::agent::AgentName;
-use ostra_core::api::{ArtifactRef, ChangedBy, ExecutionView, PendingGate};
+use ostra_core::api::{ArtifactRef, ExecutionView, PendingGate};
 use ostra_core::event::numbered_run_label;
 use ostra_core::executor::ExecStream;
 use ostra_core::ids::ExecutionId;
 use ostra_core::paths;
 use ostra_engine::state::{ExecRecord, SessionState};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Component, Path, PathBuf};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
-pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef> {
-    let mut out = vec![];
-    let mut seen = HashSet::new();
-    let mut add = |path: PathBuf, kind: &str, label: String, project: Option<String>| {
-        if seen.insert(path.clone()) {
-            out.push(ArtifactRef {
+/// The session's artifacts, each path once, in the order the stages add them.
+#[derive(Default)]
+pub(crate) struct Artifacts {
+    out: Vec<ArtifactRef>,
+    seen: HashSet<PathBuf>,
+}
+
+impl Artifacts {
+    pub(crate) fn add(
+        &mut self,
+        path: PathBuf,
+        kind: &str,
+        label: String,
+        project: Option<String>,
+    ) {
+        if self.seen.insert(path.clone()) {
+            self.out.push(ArtifactRef {
                 path,
                 kind: kind.into(),
                 label,
                 project,
             });
         }
-    };
+    }
+}
+
+pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef> {
+    let mut a = Artifacts::default();
     // Rule C3: uploads are artifacts of the session, so they can be opened and downloaded.
     for u in s
         .uploads
         .iter()
         .chain(s.amendments.iter().flat_map(|a| a.uploads.iter()))
     {
-        add(
+        a.add(
             u.path.clone(),
             "upload",
             format!("Upload: {}", u.name),
             None,
         );
     }
-    for t in &s.ext.os().explore {
-        if let Some(r) = &t.result {
-            add(
-                PathBuf::from(&r.research_path),
-                "research",
-                format!("Research: {}", first(&t.task)),
-                Some(t.project.clone()),
-            );
-        }
-    }
-    if let Some(spec) = &s.ext.os().spec.current {
-        add(PathBuf::from(&spec.spec_path), "spec", "Spec".into(), None);
-    }
-    if let Some(plan) = &s.ext.os().plan.current {
-        add(
-            PathBuf::from(&plan.master_plan_path),
-            "plan",
-            "Master plan".into(),
-            None,
-        );
-        for p in &plan.phases {
-            add(
-                PathBuf::from(&p.file),
-                "phase",
-                format!("Phase {}: {}", p.id, p.title),
-                Some(p.project.clone()),
-            );
-        }
-    }
-    for p in s.ext.os().phases.values() {
-        if let Some(r) = &p.implementer_report {
-            add(
-                r.clone(),
-                "report",
-                format!("Implementer report, phase {}", p.info.id),
-                Some(p.info.project.clone()),
-            );
-        }
-        for tests in [false, true] {
-            let ledger = s.ledger_path(&p.info.project, p.info.id, tests);
-            if ledger.exists() {
-                add(
-                    ledger,
-                    "ledger",
-                    format!(
-                        "Review ledger, phase {}{}",
-                        p.info.id,
-                        if tests { " tests" } else { "" }
-                    ),
-                    Some(p.info.project.clone()),
-                );
-            }
-        }
-        if let EpaState::Done(path) = &p.epa {
-            add(
-                path.clone(),
-                "report",
-                format!("EPA report, phase {}", p.info.id),
-                Some(p.info.project.clone()),
-            );
-        }
-        if let Some(r) = &p.test_loop.report {
-            add(
-                r.clone(),
-                "report",
-                format!("Test report, phase {}", p.info.id),
-                Some(p.info.project.clone()),
-            );
-        }
-    }
-    if let Some(w) = s.book_written.as_ref().filter(|w| w.error.is_none()) {
-        add(
-            ostra_core::book::book_dir(&s.workspace_root, &w.book).join("index.md"),
-            "book",
-            "Documentation book".into(),
-            None,
-        );
-    }
+    research::view::artifacts(s, &mut a);
+    spec::view::artifacts(s, &mut a);
+    plan::view::artifacts(s, &mut a);
+    build::view::artifacts(s, &mut a);
+    book::view::artifacts(s, &mut a);
     if let Some((path, _)) = &s.completed {
-        add(path.clone(), "completion", "Completion report".into(), None);
+        a.add(path.clone(), "completion", "Completion report".into(), None);
     }
-    out
+    a.out
 }
 
 /// Each execution's run label, numbered when the same agent already ran the same label on the
@@ -170,74 +109,4 @@ pub fn decorate(s: &SessionState, labels: &HashMap<ExecutionId, String>, e: &mut
             kind: g.payload.kind_str().to_string(),
             title: g.title.clone(),
         });
-}
-
-/// Files the session's work passes reported changing in `project`, keyed by project-relative path,
-/// each attributed to the latest finished execution that reported it.
-pub fn file_changes(s: &SessionState, project: &str) -> BTreeMap<String, ChangedBy> {
-    let root = s.project_path(project);
-    let mut out: BTreeMap<String, ChangedBy> = BTreeMap::new();
-    for rec in s.executions.values().filter(|r| r.project == project) {
-        let (Some((phase, tests)), Some(result)) = (rec.loop_key, rec.result.as_ref()) else {
-            continue;
-        };
-        let Some(files) = result
-            .submit
-            .as_ref()
-            .and_then(|v| v.get("changed_files"))
-            .and_then(|v| v.as_array())
-        else {
-            continue;
-        };
-        let staged = s.ext.os().phases.get(&phase).is_some_and(|p| {
-            if tests {
-                p.test_loop.staged
-            } else {
-                p.impl_loop.staged
-            }
-        });
-        let at = rec.ended_at.unwrap_or(rec.started_at);
-        for f in files.iter().filter_map(|f| f.as_str()) {
-            let Some(path) = project_relative(root.as_deref(), f) else {
-                continue;
-            };
-            if out.get(&path).is_some_and(|c| c.at > at) {
-                continue;
-            }
-            let by = ChangedBy {
-                session: s.id.clone(),
-                execution: rec.id.clone(),
-                agent: rec.agent,
-                phase: Some(phase),
-                tests,
-                staged,
-                running: false,
-                at,
-            };
-            out.insert(path, by);
-        }
-    }
-    out
-}
-
-/// A reported path as project-relative with `/` separators; `None` when it leaves the project.
-pub(crate) fn project_relative(root: Option<&Path>, reported: &str) -> Option<String> {
-    let p = Path::new(reported.trim());
-    let rel = if p.is_absolute() {
-        ostra_core::paths::normalize(p)
-            .strip_prefix(ostra_core::paths::normalize(root?))
-            .ok()?
-            .to_path_buf()
-    } else {
-        p.to_path_buf()
-    };
-    let mut parts = vec![];
-    for c in rel.components() {
-        match c {
-            Component::Normal(n) => parts.push(n.to_string_lossy().to_string()),
-            Component::CurDir => {}
-            _ => return None,
-        }
-    }
-    (!parts.is_empty()).then(|| parts.join("/"))
 }

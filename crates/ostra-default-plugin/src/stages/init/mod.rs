@@ -4,6 +4,7 @@ pub mod data;
 pub mod fold;
 pub mod gates;
 pub mod planner;
+pub mod view;
 
 pub use data::*;
 pub use fold::*;

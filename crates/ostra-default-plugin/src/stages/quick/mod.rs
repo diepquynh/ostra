@@ -3,6 +3,7 @@
 pub mod data;
 pub mod planner;
 pub mod runs;
+pub mod view;
 
 pub use data::*;
 pub use planner::*;
