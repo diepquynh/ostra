@@ -107,12 +107,13 @@ impl<'a> PlannerClosing<'a> for Planner<'a> {
             .copied()
             .filter(|p| p.info.file.is_none() || p.info.test_policy == TestPolicy::Required)
             .collect();
-        let dir = s.project_session_dir(project);
         let mut all_epa_done = true;
         for p in &covered {
             match &p.epa {
                 EpaState::NotStarted => {
                     all_epa_done = false;
+                    // Rule WD2: a phase in several projects gets one analysis, from its main project.
+                    let dir = s.project_session_dir(&p.info.project);
                     let inputs = SpawnInputs {
                         phase: Some(p.info.clone()),
                         implementer_report: p.implementer_report.clone(),
@@ -123,8 +124,8 @@ impl<'a> PlannerClosing<'a> for Planner<'a> {
                     self.spawn(
                         s.agent_for(BuiltinStage::Closing, Contract::PathAnalysis),
                         ExecPurpose::Epa { phase: p.info.id },
-                        project,
-                        dir.clone(),
+                        &p.info.project,
+                        dir,
                         inputs,
                     );
                 }

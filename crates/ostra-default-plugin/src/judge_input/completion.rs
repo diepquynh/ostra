@@ -103,7 +103,7 @@ pub(crate) fn completion_input(s: &SessionState) -> (String, String) {
                 m,
                 "- Phase {} ({}, {}): {}. {status}",
                 p.info.id,
-                p.info.project,
+                p.info.projects().join(", "),
                 p.info.title,
                 p.info.test_policy_label()
             );

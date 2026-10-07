@@ -116,7 +116,9 @@ pub(crate) fn session_facts(m: &mut String, s: &SessionState) {
             let _ = writeln!(
                 m,
                 "- Phase {} ({}): {}",
-                p.info.id, p.info.project, p.info.title
+                p.info.id,
+                p.info.projects().join(", "),
+                p.info.title
             );
         }
         m.push('\n');

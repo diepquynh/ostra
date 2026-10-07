@@ -18,11 +18,19 @@ use ostra_store::NewExecution;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+/// Rule WD3: the status line of a harness run whose other work dirs were left out.
+pub(crate) fn harness_scope_status(main: &str, dropped: &[String]) -> String {
+    format!(
+        "Harness run: works in `{main}` only, `{}` left out (Rule WD3)",
+        dropped.join("`, `")
+    )
+}
+
 impl Inner {
     pub(crate) async fn perform_spawn(
         self: &Arc<Self>,
         session: &SessionId,
-        req: SpawnRequest,
+        mut req: SpawnRequest,
     ) -> Result<(), EngineError> {
         let slot = self.acquire_slot().await;
         let st = self.snapshot(session)?;
@@ -175,6 +183,13 @@ impl Inner {
         } else {
             st.project_path(&req.project)
                 .unwrap_or_else(|| self.workspace_root.clone())
+        };
+        // Rule WD3: only the native executor works in several projects, so a harness run keeps
+        // its main project.
+        let dropped = if route.executor == ExecutorKind::Native {
+            vec![]
+        } else {
+            std::mem::take(&mut req.also)
         };
         // Rule WD1: the run works in each project the planner named, the main one first. A named
         // project that is not in the session yet has no folder and is left out.
@@ -408,6 +423,11 @@ impl Inner {
         if paused.is_some() {
             host.emit(ExecutionDelta::Status {
                 message: RESUMED_STATUS.into(),
+            });
+        }
+        if !dropped.is_empty() {
+            host.emit(ExecutionDelta::Status {
+                message: harness_scope_status(&req.project, &dropped),
             });
         }
         let harness_session_id = match route.executor {

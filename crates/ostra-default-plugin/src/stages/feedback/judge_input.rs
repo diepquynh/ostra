@@ -45,7 +45,7 @@ pub fn feedback_input(s: &SessionState, subject: Option<&str>) -> (String, Strin
             m,
             "- Phase {} ({}): {}. Report: {}",
             p.info.id,
-            p.info.project,
+            p.info.projects().join(", "),
             p.info.title,
             p.implementer_report
                 .as_ref()

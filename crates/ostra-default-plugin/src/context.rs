@@ -60,7 +60,9 @@ pub fn render(s: &SessionState) -> String {
             let _ = writeln!(
                 m,
                 "- Phase {} ({}, {}): {status}.",
-                p.info.id, p.info.project, p.info.title
+                p.info.id,
+                p.info.projects().join(", "),
+                p.info.title
             );
             if let Some(r) = &p.implementer_report {
                 let _ = writeln!(m, "  - Implementer report: `{}`", r.display());

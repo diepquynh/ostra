@@ -54,7 +54,7 @@ impl FoldBook for SessionState {
                         .os()
                         .phases
                         .values()
-                        .any(|p| &p.info.project == *k && p.impl_loop.is_done())
+                        .any(|p| p.info.projects().contains(k) && p.impl_loop.is_done())
             })
             .cloned()
             .collect()

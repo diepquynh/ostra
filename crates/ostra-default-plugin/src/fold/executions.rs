@@ -109,7 +109,13 @@ impl FoldExecutions for SessionState {
         match &rec.purpose {
             ExecPurpose::Explore { task } => self.explore_finished(*task, status, result, &error),
             ExecPurpose::Spec { .. } => self.spec_finished(status, result, &error),
-            ExecPurpose::Plan { .. } => self.plan_finished(status, result, &error),
+            ExecPurpose::Plan { .. } => {
+                self.plan_finished(status, result, &error);
+                if status == ostra_core::exec::ExecutionStatus::Ok {
+                    self.ext.os_mut().plan_single_project =
+                        crate::stages::plan::limits::recorded(&rec.params);
+                }
+            }
             ExecPurpose::FactCheck { target, .. } => {
                 let parsed: Option<FactCheckSubmit> = parse(&result.submit);
                 let (checks, failed_msg) = (parsed, missing_submit(status, &error, result));

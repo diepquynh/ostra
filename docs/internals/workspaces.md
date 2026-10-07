@@ -63,7 +63,10 @@ about the project itself are in the `.ostra/` folder of the project. These facts
 commands, its skills, and its lessons. Thus two workspaces that import the same folder share these facts.
 
 One task can include many projects. For this reason, the session state is in the workspace and not in one
-project. Reports for one project go to `sessions/<session-id>/<project-key>/`. Artifacts for more than one
+project. A project folder does not have to be inside the workspace folder. Thus, the planner names the folders of
+each run (Rule WD1). A run can work in several projects, for example an API in the backend and the screen in the
+frontend that calls it. Only the native executor works in several projects. A harness run works in its main
+project only (Rule WD3). Reports for one project go to `sessions/<session-id>/<project-key>/`. Artifacts for more than one
 project, for example the spec and the plan, go to `sessions/<session-id>/`.
 
 ## Creating a workspace

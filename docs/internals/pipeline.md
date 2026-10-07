@@ -245,7 +245,7 @@ the phases.
 
 ## Spec: what should change
 
-One `generate-spec` agent runs for the whole session, in the primary project. It receives the full request,
+One `generate-spec` agent runs for the whole session. It works in every project in scope, and its working folder is the primary project (Rule WD1). It receives the full request,
 every research document (oldest first, with superseded documents included), and the projects in scope. It also
 gets the `Changed since research:` line (Rule D2a). This line lists the cited files whose content changed, or that
 are gone, after the newest document that names them, or `none`. For every file that the line does not list, the prompt tells the agent to take current behavior from the research documents. The agent does not read the code again.
@@ -483,8 +483,38 @@ After the user approves the plan, its Phase Index becomes the build queue. The s
 - A phase is ready when every phase that it depends on is finished and passed review (Rules D6, M3).
 - If Ostra cannot read the dependency list of a phase, the phase depends on every earlier phase (Rule M5).
 - Each project runs one implement pipeline at a time (Rule M2), because two implementers in the same working tree
-  overwrite the changes of each other.
+  overwrite the changes of each other. A phase in several projects holds each of them (Rule WD2).
 - Ready phases in different projects run in parallel.
+
+### Phases in several projects
+
+A phase can name several projects, because one deliverable can need a change in each of them. An example is an
+API in the backend and the screen that calls it in the frontend. The plan writes the project cell of such a phase
+as a comma-separated list, with the main project first: `api, web`. The fold keeps the main project in
+`PhaseInfo.project` and the others in `PhaseInfo.also` (Rule WD2). If a key is not a project of the session or a
+project that the plan creates, the phase is blocked.
+
+Every run of the phase works in each project that it names: the implementer, the reviewers, the test analysis,
+write-test, and their fix passes (Rule WD1). The main project is the working folder of the run, and the spawn names
+the folder of each other project. Each project that the phase names gets its own format step and closing gate. The
+test and docs stages of each of these projects count the phase. The phase gets one test analysis, from its main
+project, because one analysis covers the whole change.
+
+Only the native executor works in several projects (Rule WD3). So the plan run gets `Stage limits:`, one line for
+each later stage of the workflow, for example:
+
+```text
+build: implementer (harness:codex) one project
+review: code-reviewer (native) several projects
+test: execution-path-analyzer (native) several projects, write-test (native) several projects, code-reviewer (native) several projects
+```
+
+If a phase run uses an agent that works in one project, the plan run records that agent in its params. Then the
+submit check refuses a phase that names several projects, with this correction first: "Split phase N into one
+phase per project and link them with Depends on: implementer runs on harness:codex and works in one project." The
+fold blocks such a phase if a plan passed without the check. If a harness run still gets several projects, the
+runner keeps the main project only and shows "Harness run: works in `api` only, `web` left out (Rule WD3)" on
+the run.
 
 When a phase ends blocked, Ostra removes from the queue every phase that depends on it, directly or through other
 phases. Independent phases continue (Rule D9). `removed_phases` calculates the removal again on every planner
@@ -589,7 +619,9 @@ the diff:
 ### Staging
 
 When the review of a phase passes, the engine runs `git -C <project> add` on the files that the implementer
-reported as changed. So the review of the next phase sees only the changes of the next phase, because reviews
+reported as changed. For a phase in several projects, the engine adds each file in the repository of the project
+that holds it (Rule WD2). A relative path is in the main project. An absolute path is in the deepest project folder
+that contains it. So the review of the next phase sees only the changes of the next phase, because reviews
 look only at unstaged work.
 
 ### When an agent is stuck or needs help

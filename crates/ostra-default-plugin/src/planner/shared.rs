@@ -19,7 +19,8 @@ pub(crate) fn passed_phases<'a>(s: &'a SessionState, project: &str) -> Vec<&'a P
         .os()
         .phases
         .values()
-        .filter(|p| p.info.project == project && p.impl_loop.is_done())
+        // Rule WD2: a phase belongs to every project it works in.
+        .filter(|p| p.info.projects().iter().any(|k| k == project) && p.impl_loop.is_done())
         .collect()
 }
 

@@ -47,21 +47,24 @@ pub fn phases_named(
 pub fn plan_phase_infos(plan: &ostra_core::submit::PlanSubmit) -> Vec<PhaseInfo> {
     plan.phases
         .iter()
-        .map(|p| PhaseInfo {
-            also: Vec::new(),
-            id: p.id,
-            deliverable: Some(p.deliverable.clone()),
-            project: p.project.clone(),
-            title: p.title.clone(),
-            complexity: p.complexity.parse().unwrap_or_default(),
-            test_policy: if p.test_policy.eq_ignore_ascii_case("skip") {
-                TestPolicy::Skip
-            } else {
-                TestPolicy::Required
-            },
-            depends_on: Some(p.depends_on.clone()),
-            file: Some(PathBuf::from(&p.file)),
-            test_rationale: p.test_rationale.clone(),
+        .map(|p| {
+            let (project, also) = crate::fold::phase_projects(&p.project);
+            PhaseInfo {
+                also,
+                id: p.id,
+                deliverable: Some(p.deliverable.clone()),
+                project,
+                title: p.title.clone(),
+                complexity: p.complexity.parse().unwrap_or_default(),
+                test_policy: if p.test_policy.eq_ignore_ascii_case("skip") {
+                    TestPolicy::Skip
+                } else {
+                    TestPolicy::Required
+                },
+                depends_on: Some(p.depends_on.clone()),
+                file: Some(PathBuf::from(&p.file)),
+                test_rationale: p.test_rationale.clone(),
+            }
         })
         .collect()
 }
@@ -145,6 +148,8 @@ impl<'a> PlannerPlan<'a> for Planner<'a> {
                 (Some(_), Some(check), Some(plan)) => phases_named(&check.findings, plan),
                 _ => vec![],
             };
+            // Rule WD3: the plan splits work by the limits of the stages after it.
+            let (stage_limits, single_project_agents) = super::limits::stage_limits(s, self.ctx);
             let inputs = SpawnInputs {
                 spec_file: Some(spec_path),
                 target: t
@@ -156,6 +161,8 @@ impl<'a> PlannerPlan<'a> for Planner<'a> {
                     code_facts: s.research_docs(),
                     findings,
                     revise_phases,
+                    stage_limits,
+                    single_project_agents,
                     ..Default::default()
                 }
                 .into_value(),

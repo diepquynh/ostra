@@ -13,7 +13,7 @@ use ostra_engine::plan::SpawnRequest;
 use ostra_engine::runner::{EngineError, StepHost};
 use ostra_engine::state::SessionState;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The loop a run belongs to: a prompt generator joins the loop of the run it took over from.
 pub(crate) fn loop_key(s: &SessionState, purpose: &ExecPurpose) -> Option<(u32, bool)> {
@@ -55,12 +55,48 @@ pub(crate) fn changed_files(
         .os()
         .phases
         .values()
-        .filter(|p| p.info.project == project && phase.is_none_or(|n| n == p.info.id))
+        .filter(|p| p.info.projects().iter().any(|k| k == project))
+        .filter(|p| phase.is_none_or(|n| n == p.info.id))
     {
-        files.extend(p.impl_loop.changed.iter().cloned());
-        files.extend(p.test_loop.changed.iter().cloned());
+        let changed = p.impl_loop.changed.iter().chain(&p.test_loop.changed);
+        if let Some(mine) = files_by_project(s, &p.info.project, changed).remove(project) {
+            files.extend(mine);
+        }
     }
     files
+}
+
+/// Rule WD2: a multi-project phase's changed files, by the project that holds each one. A
+/// relative path is in `main`. An absolute path is in the project whose folder holds it, and is
+/// made relative to that folder.
+pub(crate) fn files_by_project<'f>(
+    s: &SessionState,
+    main: &str,
+    files: impl IntoIterator<Item = &'f String>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for f in files {
+        let path = std::path::Path::new(f);
+        if !path.is_absolute() {
+            out.entry(main.to_string()).or_default().push(f.clone());
+            continue;
+        }
+        // The deepest folder wins, because one project can sit inside another.
+        let owner = s
+            .projects
+            .iter()
+            .filter_map(|p| Some((p, path.strip_prefix(&p.path).ok()?)))
+            .max_by_key(|(p, _)| p.path.components().count());
+        if let Some((p, rel)) = owner {
+            let rel = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            out.entry(p.key.clone()).or_default().push(rel);
+        }
+    }
+    out
 }
 
 /// A review run records the project's auto-fixable rule IDs, because the fold cannot read
@@ -77,6 +113,17 @@ pub(crate) fn spawn_params(
         map.insert(
             AUTO_FIXABLE_PARAM.into(),
             serde_json::to_value(ids).unwrap_or_default(),
+        );
+    }
+    // Rule WD3: a plan run records the single-project agents, because the fold and the submit
+    // check read no settings.
+    if matches!(req.purpose, ExecPurpose::Plan { .. })
+        && let Value::Object(map) = params
+    {
+        let single = crate::inputs::OstraInputs::of(&req.inputs).single_project_agents;
+        map.insert(
+            crate::data::SINGLE_PROJECT_PARAM.into(),
+            serde_json::to_value(single).unwrap_or_default(),
         );
     }
 }

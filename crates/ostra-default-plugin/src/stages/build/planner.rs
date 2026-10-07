@@ -149,7 +149,7 @@ impl<'a> PlannerBuild<'a> for Planner<'a> {
         for p in s.ext.os().phases.values() {
             let l = &p.impl_loop;
             if !l.is_idle() && !l.is_terminal() {
-                busy.insert(p.info.project.clone());
+                busy.extend(p.info.projects());
             }
         }
         for p in s.ext.os().phases.values() {
@@ -158,11 +158,13 @@ impl<'a> PlannerBuild<'a> for Planner<'a> {
             }
             let l = &p.impl_loop;
             if l.is_idle() {
-                // Rule M2: one implement pipeline per project at a time.
-                if busy.contains(&p.info.project) || !deps_passed(s, p) {
+                // Rule M2: one implement pipeline per project at a time. Rule WD2: a phase
+                // holds every project it works in.
+                let projects = p.info.projects();
+                if projects.iter().any(|k| busy.contains(k)) || !deps_passed(s, p) {
                     continue;
                 }
-                busy.insert(p.info.project.clone());
+                busy.extend(projects);
                 self.loop_work(p, false, WorkKind::Initial, None);
                 continue;
             }
@@ -571,7 +573,8 @@ impl<'a> PlannerBuild<'a> for Planner<'a> {
             .os()
             .phases
             .values()
-            .filter(|p| p.info.project == project)
+            // Rule WD2: a phase belongs to every project it works in.
+            .filter(|p| p.info.projects().iter().any(|k| k == project))
             .collect()
     }
 

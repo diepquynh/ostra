@@ -44,11 +44,19 @@ pub(crate) fn holds(s: &SessionState, step: &Step) -> bool {
             !matches!(
                 r.purpose,
                 ExecPurpose::Init { .. } | ExecPurpose::Advise { .. }
-            ) && s.awaiting_init(&r.project)
+            ) && phase_projects_of(s, r).iter().any(|k| s.awaiting_init(k))
         }
         _ => OstraStep::of(step)
             .and_then(|o| o.project().map(|p| s.awaiting_init(p)))
             .unwrap_or(false),
+    }
+}
+
+/// Rule WD2: the projects a spawn's phase works in, or the spawn's own project outside a phase.
+fn phase_projects_of(s: &SessionState, r: &ostra_engine::plan::SpawnRequest) -> Vec<String> {
+    match crate::fold::purpose_loop(&r.purpose).and_then(|(p, _)| s.ext.os().phases.get(&p)) {
+        Some(p) => p.info.projects(),
+        None => vec![r.project.clone()],
     }
 }
 

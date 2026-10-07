@@ -10,6 +10,7 @@ pub mod runner;
 pub mod services;
 pub mod state;
 pub mod uploads;
+mod work_dirs;
 pub mod workflow;
 
 pub use plan::{PlanCtx, SpawnInputs, SpawnRequest, Step, next_steps};

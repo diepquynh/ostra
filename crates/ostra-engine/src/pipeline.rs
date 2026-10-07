@@ -172,6 +172,9 @@ pub trait Pipeline: Send + Sync {
     fn spec_file(&self, s: &SessionState) -> Option<PathBuf>;
     /// The current master plan, once one exists.
     fn master_plan(&self, s: &SessionState) -> Option<PathBuf>;
+    /// Rule WD1: the projects a run of one of the pipeline's own purposes works in, or `None`
+    /// for the engine's default: the phase's projects, else the session's scope.
+    fn work_projects(&self, s: &SessionState, purpose: &ExecPurpose) -> Option<Vec<String>>;
     /// One phase of the plan, as a phase-scoped stage sees it.
     fn phase(&self, s: &SessionState, id: u32) -> Option<PhaseFacts>;
     /// Rule WF4: the phases whose phase-scoped stages run: built, reviewed, and not removed.
@@ -261,7 +264,8 @@ pub trait Pipeline: Send + Sync {
     fn override_ok(&self, judge: JudgeKind, output: &Value) -> bool;
 
     /// The pipeline's checks of a contract's submit at submit time, after its shape check.
-    fn check_submit(&self, contract: Contract, input: &Value) -> Vec<String>;
+    /// `params` are the run's recorded spawn params.
+    fn check_submit(&self, contract: Contract, input: &Value, params: &Value) -> Vec<String>;
 
     // Effects.
 

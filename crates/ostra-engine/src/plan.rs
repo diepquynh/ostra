@@ -19,6 +19,34 @@ pub struct PlanCtx {
     pub format_commands: BTreeMap<String, Option<String>>,
     /// The session budget from workspace settings. `None` means no limit.
     pub budget_usd: Option<f64>,
+    /// Rule WD3: the executor each agent's route resolves to, at the agent's default tier. A
+    /// programmatic agent runs natively.
+    pub executors: BTreeMap<AgentName, ostra_core::ExecutorKind>,
+}
+
+impl PlanCtx {
+    /// Rule WD3: only the native executor works in several projects. An agent without a route
+    /// here counts as native, as the engine's tests build no routes.
+    pub fn several_projects(&self, agent: AgentName) -> bool {
+        self.executors
+            .get(&agent)
+            .is_none_or(|e| *e == ostra_core::ExecutorKind::Native)
+    }
+
+    /// Rule WD3: how `agent` reads in a stage limit: `implementer (harness:codex) one project`.
+    pub fn agent_limit(&self, agent: AgentName) -> String {
+        let executor = self
+            .executors
+            .get(&agent)
+            .copied()
+            .unwrap_or(ostra_core::ExecutorKind::Native);
+        let reach = if self.several_projects(agent) {
+            "several projects"
+        } else {
+            "one project"
+        };
+        format!("{agent} ({executor}) {reach}")
+    }
 }
 
 /// Everything a spawn needs beyond its agent and purpose. The spawn factory turns this into the
@@ -335,6 +363,10 @@ impl<'a> Planner<'a> {
                 }
                 return;
             }
+        }
+        if let Step::Spawn(req) = &mut step {
+            // Rule WD1: the planner names every project the run works in.
+            req.also = self.s.work_projects(req).split_off(1);
         }
         let key = step.key();
         if !self.out.iter().any(|s| s.key() == key) {

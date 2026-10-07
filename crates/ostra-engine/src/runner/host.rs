@@ -259,6 +259,12 @@ impl ExecutionHost for EngineHost {
     }
 
     fn check_submit(&self, contract: ostra_core::Contract, input: &Value) -> Vec<String> {
-        self.inner.pipeline.check_submit(contract, input)
+        let params = self
+            .session
+            .as_ref()
+            .and_then(|s| self.inner.snapshot(s).ok())
+            .and_then(|st| st.executions.get(&self.execution).map(|r| r.params.clone()))
+            .unwrap_or_default();
+        self.inner.pipeline.check_submit(contract, input, &params)
     }
 }

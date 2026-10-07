@@ -56,6 +56,12 @@ pub struct OstraInputs {
     pub docs_round: u32,
     pub docs_check: bool,
     pub init_item: Option<String>,
+    /// Rule WD3: one line per later stage of the workflow: its agents, their executors, and
+    /// whether each works in several projects.
+    pub stage_limits: Vec<String>,
+    /// Rule WD3: the `(agent, executor)` pairs a multi-project phase would run that work in one
+    /// project.
+    pub single_project_agents: Vec<(String, String)>,
 }
 
 impl OstraInputs {

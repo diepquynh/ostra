@@ -137,10 +137,11 @@ impl Pipeline for OstraPipeline {
 
     // Agents, contracts, and workflows.
 
-    fn check_submit(&self, contract: Contract, input: &Value) -> Vec<String> {
+    fn check_submit(&self, contract: Contract, input: &Value, params: &Value) -> Vec<String> {
         match contract {
             // Rule B10: each docs step's own shape, with the correction first.
             Contract::Documentation => book::checks::check_value(input),
+            Contract::Plan => plan::limits::check_plan(input, params),
             _ => vec![],
         }
     }
@@ -221,6 +222,10 @@ impl Pipeline for OstraPipeline {
 
     fn master_plan(&self, s: &SessionState) -> Option<PathBuf> {
         plan::hooks::master_plan(s)
+    }
+
+    fn work_projects(&self, s: &SessionState, purpose: &ExecPurpose) -> Option<Vec<String>> {
+        book::hooks::work_projects(s, purpose)
     }
 
     fn phase(&self, s: &SessionState, id: u32) -> Option<PhaseFacts> {
