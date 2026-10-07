@@ -5,7 +5,7 @@ use crate::pipeline::{PipelineRef, ProjectFacts};
 use crate::plan::{PlanCtx, SpawnRequest, Step, next_steps};
 use crate::services::Notice;
 use crate::state::{Interrupt, SessionState};
-use ostra_core::config::{ProjectProfile, load_toml};
+use ostra_core::config::{ProjectProfile, RouteQuery, load_toml, resolve_route};
 use ostra_core::event::{
     AnswerSource, GateAnswer, GatePayload, SessionEvent, SessionKind, StoredEvent,
 };
@@ -301,6 +301,30 @@ impl Inner {
                 p.key.clone(),
                 profile.commands.format.filter(|c| !c.trim().is_empty()),
             );
+        }
+        // Rule WD3: the planner splits work by which agents work in several projects.
+        let (global, settings) = (self.services.global(), self.services.workspace());
+        let (factory, agents) = (self.services.factory(), self.services.agents());
+        for agent in agents.names() {
+            let Some(meta) = factory.agent_meta(agent, &agents) else {
+                continue;
+            };
+            let executor = if meta.programmatic {
+                ExecutorKind::Native
+            } else {
+                match resolve_route(
+                    &global,
+                    &settings,
+                    RouteQuery {
+                        executor_override: self.pipeline().forced_executor(st, agent),
+                        ..RouteQuery::new(agent.as_str(), meta.default_tier)
+                    },
+                ) {
+                    Ok(r) => r.executor,
+                    Err(_) => continue,
+                }
+            };
+            ctx.executors.insert(agent, executor);
         }
         ctx
     }

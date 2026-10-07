@@ -63,27 +63,42 @@ pub(crate) async fn perform_command(
             if files.is_empty() {
                 (String::new(), Some(0), "No files to stage.".to_string())
             } else {
-                // Staging keeps each review focused on the unstaged diff (Step 2).
-                for p in ostra_sandbox::repair_git_dirs(&ostra_sandbox::git_repos(&[&root])) {
-                    tracing::warn!("removed a planted {} before staging", p.display());
+                // Rule WD2: a multi-project phase stages each project's files in its own repo.
+                let st = host.snapshot(session)?;
+                let groups =
+                    crate::stages::build::hooks::files_by_project(&st, project, files.iter());
+                let (mut texts, mut code, mut outs) = (vec![], Some(0), vec![]);
+                for (key, files) in groups {
+                    let Some(root) = st.project_path(&key) else {
+                        continue;
+                    };
+                    // Staging keeps each review focused on the unstaged diff (Step 2).
+                    for p in ostra_sandbox::repair_git_dirs(&ostra_sandbox::git_repos(&[&root])) {
+                        tracing::warn!("removed a planted {} before staging", p.display());
+                    }
+                    let mut args: Vec<String> = ostra_core::git::AUTOMATIC
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
+                    args.extend(ostra_core::git::filter_overrides(&root).await);
+                    args.extend([
+                        "-C".into(),
+                        root.display().to_string(),
+                        "add".into(),
+                        "-A".into(),
+                        "--".into(),
+                    ]);
+                    args.extend(files);
+                    let text = format!("git {}", args.join(" "));
+                    started(&text)?;
+                    let (c, out) = run_shell(&root, "git", &args, 60).await;
+                    if c != Some(0) {
+                        code = c;
+                    }
+                    texts.push(text);
+                    outs.push(out);
                 }
-                let mut args: Vec<String> = ostra_core::git::AUTOMATIC
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
-                args.extend(ostra_core::git::filter_overrides(&root).await);
-                args.extend([
-                    "-C".into(),
-                    root.display().to_string(),
-                    "add".into(),
-                    "-A".into(),
-                    "--".into(),
-                ]);
-                args.extend(files.iter().cloned());
-                let text = format!("git {}", args.join(" "));
-                started(&text)?;
-                let (code, out) = run_shell(&root, "git", &args, 60).await;
-                (text, code, out)
+                (texts.join("\n"), code, outs.join("\n"))
             }
         }
         CommandPurpose::Autofix => (String::new(), Some(0), String::new()),

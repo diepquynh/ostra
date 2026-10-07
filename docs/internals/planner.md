@@ -59,11 +59,16 @@ pub struct PlanCtx {
     pub format_commands: BTreeMap<String, Option<String>>,
     /// The session budget from workspace settings. `None` means no limit.
     pub budget_usd: Option<f64>,
+    /// Rule WD3: the executor each agent's route resolves to, at the agent's default tier.
+    pub executors: BTreeMap<AgentName, ExecutorKind>,
 }
 ```
 
 Each time the runner plans, it builds a new `PlanCtx` from the current workspace settings and the
-`project.toml` of each project. Thus, if you change the session budget or a format command during a session,
+`project.toml` of each project. For `executors`, the runner resolves the route of each agent in the catalog with
+`resolve_route`. A programmatic agent counts as native (Rule PL2). `PlanCtx::several_projects` reads this map,
+because only the native executor works in several projects (Rule WD3). An agent without an entry counts as
+native, so a fixture that sets no routes plans as an all-native workspace. Thus, if you change the session budget or a format command during a session,
 the next planning round sees the change. The struct is small on purpose. With each field, the result of the
 planner can depend on a fact that a fixture does not control. Thus, a new field needs a reason.
 
@@ -148,6 +153,12 @@ Thus, two branches of the planner that reach the same result give one step.
   The planner also drops the format, staging, and autofix steps of the project. Research in the project also
   waits, but work in other projects does not wait. The planner asks again on its next pass. Thus, a held step
   starts after the init ends.
+- **Work dirs (Rule WD1).** At the end of `push`, the planner names every project that a spawn works in
+  (`SessionState::work_projects`, in `crates/ostra-engine/src/work_dirs.rs`). A session-wide run gets the
+  session's scope. A phase run gets the projects of its phase. Init and the advisor get one project. A resumed or
+  continued run keeps the projects of its first run. The pipeline can answer for its own purposes through
+  `Pipeline::work_projects`, which the standard plugin uses for docs runs. The planner sets the list after the
+  resume marks, because a resumed run keeps its list.
 - **Resume after pause (Rule P2).** If the session has a paused run for the same purpose, the planner marks the
   spawn to resume that run. Then the runner continues that execution and does not start a new one.
 - **A run that waits for a message (Rule SM3).** A native run that paused itself ended with status `waiting`.
@@ -246,9 +257,11 @@ fn phases(&mut self) {
         if removed.contains(&p.info.id) { continue; }
         let l = &p.impl_loop;
         if l.is_idle() {
-            // Rule M2: one implement pipeline per project at a time.
-            if busy.contains(&p.info.project) || !deps_passed(s, p) { continue; }
-            busy.insert(p.info.project.clone());
+            // Rule M2: one implement pipeline per project at a time. Rule WD2: a phase
+            // holds every project it works in.
+            let projects = p.info.projects();
+            if projects.iter().any(|k| busy.contains(k)) || !deps_passed(s, p) { continue; }
+            busy.extend(projects);
             self.loop_work(p, false, WorkKind::Initial, None);
             continue;
         }

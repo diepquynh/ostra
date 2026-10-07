@@ -71,6 +71,11 @@ field to find the loop of an execution. The second is `ExecutionFinished.result.
 payload that the agent gave to its `submit_<agent>` tool. The engine reads only this payload, never the final
 chat message of an agent. Thus, the log holds all the data that the engine used.
 
+`ExecutionStarted.projects` records the projects that the run works in, with its main project first (Rule
+WD1). The planner names them, and the runner removes the other projects from a harness run (Rule WD3). Thus, the
+list that a resumed run keeps is in the log. A run in one project records no list, and a run from a log before
+work dirs has none. The fold reads both as a run in `ExecutionStarted.project` alone.
+
 `ExecutionStarted.contract` records the result contract that the run submits (Rule CA5). The fold reads a result
 by its contract, and the catalog that maps an agent to its contract is outside the log. A run from a log before
 contracts has no contract. The fold gives it the contract of its agent in the standard plugin, or `stage` for a

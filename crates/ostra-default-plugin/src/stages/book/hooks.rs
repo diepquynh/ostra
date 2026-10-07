@@ -14,6 +14,34 @@ use ostra_engine::plan::SpawnRequest;
 use ostra_engine::runner::{EngineError, StepHost};
 use ostra_engine::state::SessionState;
 
+/// Rule WD1: a docs run works in its own project first, then in the other projects whose
+/// parts this session writes, so a page can describe how they work together.
+pub(crate) fn work_projects(s: &SessionState, purpose: &ExecPurpose) -> Option<Vec<String>> {
+    match purpose {
+        ExecPurpose::Docs { project, .. }
+        | ExecPurpose::DocsSurvey { project }
+        | ExecPurpose::DocsCheck { project, .. }
+        | ExecPurpose::DocsSynthesis { project, .. } => {
+            // A `DOCS` session has no phases, so its documented projects are the ones with docs on.
+            let mut others = s.docs_projects();
+            if others.is_empty() {
+                others = s
+                    .ext
+                    .os()
+                    .project_tracks
+                    .keys()
+                    .filter(|k| s.project_docs_on(k))
+                    .cloned()
+                    .collect();
+            }
+            let mut all = vec![project.clone()];
+            all.extend(others.into_iter().filter(|k| k != project));
+            Some(all)
+        }
+        _ => None,
+    }
+}
+
 /// Rule B10: read the project's modules and named constants and record them, because the fold
 /// cannot read the file system.
 pub(crate) async fn scan_docs(

@@ -210,6 +210,23 @@ pub fn rescue_context(stuck: &StuckInfo, fact: &str) -> String {
     )
 }
 
+/// Rule WD2: a plan phase's project cell, a comma-separated list of project keys: the main
+/// project, then the other projects the phase works in.
+pub fn phase_projects(cell: &str) -> (String, Vec<String>) {
+    let mut keys: Vec<String> = vec![];
+    for k in cell.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+        if !keys.iter().any(|x| x == k) {
+            keys.push(k.to_string());
+        }
+    }
+    let main = if keys.is_empty() {
+        String::new()
+    } else {
+        keys.remove(0)
+    };
+    (main, keys)
+}
+
 pub fn inline_phase(id: u32, project: &str, title: &str, index: usize) -> PhaseInfo {
     PhaseInfo {
         also: Vec::new(),
@@ -349,13 +366,14 @@ impl OstraFold for SessionState {
                 "Create only a project the approved plan names as new: `{key}` is not one."
             ));
         }
-        let phase_project = self
+        // Rule WD2: any project the phase works in.
+        let in_phase = self
             .executions
             .get(execution)
             .and_then(|r| r.loop_key)
             .and_then(|(phase, _)| self.ext.os().phases.get(&phase))
-            .map(|p| p.info.project.as_str());
-        if phase_project != Some(key) {
+            .is_some_and(|p| p.info.projects().iter().any(|k| k == key));
+        if !in_phase {
             return Some(format!(
                 "Create `{key}` only from a phase the plan puts in it."
             ));

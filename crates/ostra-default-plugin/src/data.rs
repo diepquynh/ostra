@@ -32,6 +32,9 @@ pub const ERROR_RETRIES: u32 = 1;
 pub const SUFFICIENCY_ROUNDS: u32 = 3;
 /// Key in a review execution's params holding the project's auto-fixable rule IDs.
 pub const AUTO_FIXABLE_PARAM: &str = "auto_fixable_ids";
+/// Rule WD3: key in a plan execution's params holding the `(agent, executor)` pairs that a
+/// multi-project phase would run and that work in one project.
+pub const SINGLE_PROJECT_PARAM: &str = "single_project_agents";
 /// `Prior findings:` after a pass that found nothing: a re-pass, not a first pass (Rule D3a).
 pub const NO_PRIOR_FINDINGS: &str = "no findings on the previous pass";
 
@@ -302,6 +305,8 @@ pub struct OstraState {
     pub track_decision: Option<DecisionId>,
     pub feedback: FeedbackTrack,
     pub plan: ArtifactTrack<PlanSubmit>,
+    /// Rule WD3: the single-project agents the current plan's run was told about.
+    pub plan_single_project: Vec<(String, String)>,
     pub phases: BTreeMap<u32, PhaseRun>,
     pub superseded_phases: Vec<PhaseRun>,
     pub project_tracks: BTreeMap<String, ProjectTrack>,
@@ -328,6 +333,7 @@ impl Default for OstraState {
             track_decision: None,
             feedback: FeedbackTrack::default(),
             plan: ArtifactTrack::new(),
+            plan_single_project: vec![],
             phases: BTreeMap::new(),
             superseded_phases: vec![],
             project_tracks: BTreeMap::new(),

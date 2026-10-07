@@ -31,6 +31,8 @@ pub struct ExecRecord {
     pub purpose: ExecPurpose,
     pub stage: StageKind,
     pub project: String,
+    /// Rule WD1: every project the run works in, `project` first.
+    pub projects: Vec<String>,
     pub report_path: Option<PathBuf>,
     pub params: Value,
     pub result: Option<ExecutionResult>,
@@ -670,7 +672,7 @@ impl SessionState {
                 report_path,
                 resumes,
                 contract,
-                ..
+                projects,
             } => {
                 // Rule CA5: logs from before contracts ran the standard agents.
                 let contract = contract.unwrap_or_else(|| self.pipeline.legacy_contract(*agent));
@@ -683,6 +685,12 @@ impl SessionState {
                         purpose: purpose.clone(),
                         stage: *stage,
                         project: project.clone(),
+                        // Rule WD1: a log from before work dirs ran each run in one project.
+                        projects: if projects.is_empty() {
+                            vec![project.clone()]
+                        } else {
+                            projects.clone()
+                        },
                         report_path: report_path.clone(),
                         params: params.clone(),
                         result: None,

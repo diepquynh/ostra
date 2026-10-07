@@ -137,6 +137,14 @@ impl FoldFeedback for SessionState {
             .project_tracks
             .entry(info.project.clone())
             .or_default();
+        // Rule WD2: each project a phase works in gets its closing stages.
+        for k in &info.also {
+            self.ext
+                .os_mut()
+                .project_tracks
+                .entry(k.clone())
+                .or_default();
+        }
         self.ext.os_mut().phases.insert(
             info.id,
             PhaseRun {
@@ -186,11 +194,13 @@ impl FoldFeedback for SessionState {
             } else {
                 None
             };
+            // Rule WD2: the project cell can name several projects, the main one first.
+            let (project, also) = crate::fold::phase_projects(&p.project);
             let info = PhaseInfo {
-                also: Vec::new(),
+                also,
                 id: p.id,
                 deliverable: Some(p.deliverable.clone()).filter(|d| !d.is_empty()),
-                project: p.project.clone(),
+                project,
                 title: p.title.clone(),
                 complexity,
                 test_policy,
@@ -198,24 +208,32 @@ impl FoldFeedback for SessionState {
                 file: Some(PathBuf::from(&p.file)),
                 test_rationale: p.test_rationale.clone(),
             };
-            let valid = self.valid_project(&info.project)
-                || self.project_to_create(&info.project).is_some();
+            let unknown = info
+                .projects()
+                .into_iter()
+                .find(|k| !self.valid_project(k) && self.project_to_create(k).is_none());
+            // Rule WD3: a phase in several projects that a single-project agent would run.
+            let single = self.ext.os().plan_single_project.clone();
+            let split = (!info.also.is_empty() && !single.is_empty())
+                .then(|| crate::stages::plan::limits::split_message(p.id, &single));
             self.insert_phase(
                 info,
                 WorkLoop::new(false, Contract::Implementation, Contract::Implementation),
             );
-            if !valid && let Some(ph) = self.ext.os_mut().phases.get_mut(&p.id) {
-                ph.impl_loop.next = LoopNext::Blocked {
-                    reason: format!(
-                        "The plan names project `{}`, which is not in this workspace.",
-                        ph.info.project
-                    ),
-                };
+            let reason = unknown
+                .map(|key| {
+                    format!("The plan names project `{key}`, which is not in this workspace.")
+                })
+                .or(split);
+            if let Some(reason) = reason
+                && let Some(ph) = self.ext.os_mut().phases.get_mut(&p.id)
+            {
+                ph.impl_loop.next = LoopNext::Blocked { reason };
             }
         }
         let os = self.ext.os_mut();
         let phases = &os.phases;
         os.project_tracks
-            .retain(|k, _| phases.values().any(|p| &p.info.project == k));
+            .retain(|k, _| phases.values().any(|p| p.info.projects().contains(k)));
     }
 }

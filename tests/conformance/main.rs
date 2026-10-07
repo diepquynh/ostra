@@ -130,7 +130,7 @@ impl H {
         let req = self.spawn_step(prefix);
         let id = ExecutionId::new();
         self.ev(SessionEvent::ExecutionStarted {
-            projects: Vec::new(),
+            projects: req.recorded_projects(),
             id: id.clone(),
             agent: req.agent,
             purpose: req.purpose.clone(),
@@ -6661,4 +6661,259 @@ fn b10_the_book_stage_writes_nothing_when_closing_chose_no_docs() {
     );
     assert_eq!(h.state().ref_value("docs.book", None), Value::Null);
     assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+// ------------------------------------------------------------------------------------------
+// WD1 to WD3: the projects each run works in, multi-project phases, and the executor limit.
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn wd1_session_runs_work_in_every_project_in_scope() {
+    let mut h = H::new(&["api", "web"], SessionOptions::default());
+    h.classify("IMPLEMENT", &["api", "web"]);
+    // Each research task works in its own project first, then in the rest of the scope.
+    assert_eq!(
+        h.spawn_step("spawn explore explore#0").projects(),
+        ["api", "web"]
+    );
+    assert_eq!(
+        h.spawn_step("spawn explore explore#1").projects(),
+        ["web", "api"]
+    );
+    let h = H::explored(&["api", "web"], SessionOptions::default());
+    assert_eq!(
+        h.spawn_step("spawn generate-spec").projects(),
+        ["api", "web"]
+    );
+}
+
+#[test]
+fn wd1_a_phase_run_works_in_its_phase_projects_only() {
+    let phases = json!([
+        phase(1, "api", &[], "Required"),
+        phase(2, "web", &[], "Required")
+    ]);
+    let h = H::plan_approved(&["api", "web"], phases, SessionOptions::default());
+    assert_eq!(
+        h.spawn_step("spawn implementer phase 1").projects(),
+        ["api"]
+    );
+    assert_eq!(
+        h.spawn_step("spawn implementer phase 2").projects(),
+        ["web"]
+    );
+}
+
+#[test]
+fn wd1_a_run_that_continues_keeps_its_projects() {
+    let mut h = H::explored(&["api", "web"], SessionOptions::default());
+    let (id, req) = h.start("spawn generate-spec");
+    assert_eq!(req.projects(), ["api", "web"]);
+    let st = h.state();
+    assert_eq!(st.executions[&id].projects, ["api", "web"]);
+    // Rule WD1: the planner gives a resumed run the projects it had, whatever the scope is now.
+    let resumed = SpawnRequest {
+        resumes: Some(id.clone()),
+        ..req
+    };
+    assert_eq!(st.work_projects(&resumed), ["api", "web"]);
+    h.finish(&id, ExecutionStatus::Ok, Some(spec_submit(0, 1)));
+}
+
+#[test]
+fn wd1_an_old_start_event_folds_as_one_project() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    let id = ExecutionId::new();
+    let old = json!({
+        "type": "execution_started", "id": id, "agent": "implementer",
+        "purpose": {"kind": "quick_answer"}, "stage": "quick-answer", "project": "p",
+        "executor": "native", "model": "m", "params": null, "spawn_block": "",
+        "report_path": null, "resumes": null
+    });
+    let event: SessionEvent = serde_json::from_value(old).expect("an old event parses");
+    h.ev(event);
+    assert_eq!(h.state().executions[&id].projects, ["p"]);
+}
+
+#[test]
+fn wd2_a_phase_in_two_projects_runs_and_closes_in_both() {
+    let phases = json!([phase(1, "api, web", &[], "Required")]);
+    let options = SessionOptions {
+        tests: true,
+        docs: true,
+        ..Default::default()
+    };
+    let mut h = H::plan_approved(&["api", "web"], phases, options);
+    let st = h.state();
+    let info = &st.ext.os().phases[&1].info;
+    assert_eq!(
+        (info.project.as_str(), info.also.clone()),
+        ("api", vec!["web".to_string()])
+    );
+    assert_eq!(
+        h.spawn_step("spawn implementer phase 1").projects(),
+        ["api", "web"]
+    );
+    h.run(
+        "spawn implementer phase 1 initial",
+        impl_submit(1, &["src/a.rs"]),
+    );
+    assert_eq!(
+        h.spawn_step("spawn code-reviewer review phase 1")
+            .projects(),
+        ["api", "web"]
+    );
+    h.run("spawn code-reviewer review phase 1 #1", review(&[]));
+    h.command(CommandPurpose::Stage, "api");
+    h.accept();
+    // Rule WD2: each project the phase works in gets its own format step.
+    let s = h.summaries();
+    assert!(s.contains(&"command format api".to_string()), "{s:?}");
+    assert!(s.contains(&"command format web".to_string()), "{s:?}");
+    h.command(CommandPurpose::Format, "api");
+    h.command(CommandPurpose::Format, "web");
+    // One analysis for the phase, which works in both projects.
+    let epas: Vec<SpawnRequest> = h
+        .steps()
+        .into_iter()
+        .filter_map(|s| match s {
+            Step::Spawn(r) if matches!(r.purpose, ExecPurpose::Epa { .. }) => Some(*r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(epas.len(), 1, "{:?}", h.summaries());
+    assert_eq!(epas[0].projects(), ["api", "web"]);
+}
+
+#[test]
+fn wd2_a_phase_that_names_an_unknown_project_is_blocked() {
+    let phases = json!([phase(1, "api, nowhere", &[], "Required")]);
+    let h = H::plan_approved(&["api"], phases, SessionOptions::default());
+    let st = h.state();
+    assert!(matches!(
+        &st.ext.os().phases[&1].impl_loop.next,
+        ostra_default_plugin::data::LoopNext::Blocked { reason } if reason.contains("`nowhere`")
+    ));
+}
+
+fn codex_implementer(h: &mut H) {
+    h.ctx.executors.insert(
+        AgentName::Implementer,
+        ExecutorKind::Harness(ostra_core::HarnessKind::Codex),
+    );
+}
+
+#[test]
+fn wd3_the_plan_learns_the_limits_of_later_stages() {
+    let mut h = H::spec_approved(&["api", "web"], SessionOptions::default());
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "high", "reason": "r"}),
+    );
+    codex_implementer(&mut h);
+    let x = h.spawn_step("spawn plan").inputs.ox();
+    assert!(
+        x.stage_limits
+            .contains(&"build: implementer (harness:codex) one project".to_string()),
+        "{:?}",
+        x.stage_limits
+    );
+    assert!(
+        x.stage_limits
+            .iter()
+            .any(|l| l.starts_with("review: ") && l.ends_with("(native) several projects")),
+        "{:?}",
+        x.stage_limits
+    );
+    assert_eq!(
+        x.single_project_agents,
+        [("implementer".to_string(), "harness:codex".to_string())]
+    );
+    // An all-native workspace has no single-project agent.
+    h.ctx.executors.clear();
+    assert!(
+        h.spawn_step("spawn plan")
+            .inputs
+            .ox()
+            .single_project_agents
+            .is_empty()
+    );
+}
+
+#[test]
+fn wd3_a_multi_project_phase_with_a_single_project_agent_is_refused() {
+    use ostra_engine::pipeline::Pipeline;
+    let params = json!({"single_project_agents": [["implementer", "harness:codex"]]});
+    let plan = plan_submit(json!([
+        phase(1, "api", &[], "Required"),
+        phase(2, "api, web", &[1], "Required")
+    ]));
+    let issues = ostra_default_plugin::OstraPipeline.check_submit(
+        ostra_core::Contract::Plan,
+        &plan,
+        &params,
+    );
+    assert_eq!(
+        issues,
+        [
+            "Split phase 2 into one phase per project and link them with Depends on: implementer runs on harness:codex and works in one project."
+        ]
+    );
+    // Native agents take the same plan.
+    let native = ostra_default_plugin::OstraPipeline.check_submit(
+        ostra_core::Contract::Plan,
+        &plan,
+        &json!({}),
+    );
+    assert!(native.is_empty());
+}
+
+#[test]
+fn wd3_the_fold_blocks_a_multi_project_phase_a_single_project_agent_would_run() {
+    let mut h = H::spec_approved(&["api", "web"], SessionOptions::default());
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "high", "reason": "r"}),
+    );
+    let req = h.spawn_step("spawn plan");
+    let id = ExecutionId::new();
+    h.ev(SessionEvent::ExecutionStarted {
+        projects: req.recorded_projects(),
+        id: id.clone(),
+        agent: req.agent,
+        purpose: req.purpose.clone(),
+        stage: req.stage,
+        project: req.project.clone(),
+        executor: ExecutorKind::Native,
+        model: "mock:m".into(),
+        params: json!({"single_project_agents": [["implementer", "harness:codex"]]}),
+        spawn_block: String::new(),
+        report_path: None,
+        resumes: None,
+        contract: None,
+    });
+    h.finish(
+        &id,
+        ExecutionStatus::Ok,
+        Some(plan_submit(json!([phase(1, "api, web", &[], "Required")]))),
+    );
+    h.run(
+        "spawn fact-check fact-check-plan",
+        fact("PASS", "plan", &[]),
+    );
+    let g = h.open_gate("plan_approval");
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: None,
+        },
+    );
+    let st = h.state();
+    assert!(matches!(
+        &st.ext.os().phases[&1].impl_loop.next,
+        ostra_default_plugin::data::LoopNext::Blocked { reason } if reason.starts_with("Split phase 1 into one phase per project")
+    ));
 }

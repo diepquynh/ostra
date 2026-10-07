@@ -358,6 +358,10 @@ names these items:
 A session stage works in the session folder. A project stage or a phase stage works in the session folder of its
 project.
 
+The scope also sets the projects that the run works in (Rule WD1). A session stage works in every project in the
+scope of the session. A project stage works in its project. A phase stage works in each project of its phase,
+because a phase can name several projects (Rule WD2). A harness run works in its main project only (Rule WD3).
+
 ### How a stage ends
 
 The agent of a custom stage returns the `stage` contract or a contract of a plugin. A `stage` result contains a

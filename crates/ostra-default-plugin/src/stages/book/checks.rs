@@ -551,7 +551,11 @@ mod tests {
         assert!(
             ostra_core::submit::validate_submit(ostra_core::Contract::Documentation, &v).is_ok()
         );
-        let issues = crate::OstraPipeline.check_submit(ostra_core::Contract::Documentation, &v);
+        let issues = crate::OstraPipeline.check_submit(
+            ostra_core::Contract::Documentation,
+            &v,
+            &serde_json::Value::Null,
+        );
         assert!(
             issues
                 .iter()
