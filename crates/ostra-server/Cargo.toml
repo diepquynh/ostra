@@ -63,7 +63,7 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_
 [dev-dependencies]
 tempfile.workspace = true
 futures.workspace = true
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 
 [[bin]]
 name = "ostra"
