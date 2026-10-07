@@ -1,0 +1,1212 @@
+{
+  "id": "ostra",
+  "title": "Documentation for ostra",
+  "projects": [
+    "ostra"
+  ],
+  "updated_at": "2026-10-06T05:17:54.977988088Z",
+  "sessions": [
+    "s_01a10f925a0e72698753bb7e4327ca70"
+  ],
+  "architecture": null,
+  "parts": [
+    {
+      "project": "ostra",
+      "overview": "Ostra is a local server that runs an engineering pipeline. A user describes a task in a browser console. The code-driven engine classifies the task, runs agents (models with tools) through research, spec, plan, build, review, test, and documentation stages, and stops at gates for user answers. The workspace holds 15 Rust crates, a React console in `web/`, a design system in `design/`, and prompt assets in `assets/`. The `ostra` binary serves the console, a REST API, and a WebSocket. It runs each agent on a native model loop or inside an installed harness CLI. The engine keeps each session as an event log, so a restart continues the work.",
+      "sections": [
+        {
+          "id": "architecture",
+          "title": "Architecture and crate map",
+          "summary": "Names the owner of each concern in the 15 crates, the direction of each dependency, the repository layout, and the build commands.",
+          "body": "Ostra is a Rust workspace of 15 crates and a React console. A change lands in the wrong crate when the owner of a behavior is unclear. This page names the owner of each concern and the direction of each dependency.\n\n## What Ostra does\n\nOstra is a local server that runs an engineering pipeline. A user describes a task in the browser console. The engine splits the task into stages. Each stage runs an agent, which is a model with tools and a fixed role. At a gate, the engine stops and waits for an answer from the user.\n\nThe binary is `ostra`. Its entry point is `crates/ostra-server/src/main.rs`. It serves the console, a REST API, and one WebSocket.\n\n## Runtime components\n\n```mermaid\nflowchart LR\n    Browser[Browser console] -->|REST and WebSocket| Server[ostra-server]\n    Server --> Workspace[WorkspaceRt]\n    Workspace --> Engine[Engine]\n    Engine -->|append events| Store[workspace.db]\n    Engine -->|Executor trait| Native[Native executor]\n    Engine -->|Executor trait| Harness[Harness executor]\n    Native --> Providers[Model providers]\n    Native --> Tools[Native tools]\n    Native --> Policy[Policy engine]\n    Tools --> Sandbox[Sandbox]\n    Harness -->|PTY| CLI[Harness CLI]\n    CLI -->|ostra hook and mcp-stdio| Server\n```\n\nThe engine does not know how an agent runs. It calls the `Executor` trait from `ostra-core`. The server supplies two implementations: the native executor and the harness executor. The engine reads settings and starts judge calls through the `Services` trait in `crates/ostra-engine/src/services.rs`. Because of these traits, the engine tests run with fakes and need no model.\n\n## Crate map\n\n| Crate | Owns |\n| --- | --- |\n| `ostra-core` | Shared types: ids, agents, settings (`config.rs`), session events, wire types for the browser (`api.rs`), paths, pipeline enums, typed documents, books, pricing. |\n| `ostra-store` | SQLite storage: `registry.db`, each `workspace.db`, each project lesson store, and encryption of saved credentials. |\n| `ostra-agents` | The embedded `assets/` folder, prompt rendering for each executor, typed spawn blocks, and the repo brief. |\n| `ostra-engine` | Sessions as event-sourced state, the planner, the runner, judge calls, the init flow, and subagent coordination. |\n| `ostra-policy` | Guards and permission rules that check every tool call, and the shell parser behind them. |\n| `ostra-sandbox` | The kernel boundary under agent commands: bubblewrap, Seatbelt, the egress proxy, and decoy files. |\n| `ostra-tools` | Native tool implementations: file tools, Bash, search, web fetch, memory, documents, and the tool definitions. |\n| `ostra-providers` | A neutral chat interface over the Anthropic Messages API and the OpenAI Responses API, plus a scripted provider for tests. |\n| `ostra-exec-native` | The native agent loop that runs one execution on an API key. |\n| `ostra-exec-harness` | Executors for Claude Code, Codex, Grok Build, and Antigravity under a PTY, with the hook bridge and the MCP shim. |\n| `ostra-mcp` | A client for external MCP servers over stdio and streamable HTTP, with OAuth. |\n| `ostra-code` | Code navigation: tokenizer, per-project index, dependency graph, and language server clients. |\n| `ostra-notify` | Web Push message encryption and VAPID signing. |\n| `ostra-workspace` | Workspace settings checks, projects, approvals for folder files, workspace creation, and the runtime of an open workspace. |\n| `ostra-server` | The `ostra` binary: startup, browser auth, REST and WebSocket API, and the glue that gives each workspace an engine. |\n\n## Dependency direction\n\nThe dependency graph has one direction. Lower crates know nothing about higher crates.\n\n- `ostra-core` depends on no other Ostra crate. Every other crate depends on it.\n- `ostra-engine` depends on `ostra-core`, `ostra-sandbox`, `ostra-store`, and `ostra-agents`. It does not depend on the executors, the providers, or the policy engine.\n- `ostra-exec-native` depends on `ostra-tools`, `ostra-providers`, `ostra-policy`, and `ostra-store`.\n- `ostra-exec-harness` depends on `ostra-core` and `ostra-sandbox`.\n- `ostra-workspace` depends on the engine, the store, the agents crate, and the policy crate.\n- `ostra-server` depends on every other crate and wires them together.\n\nPut a type that the browser, the store, and the engine all use into `ostra-core`. Do not put it into `ostra-engine`, because `ostra-store` depends on `ostra-core` only.\n\n## Repository layout\n\n| Path | Content |\n| --- | --- |\n| `crates/` | The 15 crates. |\n| `assets/` | Agent prompts and `agent.toml` files, judge prompts, stack references, one bundled skill, and `tool-mapping.toml`. `ostra-agents` embeds the folder with `rust-embed`. |\n| `web/` | The React console (Vite and TypeScript). The binary embeds `web/dist`. |\n| `design/` | The design system package `@ostra/design`. |\n| `tests/` | `conformance/main.rs`, `evals/`, `browser/`, and `windows-probes/`. The Cargo workspace excludes `windows-probes`. |\n| `.cargo/config.toml` | Sets `TS_RS_EXPORT_DIR` to `web/src/api/gen`. |\n| `build.sh`, `run.sh`, `Dockerfile`, `docker-compose.yml`, `install.sh`, `install.ps1` | Build, start, and install scripts. |\n\n`.ostra/INVENTORY.md` and the root `package.json` name a `site/` folder. This checkout has no `site/` folder and no `docs/` folder.\n\n## Commands\n\n- Build every crate: `cargo build --workspace`.\n- Run every test: `cargo test --workspace`.\n- Format every crate: `cargo fmt --all`.\n- Build the web console and the release binary: `./build.sh`. The script builds the UI first because the binary embeds `web/dist` at compile time.\n- Start Ostra: `./run.sh`. When no port is set, the server tries the 20 ports from 7878 upward.\n\nThe toolchain is `1.98.1` (`rust-toolchain.toml`). The workspace uses edition 2024.\n\n## Rule IDs in code comments\n\nSource comments cite rule IDs, for example `Rule D3` or `Rule H2`. The rule text is not in this repository. Read the comment and the code near it. These families appear in the code:\n\n| Prefix | Topic |\n| --- | --- |\n| `D` | Spec and plan documents, fact-check, format. |\n| `T` | Closing gate, tests. |\n| `B` | Documentation books. |\n| `H` | Waiting runs and subagent coordination. |\n| `J` | Judge routing of answers. |\n| `C` | Added context: files, amendments, uploads. |\n| `P` | Pause, resume, containment, stopped executions. |\n| `O` | Project creation and the advisor. |\n| `G` | Tool enforcement by guards. |\n| `F` | Feedback rounds and the session context file. |\n| `A`, `W`, `I` | Approvals, workspace artifacts, init. |",
+          "code_refs": [
+            {
+              "path": "Cargo.toml",
+              "symbol": null,
+              "lines": null,
+              "note": "Workspace members, shared dependency versions, and release profile."
+            },
+            {
+              "path": "crates/ostra-engine/src/services.rs",
+              "symbol": "Services",
+              "lines": null,
+              "note": "The traits that decouple the engine from executors, settings, and judges."
+            },
+            {
+              "path": "crates/ostra-server/src/main.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Command line and process entry point."
+            },
+            {
+              "path": "crates/ostra-core/src/executor.rs",
+              "symbol": "ExecutorKind",
+              "lines": null,
+              "note": "The executor kinds: native and four harnesses."
+            },
+            {
+              "path": "build.sh",
+              "symbol": null,
+              "lines": null,
+              "note": "Builds the web UI, then the release binary."
+            }
+          ]
+        },
+        {
+          "id": "session-lifecycle",
+          "title": "Session lifecycle and categories",
+          "summary": "Explains how a request becomes a session, how the category selects the flow, and how a session pauses, stops, or ends.",
+          "body": "A user request must become a fixed order of stages, and the right order depends on the request. A session is one run of the pipeline for one request. The `Classify` judge picks a category, and the category selects the flow. This page lists the flows, the lanes, and the ways a session ends.\n\n## Start of a session\n\n1. The browser creates a session. The engine method is `Engine::create_session`. It refuses a blank request with the message `Describe the task first.`\n2. `start_session` appends the `SessionCreated` event. The event holds the request, the options, the projects, attached files, uploads, pinned projects, and the chosen documentation book.\n3. The planner sees no category, so it returns a `Step::Judge` for `JudgeKind::Classify`.\n4. The judge returns `ClassifyOut`: `category`, `projects`, `explore_tasks`, `opts_in` (tests and docs), `reason`, and a `title` of 2 to 5 words. The engine cuts the title to `TITLE_CHARS` (60 characters).\n\nIf the user pinned projects, the pinned set is the whole scope (Rule O6). The classify prompt tells the judge to return exactly those projects.\n\n## Categories and flows\n\n| Category | Request type | Flow after classification |\n| --- | --- | --- |\n| `RESEARCH` | Investigate or explain. No change. | Explore tasks, sufficiency check, completion. |\n| `SPEC` | Write requirements. | Explore, spec flow without approval, completion. |\n| `PLAN` | Design or break down work. | Explore, spec with approval, plan with approval, completion. |\n| `IMPLEMENT` | Change code. | Explore, `Track` judge, light or full track, phases, implementation review, closing stages, completion. |\n| `VERIFY` | Run the existing tests. Write none. | Phases only, then completion. |\n| `TEST` | Write tests for existing code. | Closing stages (execution-path analysis, write-test, review), then completion. |\n| `DOCS` | Write a documentation book for existing code. | Docs stage, architecture, book write, then completion. |\n| `PROMPT` | Write a prompt, a skill, or an agent file. | Phases with `prompt-generation`. Review runs only when a changed file is not an instruction file. |\n| `QUICK_CHANGE` | A small edit that the request fully describes. | One implementer pass on the native executor. |\n| `QUICK_ANSWER` | A factual question. | One `quick-answer` execution. Its answer is the completion report. |\n\nThe classify prompt tells the judge to pick the category that produces more of the pipeline when two fit. A stage that the request did not need costs one round. A stage that the request needed but lost gives a wrong result.\n\n## Flow of an IMPLEMENT request\n\n```mermaid\nflowchart TD\n    Classify[Classify judge] --> Explore[Explore tasks]\n    Explore --> Track{Track judge}\n    Track -->|light| Phases[Phases and review loops]\n    Track -->|full| Spec[Spec flow with approval]\n    Spec --> Stakes{Stakes judge}\n    Stakes -->|low| Phases\n    Stakes -->|medium or high| Plan[Plan flow with approval]\n    Plan --> Phases\n    Phases --> Review[Implementation review gate]\n    Review --> Closing[Format tests docs book]\n    Closing --> Done[Completion judge and report]\n```\n\nThe light track is the default. The `Track` judge picks `full` only when the research shows one of these: an open requirement, a changed contract, a schema or data change, an ordered change across modules, a security-sensitive change, or a new codebase. A user can force a track with `SessionOptions.track`.\n\n## Lanes and stage kinds\n\nEvery stage kind belongs to one lane of the session board. `StageKind::lane` defines the mapping.\n\n| Lane | Stage kinds |\n| --- | --- |\n| `research` | `Intake`, `Classify`, `Explore`, `Sufficiency`, `Track`, `QuickAnswer`, `Detect`, `Scout` |\n| `requirements` | `Spec`, `OpenQuestions`, `Propose`, `SkillApproval` |\n| `verification` | `FactCheckSpec`, `FactCheckPlan`, `SpecApproval` |\n| `design` | `Stakes`, `Plan`, `PlanApproval` |\n| `build` | `Implement`, `Autofix`, `Handoff`, `Rescue`, `Verify`, `PromptGen`, `GenerateSkill`, `GenerateInventory` |\n| `review` | `Review`, `Staging`, `Format`, `ImplementationReview` |\n| `test` | `ClosingGate`, `Epa`, `WriteTest`, `TestReview` |\n| `docs` | `Documentation`, `Architecture`, `BookWrite` |\n| `done` | `Completion` |\n\n## Options and added context\n\n`SessionOptions` has four fields: `tests`, `docs`, `yolo`, and `track`. A toggle that is on is an explicit request (Rule T3). The closing gate then skips that question.\n\nA user can add text, files, or uploads to a running session. The engine appends `RequestAmended`. The `delivery` field selects the timing:\n\n- `Queue` (default): executions in progress finish on the old request. The next step sees the new context.\n- `Now`: the engine interrupts every execution in progress. Each one runs again with the new context.\n\nAfter classification, the `RouteAnswer` judge routes added context before any step starts (Rule C2). The limits are `MAX_UPLOAD_BYTES` (25 MiB), `MAX_UPLOADS` (20), and `MAX_CONTEXT_FILES` (50).\n\n## Pause, resume, and stop\n\n- **Pause (Rule P1).** `Engine::pause_session` appends `SessionPaused` and interrupts executions in progress. A paused session starts nothing, not even a YOLO answer.\n- **Resume (Rule P2).** `Engine::resume_session` appends `SessionResumed`. Each interrupted execution continues under its own id.\n- **Stop.** `Engine::stop_session` appends `SessionFailed` with the text `Stopped by the user.` It cancels executions in progress and denies waiting permission asks. Work that the session already did stays.\n- **Stop when the server is off.** Run `ostra stop <session>`. The next start then does not run the executions again.\n\n## End of a session\n\nThe `Completion` judge returns `report_markdown`. The engine writes it to `ostra-completion.md` in the session root and appends `SessionCompleted`. The summary is the first non-empty line of the report. If the judge fails, the engine writes a fallback report that lists the state only.\n\nCompletion waits until nothing runs, no created project has an unfinished init, and no subagent question is open (Rule H9). A session also ends with `SessionFailed` when a step returns `Step::Fail`, for example when every research task fails.\n\nAn ended session accepts no `ExecutionStarted`, `ExecutionResumed`, or `CommandStarted` event. `Inner::append` returns `EngineError::Ended` for them. This check runs under the state lock, so a stop cannot race a start.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-engine/src/plan.rs",
+              "symbol": "Planner::flows",
+              "lines": "517-639",
+              "note": "The match on category that selects each flow."
+            },
+            {
+              "path": "crates/ostra-core/src/pipeline.rs",
+              "symbol": "StageKind",
+              "lines": null,
+              "note": "Categories, tracks, lanes, and stage kinds."
+            },
+            {
+              "path": "crates/ostra-engine/src/judge.rs",
+              "symbol": "ClassifyOut",
+              "lines": null,
+              "note": "The output shape of the classify judge."
+            },
+            {
+              "path": "assets/judges/classify.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The category rules that the classify judge follows."
+            },
+            {
+              "path": "assets/judges/track.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The evidence that moves an IMPLEMENT request to the full track."
+            },
+            {
+              "path": "crates/ostra-engine/src/runner.rs",
+              "symbol": "Engine::stop_session",
+              "lines": null,
+              "note": "Pause, resume, and stop."
+            }
+          ]
+        },
+        {
+          "id": "event-sourced-engine",
+          "title": "Event log, fold, planner, and runner",
+          "summary": "Describes how a session is a log of events, how the planner decides the next steps, and how the runner performs them and survives a restart.",
+          "body": "A session lasts hours and must survive a restart. It must also be testable without a model. The engine solves both with an append-only event log, a pure planner, and a runner that performs the steps.\n\n## The parts\n\n- **Event log.** Each session has a list of `SessionEvent` values in the `events` table of `workspace.db`. The key is `(session_id, seq)`.\n- **Fold.** `SessionState::fold` reads the events in order and builds `SessionState`. The fold is deterministic: the same events always give the same state. For this reason a restart can replay the log and continue.\n- **Planner.** `next_steps(state, ctx)` is a pure function. It returns a list of `Step` values. It reads no clock, no disk, and no network.\n- **Runner.** `Engine` in `runner.rs` performs each step and appends the resulting events.\n\n## Step kinds\n\n| `Step` | What the runner does |\n| --- | --- |\n| `Judge` | Calls a judge and appends `DecisionMade`. |\n| `Spawn` | Starts an agent execution. |\n| `OpenGate` | Appends `GateOpened`. |\n| `YoloAnswer` | Answers a gate under YOLO. |\n| `Command` | Runs the format or stage command of a project. |\n| `Autofix` | Applies mechanical review fixes. |\n| `AnnounceBlocked` | Appends `PhaseBlocked`. |\n| `FinishInit`, `RecordInitProblem` | End or fail the init of a created project. |\n| `Deliver` | Hands a message to a harness execution that waits. |\n| `WriteBook` | Writes the documentation book. |\n| `Complete`, `Fail` | End the session. |\n\n## The driver loop\n\n```mermaid\nsequenceDiagram\n    participant Driver as drive loop\n    participant Planner as next_steps\n    participant State as SessionState\n    participant Perform as perform\n    participant Store as workspace.db\n    Driver->>State: read state under lock\n    Driver->>Planner: next_steps\n    Planner-->>Driver: steps\n    Driver->>Perform: spawn a task per new step key\n    Perform->>Store: append event\n    Perform->>State: apply stored event\n    Perform-->>Driver: wake\n    Driver->>Planner: next_steps again\n```\n\n`Inner::ensure_driver` starts one driver task for each session. The driver computes the steps and starts a task for each step. Each step has a key from `Step::key`. The driver keeps the keys of steps in flight in the `inflight` set, so it never starts one step twice. When a step task ends, it removes its key and wakes the driver. The driver then plans again.\n\nIf a step fails with an error other than `EngineError::Ended`, the driver appends a `Note` with the text `A step failed: ...` and goes on.\n\n## What append does\n\n`Inner::append` is the only way to add an event. It does these actions in order, under the state lock of the session:\n\n1. Refuse start events when the session already ended.\n2. Store the event in `workspace.db`.\n3. Materialize the event into the tables for the UI (`materialize`).\n4. Apply the event to the in-memory `SessionState`.\n5. Update the session row: category, status, lane, stage label, projects, cost, and title.\n6. Broadcast `EngineNotice::SessionUpdated` and `EngineNotice::Event`.\n7. Ask for a push notice (`push_for`) and wake the driver.\n\nThe lock serializes appends for one session. Therefore the order of `seq` is the order of the fold.\n\n## Planner filters\n\n`Planner::push` drops or changes a step before it reaches the list. These rules apply:\n\n- A created project that awaits its init accepts only the `initializer` and `advisor` agents (Rule O4). Other agents route their work by the inventory and the profile of the project.\n- A spawn for an execution that waits for a message is held. The message wakes the execution in place (Rule H2).\n- A spawn that replaces a paused execution resumes that execution (Rule P2).\n- A pair loop continues the conversation of the execution before it (Rules H5 and H6). One conversation has one live execution (Rule H7).\n- The budget guard blocks new spawns after the budget is spent. See the page Execution lifecycle, slots, and budget.\n\n## Restart recovery\n\n`Engine::recover` runs at server start for every session of the workspace:\n\n1. Each execution that was running gets an `ExecutionFinished` event. The status is `Interrupted` with the error `The server restarted while this execution ran.` A harness execution that waited for a message gets the status `Waiting`.\n2. Each open `Permission` gate gets a `Deny` answer, because the execution that asked is gone.\n3. Each loop that was in flight runs its work again with `WorkKind::Rerun`.\n4. The engine starts the driver for each session that is not terminal.\n\nUsage that the executions already spent stays, because the engine stores usage deltas while the executions run.\n\n## Event catalog\n\n| Group | Events |\n| --- | --- |\n| Session | `SessionCreated`, `RequestAmended`, `SessionPaused`, `SessionResumed`, `YoloSet`, `SessionCompleted`, `SessionFailed`, `Note` |\n| Executions | `ExecutionStarted`, `ExecutionResumed`, `ExecutionFinished`, `ContainmentSignal` |\n| Messages between agents | `AgentAsked`, `AgentReplied`, `MessageDelivered` |\n| Judges | `DecisionMade`, `DecisionOverridden` |\n| Gates | `GateOpened`, `GateAnswered` |\n| Commands | `CommandStarted`, `CommandRan`, `AutofixApplied` |\n| Review | `SecurityBlock`, `PhaseBlocked` |\n| Projects | `ProjectCreated`, `ProjectInitFinished`, `InitStepFailed` |\n| Books | `BookWritten` |\n\n## Rules for a change\n\nOld logs must still parse. The code follows three habits:\n\n- A new field on an existing event has `#[serde(default)]`.\n- A renamed name keeps an alias. Examples: `module-docs` for `Documentation`, `UNIT_TEST` for `Test`, `module_docs` for `ExecPurpose::Docs`.\n- The fold reads only the events. Do not read the clock, the disk, or the environment in `SessionState::apply`, because a replay must give the same state.\n\nThe conformance tests in `tests/conformance/main.rs` build an event history, fold it, and check the steps. Add a fixture there for each new planner rule.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-engine/src/state.rs",
+              "symbol": "SessionState",
+              "lines": null,
+              "note": "The fold of events into session state, and the constants that cap loops."
+            },
+            {
+              "path": "crates/ostra-engine/src/plan.rs",
+              "symbol": "next_steps",
+              "lines": null,
+              "note": "The planner and the Step enum."
+            },
+            {
+              "path": "crates/ostra-engine/src/runner.rs",
+              "symbol": "Inner::append",
+              "lines": null,
+              "note": "The single write path for events."
+            },
+            {
+              "path": "crates/ostra-engine/src/runner.rs",
+              "symbol": "Engine::recover",
+              "lines": null,
+              "note": "Restart recovery."
+            },
+            {
+              "path": "crates/ostra-core/src/event.rs",
+              "symbol": "SessionEvent",
+              "lines": null,
+              "note": "Every event, plus ExecPurpose, GatePayload, and GateAnswer."
+            },
+            {
+              "path": "tests/conformance/main.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Planner fixtures that fold an event history."
+            }
+          ]
+        },
+        {
+          "id": "research-spec-plan",
+          "title": "Research, spec, and plan stages",
+          "summary": "Describes the explore tasks, the spec flow with fact-check and approval, the stakes check, and the plan flow that precede code on the full track.",
+          "body": "Code written from a guess breaks. On the full track, the pipeline first collects facts, then fixes the requirements in a spec, then orders the work in a plan. A `fact-check` agent must pass each document before the user sees it.\n\n## Explore tasks and sufficiency\n\nThe `Classify` judge returns explore tasks. A task has a project and a text. The planner starts every ready explore at once, because explore is read-only (Rule M1). The number of parallel executions stays under `limits.max_parallel_executions`.\n\nEach explore execution writes one research document with the `Document` tool. The document has a list of `Not covered` items.\n\nAfter all tasks finish, the planner checks for unjudged `Not covered` items. If any exist, it returns a `Sufficiency` judge step. The judge can queue more explore tasks. The engine runs at most `SUFFICIENCY_ROUNDS` (3) rounds. After that, it goes on with the research that it has.\n\nIf no research document exists, the session fails. This is Rule D1. The error text is `Every research task failed or was abandoned, so there is no research document to write a spec from.`\n\nEach explore task has an origin. `Rescue`, `LoopAnswer`, and `Ask` tasks are loop-bound: only the work loop or the asker waits for them. Other origins hold the whole session.\n\n## Spec flow\n\n```mermaid\nflowchart TD\n    Run[generate-spec writes the spec] --> Q{Open questions}\n    Q -->|yes| QG[OpenQuestions gate]\n    QG --> Run\n    Q -->|no| FC[fact-check pass]\n    FC --> V{Verdict}\n    V -->|Fail| Count{3 fails in a row}\n    Count -->|no| Run\n    Count -->|yes| RG[FactCheckRecurring gate]\n    RG -->|another round| Run\n    V -->|Pass| Need{Approval needed}\n    Need -->|no| Done[Spec done]\n    Need -->|yes| AG[SpecApproval gate]\n    AG -->|changes| Run\n    AG -->|approved| Done\n```\n\nThe steps in order:\n\n1. `generate-spec` reads every research document and writes one spec with the `Document` tool.\n2. If the spec has open questions that were not asked for this version, the planner opens an `OpenQuestions` gate before any fact-check (Rule D3). The engine writes each answer back into the spec.\n3. `fact-check` checks the spec. The `source_check` input is `refetch` only on the first pass of a spec that has External Evidence rows. Otherwise it is `citations` (Rule D3b).\n4. The verdict is `Pass`, `Fail`, or `Error`. After `Fail`, `generate-spec` rewrites the spec in place with the findings. The file name stays the same, so the next pass compares against its snapshot (Rule D3a).\n5. After `FACTCHECK_RECURRING_LIMIT` (3) consecutive fails, plus `fail_limit_extra`, the planner opens a `FactCheckRecurring` gate.\n6. Only the categories `PLAN` and `IMPLEMENT` (full track) need approval. The planner opens `SpecApproval` for them.\n\nThe engine refuses an approval without a `Pass` for the current version. `Engine::answer_gate` returns `Approval requires a fact-check PASS on this version.` A change to the spec revokes the approval.\n\n## Stakes and plan flow\n\nAfter the spec is approved on the full track, the `Stakes` judge rates the work.\n\n| Stakes | Meaning | Result |\n| --- | --- | --- |\n| `low` | One deliverable in one project, easy to revert, no schema or contract change. | The plan stage is skipped. The implementer works from the spec in one inline phase for each project. |\n| `medium` | Several files in one area, a changed contract, a new integration point, or more than one deliverable. | The plan stage runs. |\n| `high` | An architecture change, a migration, a cross-project change, or a shared library change. | The plan stage runs. |\n\nThe judge prompt resolves any doubt upward, because a skipped plan removes the phase review that catches a wrong order.\n\nThe `plan` agent reads the spec and its own earlier plan, and nothing else (Rule D4). A `Fail` verdict adds findings (Rule D5). The plan fact-check always uses `citations`.\n\nThe plan holds a master plan and one file for each phase. A phase (`PhaseInfo`) has these fields:\n\n| Field | Meaning |\n| --- | --- |\n| `id`, `title`, `deliverable` | Identity and purpose. |\n| `project` | The project key. A key that does not exist yet means the phase creates that project. |\n| `complexity` | `Low`, `Medium`, or `High`. It routes the model tier of `implementer` and `write-test`. |\n| `test_policy` | `Required` (default) or `Skip` with a rationale. Any doubt means `Required` (Rule T4). |\n| `depends_on` | Phase ids. `None` means unreadable and counts as a dependency on every earlier phase (Rule M5). |\n| `file` | The phase file. An inline phase has none. |\n\n## Changes after approval\n\nA plan question changes requirements. The answer goes into the spec first, then the plan is written again (Rule D10). The plan is `invalidated` when the spec changes, and the `plan` agent revises it against the spec diff.\n\nThe engine holds a free-text answer to a spec or plan gate until the `RouteAnswer` judge decides where it goes. See the page Gates and answers.\n\n## Failures\n\n- If an execution of this stage ends in error, the engine retries it once (`ERROR_RETRIES`). Then it opens an `ExecutionFailed` gate. A harness that cannot start opens a `HarnessFailure` gate.\n- If the user stops the stage, the planner returns `Step::Fail` with `The spec stage was stopped.` or the same text for the plan.\n- YOLO never retries an execution that the user stopped (Rule P4).",
+          "code_refs": [
+            {
+              "path": "crates/ostra-engine/src/plan.rs",
+              "symbol": "Planner::spec_flow",
+              "lines": "731-886",
+              "note": "The spec flow, including the gates and the fact-check inputs."
+            },
+            {
+              "path": "crates/ostra-engine/src/plan.rs",
+              "symbol": "Planner::plan_flow",
+              "lines": "900-1032",
+              "note": "The plan flow."
+            },
+            {
+              "path": "crates/ostra-engine/src/state.rs",
+              "symbol": "ArtifactTrack",
+              "lines": null,
+              "note": "The state of a spec or plan: version, checks, approval, and routing."
+            },
+            {
+              "path": "crates/ostra-core/src/pipeline.rs",
+              "symbol": "PhaseInfo",
+              "lines": null,
+              "note": "The phase fields that the planner schedules."
+            },
+            {
+              "path": "assets/judges/stakes.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The stakes table that the judge applies."
+            },
+            {
+              "path": "assets/judges/sufficiency.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The sufficiency judge prompt."
+            }
+          ]
+        },
+        {
+          "id": "work-loops",
+          "title": "Work loops and the review cycle",
+          "summary": "Explains the implement and test loops, the review cap, severities, auto-fix, rescue, handoff, and blocked phases.",
+          "body": "One agent pass seldom gives acceptable code. A work loop pairs a work agent with the `code-reviewer` agent. It repeats until no HIGH or MEDIUM finding remains or a cap stops it. This page explains the loop, its limits, and every way it can end.\n\n## Loop kinds\n\nEach phase (`PhaseRun`) has two loops and one analysis state:\n\n- `impl_loop`: the work agent is `implementer`. For a `VERIFY` request the same agent runs the project test command. For a `PROMPT` request the work agent is `prompt-generation`.\n- `test_loop`: the work agent is `write-test`. It runs in the closing stages.\n- `epa`: the execution-path analysis that feeds `write-test`.\n\nThe reviewer gets a `Phase:` value of `N` for an implement loop and `N-tests` for a test loop. Each loop has a review ledger, `ostra-review-ledger-phase-<value>.md`. The reviewer and the work agent both write it.\n\n## States of a loop\n\n`WorkLoop.next` holds a `LoopNext` value. The planner reads it and returns the next step.\n\n```mermaid\nstateDiagram-v2\n    [*] --> Idle\n    Idle --> Work: dependencies passed\n    Work --> Review: submit ok\n    Work --> Rescue: submit stuck\n    Work --> Handoff: submit handoff\n    Work --> Failed: error after one retry\n    Handoff --> Work: resume after prompt-generation\n    Rescue --> Work: rerun with a fact\n    Rescue --> RescueExplore: research the fact\n    Rescue --> RescueGate: ask the user\n    Review --> Work: fix HIGH or MEDIUM\n    Review --> Work: blocker fix\n    Review --> Autofix: auto-fixable findings\n    Autofix --> Work: remaining findings\n    Review --> Stage: no finding left\n    Review --> CapReached: cap reached\n    CapReached --> Work: another pass\n    CapReached --> Blocked: stop\n    Stage --> Done: git add finished\n```\n\n## Review findings\n\nThe reviewer returns findings with a severity: `BLOCKER`, `HIGH`, `MEDIUM`, or `LOW`.\n\n| Severity | What the loop does |\n| --- | --- |\n| `BLOCKER` | A non-waivable security finding. The finding goes alone to the fix agent as a `BlockerFix` with an instruction to remove the dangerous code. No cap applies. `blocker_open` stays true until a review has none. An open blocker stops the docs stage (hard rule 21). |\n| `HIGH`, `MEDIUM` | The fix agent gets these findings verbatim and the ledger path. The agent records `FIXED` or `WONTFIX` with a reason for each. |\n| `LOW` | The engine keeps them in `leftover_low`. No fix runs for them. |\n\nA finding whose rule has `auto_fixable = true` in `project.toml` goes to `Step::Autofix`. The engine applies its exact `Fix:` text, for example a line that says to change one quoted text to another on line N. The rules `SEC-BLOCK*` and `PHASE-REQ*` are never auto-fixable. A finding that the engine cannot apply goes back to the fix agent.\n\n## Caps\n\n| Constant | Value | Meaning |\n| --- | --- | --- |\n| `REVIEW_CAP` | 3 | Review passes before the fourth becomes a gate. |\n| `YOLO_REVIEW_BUDGET` | 10 | Review passes under YOLO. |\n| `extra_cap` | grows | The user adds passes with the answer `another-pass`. |\n| `ERROR_RETRIES` | 1 | Automatic retries of an execution that ends in error. |\n| `MAX_ANSWER_RESEARCH` | 3 | Research tasks that one answer can queue. |\n\nWhen the cap is reached and YOLO is off, the planner opens a `ReviewCap` gate. The user answers `another-pass` or `stop`. When YOLO is on, the `ResolveReview` judge decides `Fix` or `Block`. The engine repeats a resolution round only while the number of open findings falls. If the number does not fall, the phase becomes `Blocked` with the text `The review loop stopped converging`.\n\n## Stuck and handoff\n\nAn agent submits `status: stuck` with a `diagnostic` and a `need`. The `Rescue` judge picks one of three actions:\n\n- `Explore`: queue a research task for the missing fact. The loop waits for it.\n- `Rerun`: run the work again with a stated fact (`WorkKind::Rescue`).\n- `Gate`: open a `Stuck` gate so the user states the fact or leaves the phase blocked.\n\nAn agent submits `status: handoff` when it needs a specialist. The planner starts `prompt-generation` with the handoff request. After it finishes, the work agent resumes (`WorkKind::Resume`).\n\n## Blocked phases\n\nA blocked phase announces itself with `PhaseBlocked`. Phases that depend on it leave the queue. Independent phases keep running (Rule D9). Without YOLO, a `PhaseBlocked` gate asks the user to retry with instructions or leave the phase blocked.\n\n## Scheduling\n\nOne implement pipeline runs for each project at a time (Rule M2). A phase starts when all its dependencies pass. Test loops run one phase at a time in phase order. The analysis runs in parallel for all covered phases.\n\n## When the code is done\n\nAfter the last phase of a project, the planner opens the `ImplementationReview` gate (Rule F1). The user tries the result. The user answers `done`, or `feedback` with text. The `Feedback` judge routes each feedback round, and the engine builds a revision phase. A revision reads the session context file `ostra-session-context.md`, not a conversation (Rule F2).",
+          "code_refs": [
+            {
+              "path": "crates/ostra-engine/src/state.rs",
+              "symbol": "WorkLoop",
+              "lines": "355-551",
+              "note": "LoopNext, WorkLoop, and the cap logic in after_findings."
+            },
+            {
+              "path": "crates/ostra-engine/src/plan.rs",
+              "symbol": "Planner::loop_steps",
+              "lines": "1153-1337",
+              "note": "How each LoopNext becomes a step."
+            },
+            {
+              "path": "crates/ostra-engine/src/autofix.rs",
+              "symbol": "parse_fix",
+              "lines": null,
+              "note": "The exact fix text that the engine applies."
+            },
+            {
+              "path": "assets/judges/rescue.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The rescue judge prompt."
+            },
+            {
+              "path": "assets/judges/resolve-review.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The resolve-review judge prompt."
+            }
+          ]
+        },
+        {
+          "id": "closing-stages-and-books",
+          "title": "Format, tests, documentation, and books",
+          "summary": "Describes the closing stages after code is done: format, the closing gate, tests, the docs stage, and how the engine writes and merges a documentation book.",
+          "body": "After the code of a project passes review, three optional jobs remain: format the code, write tests, and write documentation. Tests and documentation cost executions, so the user chooses. This page covers the closing stages and the book that the docs stage produces.\n\n## Format\n\nThe planner runs the format command once for each project after its last phase (Rule D8). The command comes from `[commands] format` in `.ostra/project.toml`. The step is not gated. If the command changed outside Ostra and is not approved, the engine skips it and records `FORMAT_NOT_APPROVED`.\n\n## Closing gate\n\nThe planner opens one `ClosingGate` for all projects that reach it together (Rule T6). Each item has `ask_tests` and `ask_docs`. An option that the request already set (`tests` or `docs`) is not asked (Rule T3). Under YOLO the gate answers no tests and no docs, unless the request asked for them.\n\n## Test stage\n\nThe closing gate answer `tests` starts the test stage for a project:\n\n1. The engine selects the covered phases: phases with no plan file, and phases with `test_policy = Required` (Rule T4).\n2. The `execution-path-analyzer` agent runs for each covered phase, in parallel. It writes an EPA report `ostra-epa-phase-<N>.md`.\n3. The `write-test` agent runs for one phase at a time, in phase order. It uses the EPA report. A review loop follows each pass (`test_loop`).\n4. A failed analysis opens an `ExecutionFailed` gate. An abandoned analysis skips its phase.\n\nA `TEST` request with no implementer gets a stub report `ostra-test-request.md` from the engine. The stub names the request as the code under test.\n\n## Docs stage\n\nThe `documentation` agent runs once for each project (Rule B1). It gets the implementer reports of the passed phases. An open `BLOCKER` stops it. At most `MAX_DOCS_WRITERS` (4) writers run at once (Rule B7).\n\nFor a `DOCS` request no implementer ran. The engine writes the stub `ostra-docs-request.md`. It holds the request and says that no file changed.\n\nWhen two or more parts exist, the `system-architecture` agent runs after the parts. It reads `ostra-docs-parts.json`, which the engine writes from the submitted parts (Rule B4). Then the planner returns `Step::WriteBook`.\n\nAgents write no book file. The guard `workspace-docs` refuses a write under the books folder (Rule B5). Each agent returns its part in its submit call. The engine validates the submit before it accepts it. `check_documentation` requires at least one section, unique slug ids, valid diagram sizes, and valid glossary entries.\n\n## Book storage\n\nThe book lives in `<workspace>/.ostra/docs/<book id>/`:\n\n| File | Content |\n| --- | --- |\n| `book.json` | The whole book as JSON. |\n| `index.md` | The index of the book. |\n| `glossary.md` | The merged glossary. |\n| `architecture.md` | The system architecture, when two or more parts exist. |\n| `<project>/<section>.md` | One file for each section of a part. |\n\n`book::write` removes files of sections that no longer exist.\n\n### Book identity and merge\n\n- The book id is the sorted project keys joined by `_` (Rule B6). A later session on the same projects updates the same book. An id longer than `MAX_BOOK_ID` (80 characters) is cut and gets a 16-digit hash suffix. The user can pick an existing book in the new task form (`docs_book`).\n- A new part replaces the old part of the same project. A new architecture replaces the old one. Glossary entries merge by term, and the newer definition wins.\n- `BOOK_LOCK` serializes each read, merge, and write. Therefore two sessions that update one book keep each other's parts.\n- If the write fails, the engine records `BookWritten` with an `error` and the session goes on.\n\n### Diagram limits\n\n`check_diagram` refuses a sequence diagram with more than `MAX_SEQUENCE_PARTICIPANTS` (8) participants or `MAX_SEQUENCE_MESSAGES` (20) messages. It refuses a flowchart with more than `MAX_FLOWCHART_NODES` (15) nodes.\n\n## Search by agents\n\nAgents with the `docs_search` capability read books with `DocsSearch` (Rule B8). The search cuts each section into small passages and ranks them with BM25 over title, code, and body fields. The default limit is `DEFAULT_LIMIT` (5) hits and the maximum is `MAX_LIMIT` (15). A hit shows at most `PASSAGES_PER_HIT` (2) passages. A fact that appears on many pages returns many hits, so write each fact once.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-engine/src/plan.rs",
+              "symbol": "Planner::closing_stages",
+              "lines": "1457-1527",
+              "note": "Format, closing gate, test stage, and docs stage."
+            },
+            {
+              "path": "crates/ostra-engine/src/plan.rs",
+              "symbol": "Planner::book_stage",
+              "lines": "1696-1753",
+              "note": "Architecture and the book write step."
+            },
+            {
+              "path": "crates/ostra-core/src/book.rs",
+              "symbol": "apply",
+              "lines": null,
+              "note": "Book merge, write, and validation."
+            },
+            {
+              "path": "crates/ostra-core/src/book_search.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The ranking behind DocsSearch."
+            },
+            {
+              "path": "crates/ostra-engine/src/runner.rs",
+              "symbol": "Step::WriteBook",
+              "lines": null,
+              "note": "Where the runner calls book::apply."
+            }
+          ]
+        },
+        {
+          "id": "gates-and-answers",
+          "title": "Gates and answers",
+          "summary": "Lists every gate kind with its answers and its YOLO behavior, and explains how the engine validates and routes an answer.",
+          "body": "A pipeline needs facts and decisions that only the user has. A gate is a record that waits for an answer. The engine opens a gate with `GateOpened`. The user answers through the console, and the engine appends `GateAnswered`. This page lists the gate kinds and the rules for answers.\n\n## Gate catalog\n\n`GatePayload` defines the kinds. `kind_str` gives the name that the API uses.\n\n| Kind | Opens when | Answer | Under YOLO |\n| --- | --- | --- | --- |\n| `open_questions` | A spec or plan has questions. | `Questions` with one non-empty answer for each question id. | A judge answers. A missing answer takes the recommended option. |\n| `spec_approval` | The spec passed fact-check. | `Approval {approved, feedback}`. A rejection needs feedback. | A judge answers. It can approve only after a `Pass`. |\n| `plan_approval` | The plan passed fact-check. | Like the spec. | Like the spec. |\n| `fact_check_recurring` | 3 fails in a row. | `Choice`: `another-round` or `stop`, with optional guidance text. | `another-round` while fewer than 6 fails. Then `stop`. |\n| `review_cap` | A loop reached its cap. | `Choice`: `another-pass` or `stop`. | The loop uses the `ResolveReview` judge instead. |\n| `stuck` | An agent reported `stuck`. | `Choice`: `fact` with text, or `block`. | A judge answers. A `fact` without text becomes `block`. |\n| `phase_blocked` | A phase ended blocked. | `Choice`: `retry` or `leave`. | `leave`. |\n| `closing_gate` | Code is done. | `Closing` with `tests` and `docs` for each project. | Defaults: no tests and no docs, unless requested. |\n| `permission` | A tool call needs an answer. | `AllowOnce`, `AlwaysInWorkspace`, or `Deny`. | `AllowOnce`. |\n| `harness_failure` | A harness CLI cannot start or is not signed in. | `Choice`: `retry` or `native`. | `native`. |\n| `skill_approval` | An init proposed skills. | `Skills` with a disposition for each skill. | The proposed defaults. |\n| `execution_failed` | An execution failed after its retry. | `Choice`: `retry` or `abandon`. | `retry` twice for one agent, then `abandon`. Never for an execution that the user stopped. |\n| `implementation_review` | Every phase finished. | `Choice`: `done`, or `feedback` with text. | `done`. |\n| `budget_reached` | The session spent its budget. | `Choice`: `raise` with dollars in `text`, or `stop`. | Never answered. |\n\n## Rules for an answer\n\n`Engine::answer_gate` checks an answer before it appends the event:\n\n1. The gate must have no answer. Otherwise the error is `This gate was already answered.`\n2. The answer shape must fit the gate. `validate_answer` returns `That answer does not fit this gate.` for a mismatch.\n3. A spec or plan approval needs a `Pass` for the current version.\n4. The answer `AlwaysInWorkspace` adds the suggested rule (`suggest_rule`) to the `permissions.allow` list of the workspace.\n\nThe event `GateAnswered` records the `source`: `User`, `Yolo`, or `Engine`. The engine uses `Engine` for answers that need no judgment, for example a permission ask of an execution that ended.\n\n## Routing of free-text answers (Rule J1)\n\nA bare choice has one meaning, so the engine applies it at once. A free-text answer can change requirements, so it waits for the `RouteAnswer` judge. `answer_needs_route` marks these answers with `routed: true`:\n\n- `Questions` with at least one answer.\n- An approval with feedback text.\n- `fact_check_recurring` with any option but `stop` and with text.\n- `another-pass`, `fact`, `retry`, and `feedback` answers that carry text.\n\nThe judge returns a route and one item for each answer.\n\n| `AnswerRoute` | Meaning |\n| --- | --- |\n| `RequirementChange` | The answer changes requirements. It goes into the spec first. |\n| `ImplementationDetail` | The answer guides the current stage. |\n| `StageChoice` | The answer picks an option of the stage. |\n\n| `Disposition` | Meaning |\n| --- | --- |\n| `Deliver` | The current stage acts on the answer now. |\n| `Remember` | The engine keeps a note for later stages (`Implement`, `Tests`, `Docs`). |\n| `Discard` | The engine drops the answer. The gate answer stays in the log. |\n\nThe judge can also queue up to `MAX_ANSWER_RESEARCH` (3) research tasks that run before the answer applies. It can also name earlier notes to forget. A note that the judge keeps reaches the spawn block of a later stage as `User notes`.\n\nWhen the judge returns nothing for an item, the engine delivers the answer, because the user gave it.\n\n## Permission gates\n\nA permission ask comes from a live execution, not from the planner. `EngineHost::ask_permission` opens the gate and waits on a channel. The answer, a stop, or a pause ends the wait. A stop or an interrupt answers `Deny` for each waiting ask. If YOLO turns on when an ask waits, the engine answers it with `AllowOnce` at once.\n\n## Budget gate\n\nThe planner opens `budget_reached` once when the spent amount reaches the limit. Executions in progress finish. New spawns wait. If the user answers `raise`, the engine adds the dollars to `budget_raised`. YOLO never raises a budget, because spending more is the decision of the user.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-core/src/event.rs",
+              "symbol": "GatePayload",
+              "lines": null,
+              "note": "All gate kinds, their stage mapping, and the answer types."
+            },
+            {
+              "path": "crates/ostra-engine/src/runner.rs",
+              "symbol": "validate_answer",
+              "lines": null,
+              "note": "Answer validation."
+            },
+            {
+              "path": "crates/ostra-engine/src/state.rs",
+              "symbol": "answer_needs_route",
+              "lines": null,
+              "note": "Which answers wait for the RouteAnswer judge."
+            },
+            {
+              "path": "crates/ostra-engine/src/judge_input.rs",
+              "symbol": "yolo_plan",
+              "lines": null,
+              "note": "The YOLO answer for each gate kind."
+            },
+            {
+              "path": "assets/judges/route-answer.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The routing rules that the judge follows."
+            }
+          ]
+        },
+        {
+          "id": "judges-and-yolo",
+          "title": "Judges and YOLO",
+          "summary": "Lists the ten judge kinds, explains how a judge call runs, fails, and is overridden, and explains what YOLO changes.",
+          "body": "The pipeline code must not guess where a decision needs judgment. A judge is a single model call that returns JSON against a schema. It is the only place where a model makes an orchestration decision. The engine stores each result as a `DecisionMade` event with a reason.\n\n## Judge catalog\n\n| `JudgeKind` | Question | Output |\n| --- | --- | --- |\n| `Classify` | Which category, projects, and first research tasks? | `ClassifyOut` |\n| `Sufficiency` | Does each `Not covered` item need more research? | `SufficiencyOut` |\n| `Track` | Light or full track for an `IMPLEMENT` request? | `TrackOut` |\n| `Stakes` | `low`, `medium`, or `high`? | `StakesOut` |\n| `RouteAnswer` | Where does a free-text answer or added context go? | `RouteAnswerOut` |\n| `Feedback` | Which projects does a feedback round change, and with what instruction? | `FeedbackOut` (needs at least one target) |\n| `Rescue` | How to continue after an agent reported `stuck`? | `RescueOut` |\n| `ResolveReview` | At the review cap under YOLO: fix or block? | `ResolveReviewOut` |\n| `YoloAnswer` | What answer fits this gate? | `YoloAnswerOut` |\n| `Completion` | What does the final report say? | `CompletionOut` |\n\nEach judge has a prompt in `assets/judges/<name>.md`. The file name matches `JudgeKind::as_str`, for example `route-answer.md`.\n\n## How a call runs\n\n`Inner::call_judge` does these steps:\n\n1. Load the prompt from the spawn factory.\n2. Resolve the route with the key `judge` and the default tier `advanced`. The judge always runs on the native path with an API key. It never runs in a harness, because `Services::judge` calls `ostra_providers::structured`.\n3. Call the provider with the effort `Low`. The model must call a tool named `decide` whose input matches the schema.\n4. Check the output against the Rust type of the judge. A bad shape counts as a failed attempt.\n5. Retry up to 3 attempts in total. The delay is 500 ms times the attempt number.\n6. Append `DecisionMade` and add the usage to the judge cost of the session.\n\nIf all attempts fail, the engine appends `SessionFailed` with the error and the hint `Check that the judge route has a provider with a working API key.` The `Completion` judge is the exception. Its failure gives a fallback report that lists the state, because the work is done.\n\nThe judge cost counts toward the cost that the session list shows. The budget guard does not count it, because the guard sums the cost of finished executions only.\n\n## Override\n\n`Engine::override_decision` lets the user replace a decision. It works only for `Classify`, `Stakes`, `Track`, and `Sufficiency`. It works only before dependent work starts (`can_override`). The new output must match the output type of the judge. The engine appends `DecisionOverridden`.\n\n## YOLO\n\nYOLO is a per-session switch. A workspace sets the default with `yolo.default`. The user toggles it with `Engine::set_yolo`, which appends `YoloSet`. YOLO changes three behaviors:\n\n- **Gates.** The planner returns a `YoloAnswer` step for each open gate. Two groups are exceptions: `permission` gates, and the gates that `yolo_leaves_open` names (`budget_reached`, and `execution_failed` for an execution that the user stopped). `YoloPlan::Fixed` gives a fixed answer. `YoloPlan::Judge` asks the `YoloAnswer` judge. See the page Gates and answers for each kind.\n- **Permissions.** Layer 2 of the policy turns each `Ask` into an `Allow` with the rule `yolo`. Layer 1 guards and `Deny` results still apply.\n- **Review cap.** The loop budget is 10 passes, and the `ResolveReview` judge resolves the cap.\n\nThe engine enforces what must stay true when a judge answers a gate. `yolo_answer_from_judge` accepts an approval only after a fact-check `Pass`. It requires feedback for a rejection. It fills each missing question with the recommended option. If the judge fails, the engine appends a `Note` and the gate waits for the user.\n\nA paused session starts nothing, not even a YOLO answer (Rule P1).",
+          "code_refs": [
+            {
+              "path": "crates/ostra-engine/src/judge.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Output types, dispositions, and the answer routes."
+            },
+            {
+              "path": "crates/ostra-engine/src/runner.rs",
+              "symbol": "Inner::call_judge",
+              "lines": null,
+              "note": "Retry, validation, and decision storage."
+            },
+            {
+              "path": "crates/ostra-engine/src/judge_input.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The input that each judge sees, and the YOLO plans."
+            },
+            {
+              "path": "crates/ostra-providers/src/lib.rs",
+              "symbol": "structured",
+              "lines": null,
+              "note": "The forced decide tool call."
+            },
+            {
+              "path": "assets/judges/yolo-answer.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The YOLO judge prompt."
+            },
+            {
+              "path": "tests/evals/judges.toml",
+              "symbol": null,
+              "lines": null,
+              "note": "Eval cases for judge routing."
+            }
+          ]
+        },
+        {
+          "id": "execution-lifecycle",
+          "title": "Execution lifecycle, slots, and budget",
+          "summary": "Follows one agent execution from spawn to finish: slots, route resolution, context, status values, pause and resume, containment, timeouts, and the session budget.",
+          "body": "The planner asks for an agent. The runner must pick a model, build the prompt, limit parallel work, run the agent, and record the result. `Inner::perform_spawn` does this. An execution is one run of one agent.\n\n## Steps of a spawn\n\n1. **Wait for a slot.** `acquire_slot` waits until the count of running executions is under the limit.\n2. **Check the session.** A terminal or paused session starts nothing.\n3. **Find an execution to continue.** A paused execution (status `Interrupted` or `Waiting`) resumes under its own id. A pair loop can instead continue the conversation of an earlier execution (Rules H3 and H5).\n4. **Resolve the route.** `resolve_route` picks the executor and the model. A continued execution keeps its executor and model, which also keeps the prompt cache.\n5. **Find the executor.** If none exists, the runner records a `Denied` execution with the reason.\n6. **Pick the repo root.** It is the project path. A phase in a project that does not exist yet runs from its session dir (Rule O2).\n7. **Load project facts.** The runner reads `project.toml`, `INVENTORY.md`, and the project instruction files.\n8. **Build the spawn.** `SpawnFactory::build` returns the system prompt, the first message, the spawn block, the params, the report file, and the effort.\n9. **Build `ExecContext`.** It holds the roots, the permission rules, the sandbox settings, the protected paths, and the YOLO flag.\n10. **Record the start.** The runner appends `ExecutionStarted` (or `ExecutionResumed`) and inserts the execution row.\n11. **Run.** `Executor::run(spec, host, token)` returns an `ExecutionResult`.\n12. **Record the end.** The runner adds usage, maps a cancel to `Interrupted` when the session interrupted the execution, stores the result, and appends `ExecutionFinished`.\n\nIf route resolution or the spawn build fails, the runner records the execution as `Denied` with the text `route: ...` or `spawn: ...`.\n\n## Slots\n\nThe limit is `limits.max_parallel_executions` (default 3, minimum 1). A `Slot` value gives the slot back in its `Drop` and wakes the waiters. Therefore the slot returns after success, failure, cancel, or a panic.\n\nA waiting spawn checks again when a slot frees and at least every 2 seconds. It reads the limit from the settings each time. If you raise the limit, waiting spawns start within 2 seconds, with no restart. If you lower the limit, nothing is cancelled. Executions that already run finish, and new ones wait until the count is under the new limit.\n\n- **Holds a slot:** each agent execution of a session, on every executor. The limit is for each workspace, so two sessions of one workspace share it.\n- **Gives its slot back when it waits:** an execution that waits for a message from another subagent (Rule H2). It takes a slot again before it receives the message. Without this rule, a limit of 1 blocks: the waiting execution holds the only slot, and the execution that it waits for cannot start.\n- **Holds no slot:** judge calls. They are short and do not go through `perform_spawn`.\n\n## Execution statuses\n\n| `ExecutionStatus` | Meaning | What the fold does |\n| --- | --- | --- |\n| `Running` | The execution runs. | Nothing. |\n| `Ok` | The agent submitted a result. | The stage uses the submit. |\n| `Stuck` | The agent submitted `status: stuck`. | A work loop goes to rescue. |\n| `Handoff` | The agent asked for a specialist. | A work loop goes to handoff. |\n| `Waiting` | The execution waits for a message from a subagent. | It resumes in place when the message comes. |\n| `Error` | The execution failed. | One automatic retry, then an `ExecutionFailed` gate. A `harness-` error opens a `HarnessFailure` gate at once. |\n| `Denied` | The runner could not start it. | The stage treats it as a failure. |\n| `Interrupted` | A pause, a context change, a project creation, or a restart stopped it. | It runs again from its progress. |\n| `Cancelled` | A stop or a user cancel ended it. | A user cancel opens an `ExecutionFailed` gate titled `You stopped <agent>`. YOLO leaves that gate open. |\n\nThe three interrupt reasons (`Interrupt`) are `Pause`, `Context`, and `ProjectCreated`.\n\n## Timeouts\n\nEach agent has `timeout_seconds` in its `agent.toml`. The native executor ends an execution with the error `timed out after N s`. The harness executor uses the larger of the value and 30 seconds. Time that a harness execution spends in a wait for a message does not count.\n\n## Containment pause\n\nThe runner records each containment signal as an event, at most `PAUSE_AFTER` (3) for one execution. The third signal pauses the session (Rule P3). A signal is a refusal by the guards `secret-read`, `self-protection`, or `git-metadata`, a refused connection to a local address, or a read of a decoy credential file. See the page Sandbox, egress proxy, and decoys.\n\n## Session budget\n\nThe setting `limits.session_budget_usd` has the default 25.0. The value 0 means no limit. The spent amount is the sum of `cost_usd` of finished executions. When the spent amount reaches the limit plus `budget_raised`, `Planner::push` drops every new spawn and opens one `budget_reached` gate. Executions in progress finish. If the user raises the budget, new spawns start again.\n\n## Side effects of a spawn\n\n- The planner never starts a second spawn for a purpose that is in flight, because `Step::key` dedupes it.\n- The runner removes the tool cache of a session when it ends (`remove_session_cache`).\n- The runner writes `ostra-session-context.md` before a revision or an implementation review reads it.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-engine/src/runner.rs",
+              "symbol": "Inner::perform_spawn",
+              "lines": "2221-2628",
+              "note": "The full spawn sequence."
+            },
+            {
+              "path": "crates/ostra-engine/src/runner.rs",
+              "symbol": "Inner::acquire_slot",
+              "lines": null,
+              "note": "The slot wait loop."
+            },
+            {
+              "path": "crates/ostra-core/src/exec.rs",
+              "symbol": "ExecutionSpec",
+              "lines": null,
+              "note": "The contract between the engine and executors."
+            },
+            {
+              "path": "crates/ostra-core/src/config.rs",
+              "symbol": "Limits",
+              "lines": null,
+              "note": "The limit settings and their defaults."
+            },
+            {
+              "path": "crates/ostra-core/src/containment.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Containment signals and PAUSE_AFTER."
+            }
+          ]
+        },
+        {
+          "id": "subagent-coordination",
+          "title": "Subagent coordination",
+          "summary": "Explains how agents ask each other questions, how a waiting execution wakes, and the limits on helpers and messages.",
+          "body": "A reviewer or a spec writer often needs a fact from the agent that wrote the earlier artifact. A cold read of a report loses context. Subagent coordination lets one agent ask another and continue with the answer. This page covers the tools, the routes, and the limits.\n\n## Subagents and IDs\n\nA subagent is one conversation. Its subagent ID is the id of the first execution of that conversation. A later execution that continues the conversation has the same subagent ID.\n\nAgents with the `coordinate` capability get three tools:\n\n| Tool | Purpose |\n| --- | --- |\n| `SubagentList` | Lists the subagents of the session with agent, status, and report. |\n| `SubagentAsk` | Sends a question. The target is a new helper (`agent`) or an existing subagent (`subagent_id`). Give exactly one. |\n| `SubagentReply` | Answers a question that woke this execution. |\n\nThe agents with this capability are `explore`, `generate-spec`, `fact-check`, `plan`, `implementer`, `code-reviewer`, and `write-test`. On a harness the tools come from the `ostra` MCP server.\n\n## Routes of a question\n\n`SessionState::route` picks the route for a question to a subagent:\n\n| `Route` | When | What happens |\n| --- | --- | --- |\n| `WakeInPlace` | The subagent waits on the asker. | The engine wakes it with the question. |\n| `Consult` | The subagent ended its execution. | The planner starts a consult execution (`ExecPurpose::Consult`) that continues the subagent conversation. |\n| `Pending` | The subagent is busy. | The question waits. |\n| `Failed` | The target is invalid. | The asker gets the failure as its answer. |\n\nA question to `explore` starts a helper research task with the origin `Ask`. The only helper agent is `explore` (`HELPER_AGENTS`). A helper failure is the answer to the asker, not a gate (Rule H3).\n\nA consult execution answers from its conversation. It writes no file (`answer_only`) and must call `SubagentReply` before it ends (`owes_reply`). The guards enforce both rules.\n\n## How a waiting execution wakes\n\n1. The asker calls `SubagentAsk`. The engine appends `AgentAsked`.\n2. The tool result tells the asker to end its turn. The execution status becomes `Waiting`.\n3. The waiting execution gives its slot back.\n4. When the answer exists, the planner returns `Step::Deliver` for a harness execution, or a spawn that resumes the execution for a native one.\n5. The engine appends `MessageDelivered`, and the executor feeds the answer as the next message.\n\nA harness process stays alive during the wait, and the wait does not count against its timeout. A native execution stops, and its stored transcript rebuilds the conversation.\n\n## Limits\n\n| Constant | Value | Meaning |\n| --- | --- | --- |\n| `MAX_HELPERS_PER_RUN` | 3 | Helpers that one execution can start (Rule H4). |\n| `MAX_SESSION_ASKS` | 24 | Questions that one session can ask (Rule H4). |\n| `MAX_CONVERSATION_RUNS` | 6 | Executions of one conversation before a pair loop starts fresh (Rule H6). |\n| `MAX_MESSAGE_CHARS` | 8000 | Length of one question or answer. |\n\nPut longer material in a file and name its path in the message.\n\n## Continued conversations\n\nA pair loop continues the conversation of the earlier execution (Rules H5 and H6). Examples are fact-check findings that go back to the spec writer, and review findings that go back to the implementer. The continued execution gets a new spawn block with `continuation_note`. One conversation has one live execution (Rule H7). Completion waits when any subagent question is open (Rule H9).\n\nThe `coordination.md` guide in `assets/` tells each agent when to ask: only when the answer saves real work, with a question that stands alone.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-engine/src/coord.rs",
+              "symbol": "Route",
+              "lines": null,
+              "note": "Routes, delivery, and the continuation notes."
+            },
+            {
+              "path": "crates/ostra-core/src/coord.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Tool names, limits, and input parsing."
+            },
+            {
+              "path": "crates/ostra-server/src/coord.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The server side of the coordination tools."
+            },
+            {
+              "path": "assets/coordination.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The guide that agents read."
+            }
+          ]
+        },
+        {
+          "id": "agents-and-prompts",
+          "title": "Agents, prompts, and spawn blocks",
+          "summary": "Catalogs the 14 agents, explains the assets folder, prompt rendering for each executor, the spawn block, the repo brief, and the submit contract.",
+          "body": "Each stage needs an agent with the right role, tools, and model tier. The agents live in `assets/agents/<name>/`. `AgentName` lists them, and the names are the folder names. This page covers the agent catalog and how the engine turns an agent into a first message.\n\n## Agent catalog\n\n| Agent | Role | Default tier | Timeout (s) | Writes project source |\n| --- | --- | --- | --- | --- |\n| `explore` | Researches one task and writes one research document. The only agent that searches the web for the pipeline. | advanced | 1800 | No |\n| `generate-spec` | Reads all research and writes one spec in EARS notation. | advanced | 1800 | No |\n| `fact-check` | Checks a spec or plan and returns a verdict with findings. | advanced | 1800 | No |\n| `plan` | Turns an approved spec into a master plan and phase files. | advanced | 1800 | No |\n| `implementer` | Writes the code of one phase. Never writes tests. | balanced | 2400 | Yes |\n| `code-reviewer` | Reviews working-tree changes and runs a security scan. | balanced | 1200 | No |\n| `execution-path-analyzer` | Plans test checks from the paths through changed code. | balanced | 1200 | No |\n| `write-test` | Writes only test code and runs the suites. | balanced | 2400 | Yes (tests) |\n| `documentation` | Writes one project part of a book. | advanced | 2400 | No |\n| `system-architecture` | Writes the architecture of a book of two or more projects. | advanced | 1800 | No |\n| `prompt-generation` | Writes prompts, skills, and agent files. | advanced | 1800 | Yes |\n| `initializer` | Bootstraps a project: detect, scout, propose, generate skills, generate inventory, adopt. | balanced | 2400 | Yes (`.ostra`, skills) |\n| `quick-answer` | Answers one question in the side panel. Read-only. | balanced | 300 | No |\n| `advisor` | Reads a failed step and tells the engine how to continue. | advanced | 900 | No |\n\n`AgentName::is_session_only` lists the agents that write only in their session dir and the OS temp dir: `explore`, `generate-spec`, `fact-check`, `plan`, `code-reviewer`, `execution-path-analyzer`, `advisor`, `documentation`, and `system-architecture`. Seeded workspace routes override the default tiers. See the page Settings, routing, and project profiles.\n\nEvery agent uses the effort `high`, with these exceptions: `quick-answer` uses `medium`, and `initializer` uses `xhigh` on Codex and Grok and `max` on Antigravity.\n\n## The assets folder\n\n| Path | Content |\n| --- | --- |\n| `agents/<name>/agent.toml` | Description, `default_tier`, `timeout_seconds`, `capabilities`, and `effort` for each executor table. |\n| `agents/<name>/prompt.md` | The prompt, as a MiniJinja template. |\n| `judges/<name>.md` | Judge prompts. |\n| `refs/*.md` | Stack references (`java-spring`, `go`, `python`, `typescript-node`, `_generic`) and two guides. |\n| `skills/meta-author/SKILL.md` | The skill that ships with Ostra. |\n| `tool-mapping.toml` | The tool name of each capability on each executor. |\n| `output-rules.md`, `code-tools.md`, `coordination.md` | Preludes that the renderer adds to prompts. |\n\n`ostra-agents` embeds the folder at compile time. At server start, `materialize_assets` writes the references, the skills, and each agent prompt (rendered for the native executor) under `<data dir>/assets`. The `advisor` reads those files to learn what a failed step can do. A broken `agent.toml` panics at first use with `embedded agent definitions are invalid`.\n\n## Prompt rendering\n\n`render_prompt(agent, executor)` builds the system prompt in this order:\n\n1. For a harness executor, a tool vocabulary section from `tool-mapping.toml`.\n2. `output-rules.md`: write no text outside tool calls, and put the result in the submit call.\n3. The coordination guide, when the agent has `coordinate`.\n4. The code navigation guide, when the agent has `code`.\n5. The prompt of the agent.\n\nThe renderer treats a missing template variable as an error. `tool-mapping.toml` has one table for each executor: `native`, `claude`, `codex`, `grok`, and `agy`. Native names follow Claude Code, because the prompts are tuned to them.\n\n## Spawn block and repo brief\n\nThe planner makes a `SpawnRequest`. `AgentsFactory::build` turns it into typed `SpawnParams` and renders a `Label: value` block, the spawn block. It starts with `Workspace root`, `Repo root`, `Session dir`, and `Repo key`. Other lines name phase files, research documents, findings, report files, and user notes.\n\nThe first message has three parts after the spawn block:\n\n1. **Repo brief.** At most `MAX_BRIEF_CHARS` (3600) characters with the stack, the exact commands, test types, up to 16 skills, conventions, and up to 10 module rows. It leaves out facts that the inventory already states. It never includes routing settings.\n2. **Project instruction files.** `CLAUDE.md`, `AGENTS.md`, and `AGENT.md`, each cut to `MAX_PROJECT_DOC_CHARS` (12000).\n3. **Custom instructions.** `instructions.all`, then the entry of the agent in `instructions.agents`.\n\n## Submit contract\n\nEvery agent ends with a call to `submit_<agent>` (the snake-case name). The input follows the schema from `submit_schema`. The `status` is `ok`, `stuck`, or `handoff`. These rules apply:\n\n- A submit with an invalid shape returns an error to the agent, and the agent calls again.\n- A submit with status `ok` fails if the declared report file does not exist. `code-reviewer` is the exception.\n- A stuck submit needs a `diagnostic` and a `need`.\n- Typed documents (`Document` tool) and book submits go through extra checks (`check_submit`).\n\nSee the page Change recipes for the steps that add an agent.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-agents/src/lib.rs",
+              "symbol": "render_prompt",
+              "lines": null,
+              "note": "Asset loading, materialization, and prompt rendering."
+            },
+            {
+              "path": "crates/ostra-agents/src/spawn.rs",
+              "symbol": "SpawnParams",
+              "lines": null,
+              "note": "Typed spawn parameters and the block renderer."
+            },
+            {
+              "path": "crates/ostra-agents/src/brief.rs",
+              "symbol": "build_brief",
+              "lines": null,
+              "note": "The repo brief and its caps."
+            },
+            {
+              "path": "crates/ostra-engine/src/factory.rs",
+              "symbol": "AgentsFactory",
+              "lines": null,
+              "note": "Planner inputs to spawn params."
+            },
+            {
+              "path": "assets/tool-mapping.toml",
+              "symbol": null,
+              "lines": null,
+              "note": "Capability to tool name for each executor."
+            },
+            {
+              "path": "crates/ostra-core/src/agent.rs",
+              "symbol": "AgentName",
+              "lines": null,
+              "note": "Agent names, capabilities, and tool names."
+            }
+          ]
+        },
+        {
+          "id": "native-executor-and-providers",
+          "title": "Native executor and model providers",
+          "summary": "Describes the native agent loop, context compaction, the tool-call path, resume, and the provider layer with its retry policy.",
+          "body": "Some users have API keys and no harness subscription. The native executor runs one agent on an API key. It owns the model loop and sends every tool call through the policy before the tool runs. `NativeExecutor` in `ostra-exec-native` implements `Executor`.\n\n## The loop\n\n`NativeExecutor::run` wraps `Run::execute` in a timeout. It stops on the cancel token or after `timeout_secs`. After a stop it gives the loop 3 seconds to clean up (`CLEANUP_GRACE`). A timeout gives the status `Error` and the text `timed out after N s`.\n\n`execute` does these steps:\n\n1. Split `route.model` into provider and model. A missing key returns the error that tells the user to set the key in the environment or the OS keychain.\n2. Open the MCP tools for the workspace.\n3. Build the policy (`ExecutionPolicy`) from the `ExecContext` and the build and test commands of the project.\n4. Build `ToolEnv` and wrap `Bash` in the sandbox when the sandbox mode allows it.\n5. Build the tool list: tools for the capabilities, the `Document` tool, MCP tools, and the `submit_<agent>` tool with its schema.\n6. Send the first message, or rebuild the conversation from the stored transcript on a resume.\n7. Loop until the agent submits, up to `MAX_TURNS` (400) model turns. After that the execution fails with an error that names the missing submit call.\n\n## One tool call\n\n1. `ToolEnv::canonical_call` makes paths absolute. The policy, the user, and the tool then see the same target.\n2. `ExecutionPolicy::check` returns `Allow`, `Ask`, or `Deny`.\n3. `Deny` returns the layer, the rule, and the reason to the model. `Ask` calls `ExecutionHost::ask_permission` and waits.\n4. The tool runs. Read-only tools in one turn run at the same time: `Read`, `Grep`, `Glob`, `WebFetch`, `MemoryRecall`, `DocsSearch`, `Skill`, and the code tools.\n5. The result goes back to the model. The executor shows at most `EMIT_LIMIT` (8 KiB) of an output in the Activity feed.\n6. The policy observes the outcome. This feeds the build streak and the lesson gate.\n\n## Context compaction\n\nWhen the next request reaches `COMPACT_AT` (0.95) of the context window, the loop asks the model for a summary. The summary replaces all earlier messages. The window comes from the pricing table. It defaults to `DEFAULT_CONTEXT_WINDOW` (200,000 tokens). After a failed compaction, the loop waits until the context grows by `COMPACT_RETRY_GROWTH` (2 percent of the window). Compaction needs a user turn last, so no tool call is open.\n\nThe output limit is the model maximum, or `DEFAULT_MAX_OUTPUT` (32,000 tokens). A cut-off response continues up to `MAX_TOKEN_CONTINUES` (3) times.\n\n## Resume\n\nThe host stores each message. A resume rebuilds the message list and gives each open tool call the result `Interrupted: this call did not finish.` The next user turn is the resume note, or `The previous run was interrupted. Continue from where it stopped.` A `compaction` record replaces all messages before it.\n\n## Sandbox choice\n\n`sandbox_for` calls `ostra_sandbox::decide`. If the mode needs a sandbox and none exists, the execution fails. In `auto` mode with no backend, `Bash` runs without a sandbox and the executor emits a status line. The server log warns once.\n\n## Providers\n\n`ostra-providers` gives one neutral chat interface. The types are `ChatRequest`, `Message`, `Block`, and `StreamEvent`. Two providers exist: Anthropic (Messages API) and OpenAI (Responses API). `ScriptedProvider` replays scripted answers for tests.\n\n`Providers::for_model` takes `provider:model`. It returns `BadModel` for a malformed string. It returns `NoKey` when `anthropic` or `openai` has no key, and `UnknownProvider` for other names.\n\nThe retry policy has these values: `max_retries` 4, `base_delay` 1 second, `max_delay` 60 seconds, with jitter. A `Retry-After` header raises the delay. The policy never retries after output started.\n\nA structured call (the judge path) forces a tool named `decide`. It makes at most 2 attempts, because some models reject a forced call. It sets `max_tokens` to 16,000.\n\n## Credentials and prices\n\n- The default provider variables are `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_BASE_URL`.\n- A user can save keys in the console. They go into `registry.db`, sealed, and never into `config.toml`.\n- Prices come from the models.dev catalog. The server caches it in the data dir and refreshes it once a day, so a restart without network still prices every execution. The `test-prices` feature of `ostra-core` gives fixed prices to tests.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-exec-native/src/lib.rs",
+              "symbol": "Run::execute",
+              "lines": null,
+              "note": "The agent loop and its constants."
+            },
+            {
+              "path": "crates/ostra-providers/src/lib.rs",
+              "symbol": "Providers",
+              "lines": null,
+              "note": "Provider lookup, neutral types, and structured calls."
+            },
+            {
+              "path": "crates/ostra-providers/src/retry.rs",
+              "symbol": "RetryPolicy",
+              "lines": null,
+              "note": "Backoff values."
+            },
+            {
+              "path": "crates/ostra-server/src/prices.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The models.dev price cache."
+            }
+          ]
+        },
+        {
+          "id": "harness-executors",
+          "title": "Harness executors and the hook bridge",
+          "summary": "Explains how Ostra runs an agent inside Claude Code, Codex, Grok Build, or Antigravity, how it checks every tool call, and how it detects the end of an execution.",
+          "body": "Some users prefer the CLI that they already pay for. A harness executor runs one agent inside that CLI under a PTY. Ostra cannot see the model loop, so it checks each tool call through hooks and reads the result through an MCP server. The crate is `ostra-exec-harness`.\n\n## Harness kinds\n\n| `HarnessKind` | CLI | Config table |\n| --- | --- | --- |\n| `Claude` | Claude Code (`claude`) | `[harness.claude]` |\n| `Codex` | Codex (`codex`) | `[harness.codex]` |\n| `Grok` | Grok Build (`grok`) | `[harness.grok]` |\n| `Agy` | Antigravity (`agy`) | `[harness.agy]` |\n\nThe `command` and `args` of each table come from the global `config.toml`. The route `harness:<name>` selects a harness for an agent.\n\n## Start of an execution\n\n`HarnessExecutor::launch` does these steps:\n\n1. Check that the command exists. If not, the error starts with `harness-launch:`.\n2. Write the per-execution config dir `<session>/.state/harness/<execution>`. It holds the hook config and the MCP registration.\n3. Set the environment `OSTRA_URL`, `OSTRA_EXECUTION`, `OSTRA_TOKEN`, and `OSTRA_HARNESS`. The token is per execution.\n4. Wrap the CLI in the sandbox, with the credential variables removed.\n5. Start the CLI under a PTY and log the raw bytes to `terminal.log` (up to `TRANSCRIPT_CAP`).\n\nThe harness calls two subcommands of the same binary. `ostra hook` forwards each hook event. `ostra mcp-stdio` is an MCP server that registers under the name `ostra`.\n\n## Checking a tool call\n\n```mermaid\nsequenceDiagram\n    participant CLI as Harness CLI\n    participant Hook as ostra hook\n    participant Srv as ostra-server\n    participant Bridge as HarnessBridge\n    participant Pol as ExecutionPolicy\n    CLI->>Hook: PreToolUse payload\n    Hook->>Srv: POST /internal/policy\n    Srv->>Bridge: handle request\n    Bridge->>Pol: check ToolCall\n    Pol-->>Bridge: Allow or Ask or Deny\n    Bridge-->>Srv: PolicyResponse\n    Srv-->>Hook: stdout and exit code\n    Hook-->>CLI: decision in the harness format\n```\n\nEach harness has an adapter in `adapters/` that turns its hook payload into a canonical `ToolCall` (Claude Code names and input shapes). The adapter also formats the decision in the shape that the harness accepts. On `Ask`, the bridge calls `ExecutionHost::ask_permission`. The bridge refuses two kinds of call without the policy:\n\n- A subagent spawn. Every Ostra agent is a leaf, so a delegated task runs outside the guards (`LEAF_REFUSAL`).\n- A question to the user. Ostra asks through a gate, because nobody watches the terminal (`ASK_REFUSAL`).\n\nHook events are `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `SessionStart`, `PreInvocation`, and `PostInvocation`.\n\nThe MCP shim sends JSON-RPC to `POST /internal/mcp`. It serves the Ostra tools: `Report`, `Document`, `Memory`, `MemoryRecall`, `DocsSearch`, the code tools, the project tools, the coordination tools, and `submit_<agent>`. The shim speaks the MCP versions `2024-11-05`, `2025-03-26`, `2025-06-18`, and `2025-11-25`. It leaves out `2026-07-28`, because Claude Code rejects its `tools/list` result.\n\n## End of an execution\n\nThe submit call through the MCP shim completes the execution. Rules for the end:\n\n- The harness `Stop` event confirms the end. If the CLI stops without a submit, the bridge turns it back.\n- After the submit, the executor waits at most `AFTER_SUBMIT_GRACE` (20 seconds) for the turn to end.\n- Antigravity has no `Stop` event. A submit followed by `AGY_QUIET_AFTER_SUBMIT` (4 seconds) of terminal quiet ends its turn.\n- A session with no hook event and no output for `DEFAULT_IDLE_NUDGE` (240 seconds) gets a typed nudge, at most `MAX_IDLE_NUDGES` (2) times.\n\n## Failures\n\n| Case | Result |\n| --- | --- |\n| The CLI is not installed. | Error `harness-launch: ...`. |\n| The screen shows a sign-in text from `AUTH_MARKERS`, for example `not logged in`. | Error `harness-auth: ...`. |\n| The CLI dies within `LAUNCH_WINDOW` (20 seconds). | A launch failure, not an execution failure. |\n| The screen shows a fatal text from `FATAL_MARKERS`, for example `unknown model`. | The execution ends with `End::Fatal`. |\n\nA `harness-` error opens a `HarnessFailure` gate. The user answers `retry` after login, or `native` to run on the native executor.\n\n## Trust prompts and model offers\n\nThe executor answers a folder-trust prompt by harness:\n\n- **Claude Code:** yes. Ostra loads only user settings and only its own MCP config, so trust adds nothing from the repository.\n- **Codex:** `Open restricted` only. `Trust and continue` loads the `.codex/` config and hooks of the repository, so the executor refuses it.\n- **Grok Build:** never. The user must trust the folder in Grok.\n\nA new-model offer at startup keeps the routed model, because accepting the offer changes the user default.\n\n## Other duties\n\n- During an execution, the executor checks the repositories every `GIT_CHECK_EVERY` (2 seconds) for a planted `commondir`. It undoes the change and reports a `git-metadata` denial.\n- The user can type into the terminal and resize it over the WebSocket. The server writes to the PTY.\n- An ended execution keeps its terminal transcript. The console replays it read-only.\n- `ExecutorKind::stream` tells the console to show an Activity feed for native executions and a terminal for harness executions.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-exec-harness/src/executor.rs",
+              "symbol": "HarnessExecutor",
+              "lines": null,
+              "note": "Launch, supervision, trust prompts, and the end of an execution."
+            },
+            {
+              "path": "crates/ostra-exec-harness/src/bridge.rs",
+              "symbol": "HarnessBridge",
+              "lines": null,
+              "note": "The server side of hooks and the MCP shim."
+            },
+            {
+              "path": "crates/ostra-exec-harness/src/protocol.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Wire types, environment names, and endpoint paths."
+            },
+            {
+              "path": "crates/ostra-exec-harness/src/adapters/mod.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Per-harness hook adapters."
+            },
+            {
+              "path": "crates/ostra-exec-harness/src/outcome.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Mapping of the end of an execution to a result."
+            }
+          ]
+        },
+        {
+          "id": "policy-engine",
+          "title": "Policy engine: guards and permissions",
+          "summary": "Describes the two layers that check every tool call, the guard catalog, permission modes and rule syntax, and the build-streak and lesson gates.",
+          "body": "A model can call a tool with a harmful target, and a shell command can hide the target. The policy engine checks every tool call from every executor before the call runs. `ExecutionPolicy::check` in `ostra-policy` returns `Allow`, `Ask`, or `Deny`.\n\n## Two layers\n\n1. **Layer 1: guards.** Nothing overrides a guard. A guard denial stands in every permission mode, and under YOLO.\n2. **Layer 2: permissions.** The permission mode and the allow, ask, and deny rules decide.\n\nUnder YOLO, layer 2 turns each `Ask` into an `Allow` with the rule `yolo`. The mode `bypass` also reports as `yolo`. Denials stand.\n\nA denial text starts with the correction and names the rule second. Some harnesses cut a reason to 256 characters, so the correction must come first.\n\n## Guard catalog\n\n| Guard | Refuses |\n| --- | --- |\n| `secret-read` | A read of the data dir, the master key file, or a credential store under the home folder. |\n| `self-protection` | A write to the `ostra` binary, its config, or its databases. |\n| `git-metadata` | A direct write under `.git`. Git commands are the only way. |\n| `state-ownership` | A write to engine state: `.state`, the databases, the lesson store, or a review ledger that the agent does not own. |\n| `artifact-ownership` | A write to `ostra-spec-*`, `ostra-plan-*`, or `ostra-research-*` files by an agent that does not own them. |\n| `document-tool` | A direct write to a file that the `Document` tool renders. |\n| `no-tests-from-implementer` | A test file written by `implementer`. |\n| `write-scope` | A write outside the repo root and the session dir. Session-only agents can write only in their session dir. |\n| `report-path` | A report at any path but the declared `Report file`. |\n| `workspace-artifacts` | A write to workspace artifacts. Agents read them, and only the user changes them. |\n| `workspace-docs` | A write under the books folder. |\n| `manage-tools` | A `ProjectCreate` call from any agent but the implementer of a phase that creates a project, or a malformed call. |\n| `lesson-gate` | A submit or report before the agent records a lesson for a recovery. |\n| `build-streak` | A build or test command after 5 failures in a row. |\n\nTwo more refusals apply to consult executions: a write by an execution that only answers, and a submit by an execution that owes a reply.\n\nThe setting `tool_enforcement` (default `disabled`) controls the guards `write-scope`, `report-path`, `self-protection`, and the shell and interpreter checks behind them. When it is `disabled`, an agent can reach files by any route. The secret-read, git-metadata, state-ownership, artifact-ownership, and no-tests guards, the permission rules, and the sandbox still apply (Rule G1).\n\nThe ownership tables:\n\n| File pattern | Owners |\n| --- | --- |\n| `ostra-review-ledger*.md` | `code-reviewer`, `implementer`, `write-test` |\n| `ostra-security-block.json` | `code-reviewer` |\n| `ostra-implementer-progress*.md` | `implementer` |\n| `ostra-spec-*` | `generate-spec` |\n| `ostra-plan-*` | `plan` |\n| `ostra-research-*` | `explore` |\n\n## Shell commands\n\n`bash::parse` splits a command into simple commands with tree-sitter-bash. Guards check the targets that each command writes. A command with a write target that Ostra cannot resolve is not safe to allow silently. PowerShell and `cmd` are opaque, so the guards scan the raw text for protected paths, and the permission layer never allows them on its own.\n\n## Permission modes\n\n| `PermissionMode` | Behavior |\n| --- | --- |\n| `default` | Ask for edits and for commands that no rule allows. |\n| `acceptEdits` | Allow edits inside the project and simple file commands (`mkdir`, `touch`, `cp`, `mv`) in scope. |\n| `plan` | Read-only. Deny everything that is not a read. |\n| `bypass` | No asks. |\n\nThe workspace permission mode lives in the registry. A folder file never sets it.\n\n### Rules\n\nRules use the syntax of Claude Code: `Tool` or `Tool(spec)`.\n\n- `Bash(npm run test *)`: a glob over one simple command.\n- `Edit(src/**)`, `Write(...)`, `Read(~/.ssh/**)`: gitignore-style paths. `//x` is absolute. `~/x` is under home. `x/y` is relative to the repo root. `Edit` rules cover every file-writing tool, and `Read` rules cover `Grep` and `Glob`.\n- `WebFetch(domain:docs.rs)`: the host or any subdomain.\n\nDeny beats ask, and ask beats allow. Rules merge in the order global, workspace, session. The global default has one deny rule: `Bash(rm -rf /*)`. `validate_rule` checks a rule when the user saves settings.\n\n### What mode and rules decide\n\n- Reads: allowed unless a rule asks or denies.\n- Edits: always allowed in the session dir and in temp. In `acceptEdits`, allowed in the repo. Paths that run code later (hooks, for example) ask.\n- Bash: the policy allows a read-only command that writes only in the session dir or temp. A command that Ostra cannot split, or a script with assignments, `export`, or loops, asks (`unparsed`, `unmodelled`). In `plan` mode it is denied.\n- `WebFetch`: asks unless a rule allows it.\n- MCP tools of workspace servers: allowed unless a rule says otherwise. In `plan` mode only tools that the server marks read-only are allowed.\n- `ProjectCreate`: asks in every mode, whatever the allow rules say. YOLO answers it. A deny rule still refuses it (Rule O1).\n\nThe answer `AlwaysInWorkspace` adds a suggested rule to `permissions.allow`.\n\n## Build streak and lessons\n\nThe policy watches build and test outcomes for each execution. `build::is_build_command` matches the commands in `project.toml`. When none exist, it uses a fallback list of common build tools.\n\n| Constant | Value | Effect |\n| --- | --- | --- |\n| `RECALL_THRESHOLD` | 2 | After 1 failure, recall known lessons so a known fix arrives at attempt 2. |\n| `WARN_THRESHOLD` | 3 | Warn the agent. |\n| `DENY_THRESHOLD` | 5 | Deny further build and test commands. The agent must submit `status: stuck`. |\n\nAfter the agent recovers from a streak, the `lesson-gate` guard blocks its report and its `ok` submit until it records a lesson with the `Memory` tool. If the fix teaches nothing reusable, the agent calls `Report` with a `reason`.\n\n## Containment\n\nThree guards also count as containment signals: `secret-read`, `self-protection`, and `git-metadata`. The third signal of one execution pauses the session. Other guards refuse ordinary mistakes and are not signals.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-policy/src/policy.rs",
+              "symbol": "ExecutionPolicy::check",
+              "lines": null,
+              "note": "The two-layer check."
+            },
+            {
+              "path": "crates/ostra-policy/src/guards.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Every guard, the ownership tables, and shell target checks."
+            },
+            {
+              "path": "crates/ostra-policy/src/perms.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Rule syntax, matching, and validation."
+            },
+            {
+              "path": "crates/ostra-policy/src/build.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Build signal extraction and the streak thresholds."
+            },
+            {
+              "path": "crates/ostra-policy/src/bash.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The shell parser."
+            }
+          ]
+        },
+        {
+          "id": "sandbox",
+          "title": "Sandbox, egress proxy, and decoys",
+          "summary": "Describes the kernel boundary under agent commands: the profile, the backends, the sandbox modes, network choices, the egress proxy, and decoy credential files.",
+          "body": "The policy judges a tool call by the paths it names, and a shell can hide a path. The sandbox is the boundary that the kernel enforces under every agent command. The host is read-only. Only the roots of the execution are writable. Ostra data and user credentials are not reachable. The network leads out only through the egress proxy.\n\n## Three layers\n\nThe crate keeps each OS difference in one place:\n\n- `Profile` describes the boundary without naming a backend: mounts, environment, egress policy, and decoys.\n- A `Backend` renders a profile into a command. `bwrap.rs` (Linux, bubblewrap) and `seatbelt.rs` (macOS, `sandbox-exec`) are plain code that compiles on every OS, so tests check the rendering anywhere.\n- `sys` is the only code that calls the kernel. One implementation of the `Os` trait exists for each OS.\n\nOn Linux, the sandbox has its own mount, pid, IPC, and network namespaces. The helper `ostra sandbox-init` starts first inside it, binds the loopback ports that lead to Ostra sockets, and loads a seccomp filter.\n\n## What the profile gives\n\n- The host file system is read-only. The repo root, the session dir, and a scratch dir are writable.\n- The scratch dir appears at `/tmp` on Linux.\n- The home folder is overlaid. Credential stores (`HOME_CREDENTIALS`) and the Ostra data dir are hidden.\n- Files that run code in later shells or builds stay read-only, even in a writable folder (`PERSISTENCE_IN_HOME`). Examples: `.bashrc`, `.zshrc`, `.gitconfig`, `.cargo/bin/`, `.local/bin/`, and `Library/LaunchAgents/`.\n- Container sockets are hidden. A process that reaches one can start a container that mounts the host.\n- Variables that point to a desktop session, an agent, or a daemon socket are removed (`UNSET_VARS`): `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `DOCKER_HOST`, `GPG_AGENT_INFO`.\n- Provider credential variables are removed from the environment of every agent process and MCP server.\n\n## Modes\n\nThe setting `[sandbox] mode` has three values. `decide` applies it:\n\n| Mode | Backend exists | Backend missing |\n| --- | --- | --- |\n| `required` | Sandboxed. | The execution is refused with an error. |\n| `auto` | Sandboxed. | Unsandboxed, with a warning in the status line and the log. |\n| `off` | Unsandboxed. | Unsandboxed. |\n\nThe default is `required` on Linux and macOS. It is `auto` on Windows, which has no backend yet. A workspace can set its own mode in the registry.\n\n## Network choices\n\n`SandboxNetwork` has four values. Every value but `host` gives each sandbox its own network namespace, so loopback, the LAN, and the host services are out of reach.\n\n| Value | What commands reach |\n| --- | --- |\n| `none` | Nothing. A harness CLI still reaches its own model API. |\n| `allowlist` (default) | The 26 hosts of `DEFAULT_ALLOWED_HOSTS` (package registries and source hosts), the model hosts of each harness, and `allowed_hosts`. |\n| `public` | Any public address. Loopback, private, and link-local addresses stay refused. |\n| `host` | The host network, unfiltered. |\n\nAn `allowed_hosts` entry is `host`, `*.domain`, an IPv4 address, or `[v6]`, with an optional `:port`. With no port, it allows 443 and 80. A workspace adds hosts to the global list and cannot remove one.\n\n## The egress proxy\n\nThe proxy is the only way out. On Linux, each execution has its own Unix socket, bound only into its sandbox. On macOS, each execution gets its own port on `127.0.0.1`, the only port its Seatbelt policy allows. The proxy sees the host and port of each connection and allows only what the policy allows. It connects to the address that it checked, and never makes a second lookup. This stops DNS rebinding.\n\n| Limit | Value |\n| --- | --- |\n| `MAX_HEAD` | 8 KiB for the request head |\n| `MAX_CONNECTIONS` | 256 |\n| `HEAD_TIMEOUT` | 30 seconds |\n| `CONNECT_TIMEOUT` | 10 seconds |\n\nOn macOS all sandboxes share the host loopback. `sandbox_loopback` is `open` (default) or `listed`. `blocked_ports` lists ports that are never reachable. On Linux these two settings change nothing.\n\n## Decoys\n\nA decoy is a credential path that an agent has no reason to read. A read of one is a containment signal. The built-in decoys are `.ssh/id_rsa`, `.ssh/id_ed25519`, `.git-credentials`, and `.vault-token` under the home folder. A workspace adds paths with `sandbox_decoys`. Each entry must start with `~/`, and the limit is `MAX_WORKSPACE_DECOYS` (32).\n\n- **Linux:** a fake file is bound read-only into the sandbox and watched with inotify from outside.\n- **macOS:** Seatbelt cannot bind a file in. A decoy is an existing file that the policy refuses to read. The engine reads the refusal from the system log, which only admin accounts can see. A missing file raises no report.\n\n## Containment signals\n\nThe engine counts three kinds of signal: a refusal by a protected guard, a refused connection to a loopback, private, or link-local address, and a read of a decoy. A refused public host is not a signal, because builds call telemetry hosts. It shows in the Activity feed only. The third signal of one execution pauses the session.\n\n## Start and end of the server\n\nAt start, when no other server runs, Ostra stops processes that earlier sandboxes left running (macOS), removes stale egress sockets, and removes stale decoys. When a session ends, the engine removes its tool cache (`remove_session_cache`). At start, the server also sweeps the caches of ended sessions.\n\nThe setup check `ostra_sandbox::status` reports the active backend and the known gaps of the backend under the chosen network.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-sandbox/src/lib.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The three-layer design in the crate docs."
+            },
+            {
+              "path": "crates/ostra-sandbox/src/profile.rs",
+              "symbol": "Profile",
+              "lines": null,
+              "note": "Mounts, persistence files, and environment rules."
+            },
+            {
+              "path": "crates/ostra-sandbox/src/backend.rs",
+              "symbol": "decide",
+              "lines": null,
+              "note": "Mode and backend decision."
+            },
+            {
+              "path": "crates/ostra-sandbox/src/egress.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The egress proxy, the host rules, and the default hosts."
+            },
+            {
+              "path": "crates/ostra-sandbox/src/decoy.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Decoy files and their reports."
+            },
+            {
+              "path": "crates/ostra-core/src/config.rs",
+              "symbol": "SandboxConfig",
+              "lines": null,
+              "note": "Sandbox settings and defaults."
+            }
+          ]
+        },
+        {
+          "id": "tools-mcp-code-navigation",
+          "title": "Native tools, MCP gateway, and code navigation",
+          "summary": "Catalogs the native tools with their limits, and explains the MCP gateway, the lesson memory, and the code index that agents query.",
+          "body": "Agents need tools with predictable shapes and limits. `ostra-tools` implements the native tools. Their names and inputs follow Claude Code, because the prompts are tuned to them. The tools check no permission. The policy runs before `execute`.\n\n## Tool catalog\n\n`Capability::native_tool` maps each capability to a tool name. Agents declare capabilities in `agent.toml`.\n\n| Tool | Capability | Limits and notes |\n| --- | --- | --- |\n| `Read` | `read` | 2000 lines by default, 2000 characters per line, 50 MiB per file. |\n| `Write`, `Edit` | `write`, `edit` | Exact string replacement for `Edit`. The result carries a diff for the Activity feed. |\n| `Bash` | `shell` | Default timeout 120,000 ms, maximum 600,000 ms. Output cut at 30,000 characters. The working directory persists. |\n| `Grep` | `search_text` | Ripgrep syntax. Output cut at 30,000 characters. Skips credential folders. |\n| `Glob` | `glob` | At most 100 results. |\n| `Skill` | `skill` | Loads a `SKILL.md` by name or path. |\n| `WebSearch` | `web_search` | A server tool of the provider on native executions. |\n| `WebFetch` | `web_fetch` | 5 MiB body, 100,000 characters of text, 10 redirects. Private addresses are blocked unless a rule names the host. |\n| `Report` | `report` | Writes the report to the declared `Report file`. |\n| `Document` | `document` | Writes the research document, the spec, or the plan as typed JSON. Ostra renders the Markdown. |\n| `Memory`, `MemoryRecall` | `memory`, `memory_recall` | Lessons of a project. Recall returns at most 50 lessons. The default is 8. |\n| `DocsSearch` | `docs_search` | Search over the documentation books. |\n| `CodeOutline`, `CodeFind`, `CodeCallers`, `CodeCallees`, `CodeImplementations`, `CodeNeighbors`, `CodeImpact`, `CodeMap` | `code` | Index queries. See below. |\n| `ProjectList`, `ProjectCreate` | `manage_projects` | List projects. Create a project. |\n| `SubagentList`, `SubagentAsk`, `SubagentReply` | `coordinate` | See the page Subagent coordination. |\n| `submit_<agent>` | always | Ends the execution with structured data. |\n\nOn Windows, the PowerShell and `cmd` tools exist beside `Bash`.\n\n## Project creation\n\n`ProjectCreate` makes a new empty project. The input has `key`, `stack`, `purpose`, and `requirements`, and optional `folder` and `git_init`. The purpose has at most `MAX_PURPOSE_CHARS` (800) characters. The call needs 1 to `MAX_REQUIREMENTS` (20) requirements of at most `MAX_REQUIREMENT_CHARS` (400) characters each. The folder is relative to the workspace root with no `..`. The user approves each call. See the page Workspaces, projects, init, and trust approvals.\n\n## Lesson memory\n\nEach project keeps lessons in `<project>/.ostra/memory/knowledge.sqlite3`. A lesson has an `area`, text, and a source. The pair (`area`, `lesson`) is unique. Recall ranks with FTS5 bm25. Lessons are never capped and never expire. Only the `Memory` tool writes the store. The guard `state-ownership` refuses direct writes, because later sessions recall lessons as fact.\n\n## MCP gateway\n\nWorkspace settings can list external MCP servers (`mcp_servers`). Ostra is the only MCP client. `McpGateway` in `ostra-server` keeps one connection for each server, signs in, finds tools, and serves them to native executions directly and to harnesses through the `ostra` MCP server. Therefore one policy and one allow list cover every executor.\n\n- **Transports:** stdio and streamable HTTP. OAuth sign-in works for remote servers.\n- **Names:** the tool `create_issue` of server `github` is `mcp__github__create_issue` for the policy and the permission rules. It is `github__create_issue` on the `ostra` MCP server. A bare name has at most `MAX_BARE_NAME` (52) characters. A longer or unclean name gets a hash suffix. A server name has at most `MAX_SERVER_NAME` (24) characters. The request timeout has a maximum of `MAX_TIMEOUT_SECS` (600).\n- **Limits:** a tool result is cut at `MAX_RESULT` (100 KiB).\n- **Redirects:** a redirect is followed only within the origin of the first request, so a secret header never reaches another host.\n- **Secrets:** the environment of a stdio server omits provider credentials.\n- **Approval:** the programs in `mcp_servers` start only after the user approves the content of `workspace.toml`. See the page Workspaces, projects, init, and trust approvals.\n\n## Code navigation\n\n`ostra-code` serves two users: the Files view of the console and the agents. It has a table-driven tokenizer for about 20 languages, an incremental index of names, definitions, and imports for each project, a dependency graph, and LSP clients. Files over `MAX_FILE_BYTES` (1 MiB) are not indexed.\n\nFor each request, the server picks a provider in this order:\n\n1. The `code_provider` program of the project. Ostra runs it once for each request with one JSON request on stdin.\n2. The language servers of the project (`language_servers`).\n3. The built-in index.\n\nEach external provider has `timeout_secs`. The default is 10 and the maximum is `MAX_PROVIDER_TIMEOUT` (120). After a timeout, Ostra answers with the built-in provider.\n\nThe index matches names, not types. It can return a definition that only shares the name. Agents confirm an answer with `Grep` before they change code. A file watcher (`code_watch.rs`) catches edits that Ostra tools did not make.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-tools/src/lib.rs",
+              "symbol": "ToolEnv",
+              "lines": null,
+              "note": "Per-execution tool state and canonical calls."
+            },
+            {
+              "path": "crates/ostra-tools/src/defs.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Tool names, descriptions, and input schemas."
+            },
+            {
+              "path": "crates/ostra-core/src/agent.rs",
+              "symbol": "Capability",
+              "lines": null,
+              "note": "Capabilities and native tool names."
+            },
+            {
+              "path": "crates/ostra-mcp/src/lib.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The MCP client."
+            },
+            {
+              "path": "crates/ostra-server/src/mcp.rs",
+              "symbol": "McpGateway",
+              "lines": null,
+              "note": "The gateway to external MCP servers."
+            },
+            {
+              "path": "crates/ostra-code/src/lib.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The code index crate."
+            },
+            {
+              "path": "crates/ostra-store/src/memory.rs",
+              "symbol": "MemoryStore",
+              "lines": null,
+              "note": "The lesson store."
+            }
+          ]
+        },
+        {
+          "id": "settings-and-routing",
+          "title": "Settings, routing, and project profiles",
+          "summary": "Explains the settings files and their scopes, the defaults, how the engine resolves the executor, model, and effort for an agent, and the project profile.",
+          "body": "Ostra has settings at three scopes. A reader must know which file holds a value and which value wins. This page lists the files, the defaults, and the route resolution.\n\n## Scopes and files\n\n| Scope | Location | Holds |\n| --- | --- | --- |\n| Global | `config.toml` at `OSTRA_CONFIG`, or `<config dir>/ostra/config.toml` | Providers, model tiers, harness commands, global permission rules, server, sandbox, `tool_enforcement`. |\n| Workspace | `<workspace>/.ostra/workspace.toml` | Name, projects, routing, instructions, limits, notifications, permission rules, sandbox choices, MCP servers. |\n| Registry | `registry.db` | The permission mode, the YOLO default, and the sandbox settings of each workspace (Rule A2). A folder file never sets them. |\n| Project | `<project>/.ostra/project.toml` and `INVENTORY.md` | The project profile and the inventory. |\n\nRun `ostra config` to print the path of the global file. It writes the default file if none exists. The server reads the global file on every call. A broken file keeps the last good copy, and the server logs a warning. Therefore an edit applies to the next execution with no restart.\n\n## Global config\n\n- `providers`: `anthropic` and `openai`, each with `api_key_env`, `auth_token_env`, `base_url_env`, and `base_url`.\n- `tiers`: one table for each executor (`native`, `claude`, `codex`, `grok`, `agy`) with four tiers: `fast`, `balanced`, `advanced`, `frontier`. A native model is `provider:model`. A harness model is the slug of the CLI.\n- `harness`: `command` and `args` for each harness.\n- `server`: `port`, `bind` (default `127.0.0.1`), `allowed_hosts`, and `use_ip_host`.\n- `sandbox`: see the page Sandbox, egress proxy, and decoys.\n- `tool_enforcement`: `disabled` (default) or `enabled`.\n\n## Workspace settings\n\nThe struct `WorkspaceSettings` has `#[serde(default)]`. A field that a file lacks takes its value from `WorkspaceSettings::seeded`.\n\n| Key | Default | Meaning |\n| --- | --- | --- |\n| `routing.executor`, `routing.model`, `routing.effort` | seeded | Executor, model, and effort for each agent, and for each phase complexity. |\n| `instructions.all`, `instructions.agents` | none | Custom instructions that agents receive. |\n| `yolo.default` | off | New sessions start in YOLO mode. |\n| `permissions.mode`, `.allow`, `.ask`, `.deny` | `default` | Permission mode and rules. |\n| `notifications.push` | on | Push notifications for gates and ended sessions. |\n| `limits.max_parallel_executions` | 3 | Executions that run at once. |\n| `limits.session_budget_usd` | 25.0 | Dollars before a session pauses. 0 means no limit. |\n| `sandbox_mode`, `sandbox_network`, `sandbox_allowed_hosts`, `sandbox_decoys`, `sandbox_loopback`, `sandbox_blocked_ports` | follow global | Workspace sandbox choices. |\n| `tool_enforcement` | follow global | Guard strictness. |\n| `mcp_servers` | none | External MCP servers. |\n\n`SETTING_KEYS` lists each dotted key with a description for the settings search. A test checks that every key names a field.\n\n## Route resolution\n\n`resolve_route` gives a `ResolvedRoute` with the executor, the model, and the tier:\n\n1. **Executor.** `routing.executor.byPhaseComplexity` wins over `byAgent`. A missing entry means `native`. The judge always runs natively. A harness failure answered with `native` forces the native executor (`executor_override`).\n2. **Tier or model.** `routing.model.byPhaseComplexity` wins over `byAgent`. A value is a tier name, `default` (the tier of the agent in `agent.toml`), or a model. The initializer step `generate-skill` forces the tier `advanced` (`tier_override`).\n3. **Table.** The tier looks up the model in `tiers.<executor table>`. A missing tier is an error that names the table.\n4. **Effort.** `routing.effort` wins over the effort in `agent.toml`.\n\nOnly `implementer` and `write-test` route by phase complexity. A phase with no file counts as `Low`.\n\nThe seeded routes for a new workspace are:\n\n| Agents | Tier |\n| --- | --- |\n| `explore`, `generate-spec`, `plan`, `fact-check`, `documentation`, `system-architecture`, `prompt-generation`, `judge`, `advisor` | `advanced` |\n| `code-reviewer`, `execution-path-analyzer`, `initializer`, `quick-answer` | `balanced` |\n| `implementer`, `write-test` | `fast` for `Low` and `Medium`, `balanced` for `High` |\n\nThe default native tiers are `claude-haiku-4-5-20251001`, `claude-sonnet-5-5`, `claude-opus-5-5`, and `claude-fable-5-1`, all with the prefix `anthropic:`.\n\nA workspace saved before a new agent shipped has no route for it. `keys_without_route` reports each such key as a validation issue, and the value `default` fixes it.\n\n## Validation\n\n`validate_workspace` and the checks in `crates/ostra-workspace/src/settings.rs` return `ValidationIssue` values with a path and a message. Creating a workspace writes nothing while any issue remains (`create.rs`). `ostra_sandbox::validate` checks the sandbox settings.\n\n## Project profile\n\n`.ostra/project.toml` (`ProjectProfile`) holds:\n\n- `stack`, `build_tool`, `test_framework`.\n- `commands`: `build`, `test`, `test_one`, `format`, `lint`, `typecheck`, `run`. `{MODULE}`, `{TEST}`, and `{PATH}` are placeholders.\n- `test_types`, `module_map`, `skills`, `conventions`, `review_rules`.\n\nThe engine and the policy read the profile on each execution, so a saved command applies to the next execution. A rule with `auto_fixable = true` makes its findings eligible for auto-fix.\n\n## Environment variables\n\n| Variable | Effect |\n| --- | --- |\n| `OSTRA_CONFIG` | Path of the global config file. |\n| `OSTRA_DATA_DIR` | The data dir. |\n| `OSTRA_LOG` | Log filter. The default is `info`. |\n| `OSTRA_MASTER_KEY_FILE` | A file that holds the master key, for example a Docker secret. |",
+          "code_refs": [
+            {
+              "path": "crates/ostra-core/src/config.rs",
+              "symbol": "resolve_route",
+              "lines": null,
+              "note": "Settings types, defaults, route resolution, and validation."
+            },
+            {
+              "path": "crates/ostra-workspace/src/settings.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Settings checks that the workspace adds."
+            },
+            {
+              "path": "crates/ostra-workspace/src/create.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Workspace creation in one validated call."
+            },
+            {
+              "path": "crates/ostra-core/src/paths.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Every derived path, including the config and data dirs."
+            }
+          ]
+        },
+        {
+          "id": "storage-and-files",
+          "title": "Storage and file layout",
+          "summary": "Maps every database, table, and folder that Ostra writes, with the rules for migrations, secrets, file modes, and session artifacts.",
+          "body": "Ostra keeps state in SQLite files and in folders of artifacts. A change that moves or renames a path breaks readers in other crates. `crates/ostra-core/src/paths.rs` derives every path, so all readers and writers agree. This page maps the storage.\n\n## Data dir\n\nThe data dir is `OSTRA_DATA_DIR`, or the local data dir of the user plus `ostra`. Owner-only mode applies (0700 on Unix), because it holds the registry with saved credentials.\n\n| Path | Content |\n| --- | --- |\n| `registry.db` | The machine registry. |\n| `server.log` | The server log. |\n| `assets/` | Materialized references, skills, and agent prompts. |\n| price cache | The models.dev catalog. |\n\n### Registry tables\n\n| Table | Content |\n| --- | --- |\n| `workspaces` | Workspace id, name, root path (unique), creation time. |\n| `push_subscriptions` | Web Push endpoint, keys, and optional workspace. |\n| `kv` | Key and blob. It holds sealed secrets (`vapid_private`, provider credentials), sign-in records (`auth:cookie:<sha256>`), and approvals (`trust:workspace:<path>`, `trust:format:<path>`). |\n\n## Workspace folder\n\nThe workspace folder holds `<workspace>/.ostra/`:\n\n| Path | Content |\n| --- | --- |\n| `workspace.toml` | Workspace settings. |\n| `workspace.db` | The event log and tables for the UI. |\n| `sessions/<session id>/` | The session root. |\n| `uploads/` | Uploads that wait for a session to claim them. |\n| `docs/<book id>/` | Documentation books. |\n\n### Workspace database tables\n\n| Table | Content |\n| --- | --- |\n| `meta` | Key and value. |\n| `projects` | Project key, path, `init_status`, stack. |\n| `sessions` | One row for each session: category, status, lane, stage label, projects, YOLO, cost, title. |\n| `events` | The log. Primary key `(session_id, seq)`. |\n| `executions` | One row for each execution: agent, purpose, executor, model, params, spawn block, status, usage, cost, submit. |\n| `messages` | Transcript of native executions, for a resume. |\n| `activity` | Streamed deltas of executions. |\n| `gates`, `decisions` | Materialized gates and judge decisions. |\n| `tool_calls` | Tool name, input, decision, rule, duration, and output. The output is cut at `TOOL_OUTPUT_LIMIT` (8 KiB). |\n| `search_docs`, `search_fts` | Full-text search over sessions and artifacts. |\n\nThe event log is the source of truth. The other tables are a view that the engine materializes for the UI.\n\n## Session root\n\n| Path in the session root | Content |\n| --- | --- |\n| `<project key>/` | Per-project reports. |\n| `.state/` | Engine-owned state. No agent can write here. |\n| `.state/harness/<execution>/` | Hook config, MCP registration, and `terminal.log`. |\n| `uploads/` | Files that the user uploaded. |\n| `ostra-*.md` and `ostra-*.json` | Artifacts with declared names. |\n\n`paths::report` defines the artifact names so later stages can predict them:\n\n| Name | Writer |\n| --- | --- |\n| `ostra-implementer-phase-<N>.md` | `implementer` |\n| `ostra-implementer-progress-phase-<N>.md` | `implementer` (re-runs read it) |\n| `ostra-epa-phase-<N>.md` | `execution-path-analyzer` |\n| `ostra-write-test-phase-<N>.md` | `write-test` |\n| `ostra-review-ledger-phase-<value>.md` | The reviewer and the work agent |\n| `ostra-security-block.json` | `code-reviewer` |\n| `ostra-prompt-gen-<n>.md` | `prompt-generation` |\n| `ostra-docs-request.md`, `ostra-test-request.md` | The engine, when no implementer ran. |\n| `ostra-docs-parts.json` | The engine, for `system-architecture`. |\n| `ostra-session-context.md` | The engine. |\n| `ostra-completion.md` | The engine, from the `Completion` judge. |\n\n## Project folder\n\n| Path | Content |\n| --- | --- |\n| `.ostra/project.toml`, `.ostra/INVENTORY.md` | Profile and inventory. |\n| `.ostra/memory/knowledge.sqlite3` | The lesson store. |\n| `.agents/skills/` | Skills. New skills go here. |\n| `.ostra/skills/` | Older skills. Ostra reads them and never writes new ones. |\n| `CLAUDE.md`, `AGENTS.md`, `AGENT.md` | Instruction files, matched in any letter case. |\n\n## Rules for databases\n\n- **Migrations.** `MIGRATIONS` in `workspace.rs` and `registry.rs` is a list of SQL strings. The database stores the count of applied entries in `user_version`. Add a new entry at the end. Do not edit an applied entry, because the engine runs only the entries after `user_version`.\n- **Open settings.** SQLite runs in WAL mode with a busy timeout of 5000 ms and foreign keys on.\n- **File modes.** Ostra sets 0700 on database folders and 0600 on the database and its `-wal` and `-shm` files, because the event log holds tool output and the registry holds credentials.\n- **Parallel executions.** `MemoryStore` opens a new connection for each call, so parallel executions wait on the file lock and share no handle.\n\n## Secrets\n\nThe registry seals each secret with AES-256-GCM under the master key. Each value has a fresh nonce, and the row key is associated data. A sealed value cannot move to another row. The master key lives in the OS keychain when one is reachable. Otherwise it lives in an owner-only file. If the key is missing, the registry returns `Locked`. If a value cannot be decrypted, the server logs a warning and the user enters the value again.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-core/src/paths.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Every path derivation and the artifact names."
+            },
+            {
+              "path": "crates/ostra-store/src/workspace.rs",
+              "symbol": "MIGRATIONS",
+              "lines": null,
+              "note": "The workspace schema and migration runner."
+            },
+            {
+              "path": "crates/ostra-store/src/registry.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The registry schema and secrets access."
+            },
+            {
+              "path": "crates/ostra-store/src/secrets.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Encryption of credentials."
+            },
+            {
+              "path": "crates/ostra-server/src/master_key.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Where the master key lives."
+            }
+          ]
+        },
+        {
+          "id": "workspaces-projects-init",
+          "title": "Workspaces, projects, init, and trust approvals",
+          "summary": "Explains workspaces and projects, the init flow that bootstraps a project, projects that agents create, and the approvals that stop folder files from starting programs.",
+          "body": "A workspace groups projects and holds the sessions that work on them. A project needs an inventory and a profile before agents can route work by them. A folder file can arrive with a repository and name programs to start. This page covers the workspace runtime, the init flow, created projects, and the approvals.\n\n## Workspace runtime\n\n`WorkspaceRt` is one open workspace. It holds the settings, the database, the `Engine`, and the project list. `App::attach` opens each registered workspace at server start and calls `Engine::recover`. A workspace whose `workspace.toml` is missing is skipped with a warning.\n\nDeleting a workspace (`unregister`) removes the registry row, the approvals, `workspace.toml`, and `workspace.db`. Project folders, session folders, and the files in each project `.ostra/` stay.\n\nA request that starts work holds the `work` lock shared. Removing a project or the workspace holds it exclusively, so no work starts between the busy check and the removal.\n\n## Init flow\n\nInit prepares a project: it finds the stack, scouts recurring patterns, proposes skills, and writes the inventory and the profile. An init session has the kind `SessionKind::Init`. The stages are:\n\n1. `Detect`: finds the stack, the slices to scout, and existing skills.\n2. `Scout`: one execution for each slice, in parallel, at most `MAX_SCOUTS` (6). It captures real exemplars.\n3. `Propose`: merges the findings into a skill proposal. A new recommended skill defaults to `generate`. Other new skills default to `drop`. An existing skill defaults to `reuse`. At most `MAX_DEFAULT_GENERATE` (8) skills default to `generate`.\n4. `SkillApproval` gate: the user picks `generate`, `regenerate`, `reuse`, or `drop` for each skill.\n5. `GenerateSkill`: one execution for each approved skill, on the tier `advanced`.\n6. `GenerateInventory`: writes `INVENTORY.md` and `project.toml`.\n\nRule I1: when detect finds no slices but finds skills, propose reconciles them and no scout runs. If detect finds neither, the init fails. When the init completes, the engine checks that the inventory and the profile parse. If one is broken, the session fails with `Init did not finish: ... Run init again.`\n\nThe `initializer` agent can also run in the mode `adopt` to migrate a bootstrap from Ultracode.\n\n## Created projects\n\nThe plan can name a project that does not exist yet. Only the `implementer` of such a phase can create it with `ProjectCreate` (Rule O2). The steps are:\n\n1. The phase runs from its session dir, so the sandbox can write nowhere else until the project exists.\n2. `ProjectCreate` asks the user in every mode (Rule O1). YOLO answers it.\n3. The engine appends `ProjectCreated` and interrupts the execution (`Interrupt::ProjectCreated`).\n4. The planner runs an init for the new project (Rule O4). It holds every other agent in that project until the init ends, because those agents route by the inventory and the profile.\n5. The phase starts again inside the new project.\n6. The completion report lists each created project and how its init ended (Rule O3).\n\nIf an init step leaves no usable result, the `advisor` agent looks at the failed step (Rule O5). It tells the engine to run the step again with guidance, or to ask the user. The engine allows `MAX_ADVICE` (2) advisor rounds for each failed step. A step that the user stopped goes to the user, not to the advisor (Rule P4).\n\n## Trust approvals for folder files\n\n`.ostra/workspace.toml` and `.ostra/project.toml` can arrive with a repository, a `git pull`, or an edit by an agent. The programs that they name must not start without consent (Rule A1). `trust.rs` hashes the content that starts programs or loosens a check:\n\n- the `mcp_servers` entries,\n- the projects that have a `code_provider` or `language_servers`,\n- the `permissions.allow` list,\n- project folders outside the workspace folder.\n\nThe SHA-256 hash is stored in the registry under `trust:workspace:<canonical path>`. The format command of a project has its own hash under `trust:format:<path>`. A program starts only when the hash of the file on disk equals the stored hash. A file with nothing of that kind needs no approval.\n\nSaves from the console keep the approval current, so edits in the UI never ask again. An edit outside Ostra changes the hash. The console then shows `Approve the changed commands in settings, because they changed outside Ostra.` The server starts programs from the approved copy of the file, because a second read could see a file that changed after the check.\n\nSecrets in `workspace.toml` are sealed into the registry when the workspace opens (`seal_file_secrets`).",
+          "code_refs": [
+            {
+              "path": "crates/ostra-workspace/src/runtime.rs",
+              "symbol": "WorkspaceRt",
+              "lines": null,
+              "note": "The open workspace."
+            },
+            {
+              "path": "crates/ostra-engine/src/init.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The init flow and the advisor requests."
+            },
+            {
+              "path": "crates/ostra-workspace/src/trust.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Hashes and approvals for folder files."
+            },
+            {
+              "path": "crates/ostra-core/src/manage.rs",
+              "symbol": "ProjectCreateInput",
+              "lines": null,
+              "note": "The input rules of ProjectCreate."
+            },
+            {
+              "path": "assets/agents/initializer/prompt.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The init modes."
+            }
+          ]
+        },
+        {
+          "id": "server-and-api",
+          "title": "Server startup, auth, API, and WebSocket",
+          "summary": "Describes how the server starts, how a browser signs in, the command line, the REST and WebSocket interface, and how engine notices reach the console.",
+          "body": "The server is the only process that a user starts. It must start every workspace, protect itself from foreign web pages, and stream live state to the console. The crate is `ostra-server`, and the binary is `ostra`.\n\n## Startup\n\n`app::run` and `app::build` do these steps:\n\n1. Choose the listen address: the flag `--bind`, else `server.bind`, else `127.0.0.1`.\n2. Bind the port: `--port`, else `server.port`, else the first free port from `DEFAULT_PORT` (7878) up to 20 ports, else any free port.\n3. If no other server runs, stop leftover sandbox processes, remove stale egress sockets, and remove stale decoys.\n4. Validate the global sandbox config. A bad `[sandbox]` stops the start.\n5. Report the sandbox status. If no sandbox exists, print a warning to stderr.\n6. Start the price cache and unlock the registry with the master key.\n7. Write the assets and build the providers, the code tools, the MCP gateway, the native executor, the push notifier, and the harness runtime.\n8. On Unix, serve the hook bridge on a Unix socket, so a sandbox with its own network can reach it.\n9. Attach each registered workspace, which also recovers its sessions.\n10. Print the sign-in URL and serve the router. `Ctrl-C` shuts the server down gracefully.\n\nWhen the server listens on a non-loopback address, it prints a warning that the traffic uses plain HTTP and that a sign-in link lets anyone run commands as the user.\n\n## Command line\n\n| Command | Purpose |\n| --- | --- |\n| `ostra` or `ostra serve` | Start the server. Flags: `--port`, `--no-open`, `--dev`, `--bind`, `--allow-host`. |\n| `ostra url` | Print a fresh sign-in URL for a running server. |\n| `ostra sessions` | List the signed-in browsers. |\n| `ostra sessions revoke <id>` or `--all` | Revoke one sign-in or all. |\n| `ostra signout` | Sign out every browser. |\n| `ostra stop <session>` | Stop a session when the server is off. |\n| `ostra config` | Print the config path and write the default config if none exists. |\n| `ostra hook`, `ostra mcp-stdio` | Harness callbacks. Harnesses call them, not users. |\n| `ostra sandbox-init` | Hidden. The helper that starts first inside a Linux sandbox. |\n\n## Browser auth\n\n1. The server prints a URL with a one-time token in the fragment. The token lives `TOKEN_TTL_SECS` (15 minutes).\n2. The browser posts the token to `/api/auth/exchange`. The server returns the cookie `ostra_session` (`HttpOnly`, `SameSite=Strict`).\n3. A sign-in lasts `COOKIE_TTL_SECS` (30 days).\n\nThe registry stores tokens and cookies hashed, so a restart keeps sign-ins and `ostra url` can mint a token for a running server. Host and Origin checks block DNS rebinding and foreign pages. An address that fails an exchange 5 times (`MAX_FAILURES`) in 60 seconds must wait. A loopback server answers at a private `ostra-....localhost` name by default, because a cookie for `127.0.0.1` reaches every local port. The setting `server.use_ip_host` turns this off for a browser that does not resolve `*.localhost`.\n\nA revoke from the server takes effect at once. A revoke from the CLI takes effect within `RECHECK` (5 seconds).\n\n## REST API\n\n`api::router` defines the routes. The main groups are:\n\n| Group | Examples |\n| --- | --- |\n| Server and auth | `/api/info`, `/api/auth/exchange`, `/api/auth/sessions`, `/api/auth/signout`, `/api/environment`, `/api/onboarding` |\n| Workspaces and projects | `/api/workspaces/{ws}/validate`, `/projects`, `/clone`, `/settings/fix`, `/approve`, `/skills`, `/tree`, `/search`, `/activity`, `/cost` |\n| Sessions | `/api/sessions/{id}`, `/events`, `/yolo`, `/amend`, `/pause`, `/resume`, `/stop`, `/diff` |\n| Gates and decisions | `/api/gates/{id}/answer`, `/api/decisions/{id}/override` |\n| Executions | `/api/executions/{id}`, `/activity`, `/cancel`, `/resume`, `/inspect` |\n| Artifacts and books | `/api/artifacts`, `/api/artifacts/download`, `/api/workspaces/{ws}/docs` |\n| MCP | `/api/workspaces/{ws}/mcp` and its `refresh`, `login`, and `logout` routes |\n| Push and files | `/api/push/subscribe`, `/api/fs`, `/api/fs/list`, `/api/fs/mkdir` |\n| Harness setup | `/api/harnesses/{harness}/setup` |\n| Quick answers | `/api/workspaces/{ws}/ask` |\n\nThe harness callbacks use `/internal/policy` and `/internal/mcp`. Each call carries the per-execution bearer token.\n\n## WebSocket\n\nOne socket serves one browser tab at `/ws`. The client sends `ClientMsg` values, for example `Subscribe {channel}` and `Unsubscribe {channel}`. The channels are `session:<id>`, `execution:<id>`, `workspace:<id>`, `home`, and `term:<id>`.\n\n| Limit | Value |\n| --- | --- |\n| Largest client message | 1 MiB |\n| Largest `term_input` | 64 KiB |\n| Channels for one connection | 256 |\n| Binary frames queued for one socket | 64 |\n\nA binary frame holds the byte length of the execution id, the id, and the PTY bytes. A slow socket lags and gets a fresh screen. A repeated subscribe to `term:<id>` restarts the stream and resends the screen. The socket checks its sign-in every 5 seconds, so an expired cookie or a revoke closes it.\n\n## From the engine to the console\n\nThe engine broadcasts `EngineNotice` values on a channel of 4096 messages. `App::attach` forwards each notice to the file and navigation observers and to the hub (8192 messages). `ws::route` maps each notice to channels and to a `ServerMsg`. If a receiver lags, the server logs it and asks the navigation tree to reload.\n\n## Push notifications\n\n`ServerServices::notify` sends a push message only when `notifications.push` is on. The payload has a title, a body, a link, and a tag. Messages with one tag replace each other. A subscription that answers 404 or 410 is removed. The encrypted body has at most `MAX_PLAINTEXT` (3993) bytes. Push needs HTTPS or localhost.\n\n## Other modules\n\n`repo.rs` runs the git commands of the Git dock. A command that changes the checkout waits for sessions that work in the project. `files/` serves trees, reads, diffs, and write tracking. `nav/` builds the sessions tree and the search. `skills.rs` manages the skills of each project. `commands.rs` edits the commands of `project.toml`. `harness_setup.rs` runs the installer or login of a harness in a PTY that the browser streams.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-server/src/app.rs",
+              "symbol": "build",
+              "lines": null,
+              "note": "Startup and shared state."
+            },
+            {
+              "path": "crates/ostra-server/src/main.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The command line."
+            },
+            {
+              "path": "crates/ostra-server/src/auth.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Sign-in, cookies, and host checks."
+            },
+            {
+              "path": "crates/ostra-server/src/api.rs",
+              "symbol": "router",
+              "lines": null,
+              "note": "Every route."
+            },
+            {
+              "path": "crates/ostra-server/src/ws.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The WebSocket handler and channel routing."
+            },
+            {
+              "path": "crates/ostra-server/src/services.rs",
+              "symbol": "ServerServices",
+              "lines": null,
+              "note": "The server side of the engine traits."
+            },
+            {
+              "path": "crates/ostra-notify/src/lib.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Web Push encryption."
+            }
+          ]
+        },
+        {
+          "id": "web-console",
+          "title": "Web console",
+          "summary": "Describes the React console: its layers, how it talks to the server, the generated types, the screens, and the invariants that tie it to the Rust code.",
+          "body": "The console is the only user interface. It must show live sessions, ask gates, and stay in step with Rust types. The code is in `web/` (React, TypeScript, Vite). The design system is in `design/` and loads as `@ostra/design`.\n\n## Layers\n\n| Folder | Role |\n| --- | --- |\n| `web/src/api/` | The `api` object (REST), the `socket` manager (WebSocket), and mock fixtures. |\n| `web/src/api/gen/` | TypeScript types that ts-rs writes from Rust types with `#[ts(export)]`. |\n| `web/src/lib/` | Hooks, live data stores, navigation, shortcuts, and formatting. |\n| `web/src/shell/` | The chrome: sidebar, tabs, title bar, palette, Files and Git panels. |\n| `web/src/screens/` | One screen for each resource id. `README.md` lists the props and URLs. |\n| `web/src/features/` | Gate cards, context tags and uploads, and book rendering. |\n\n## Screens\n\n| Screen | Resource id | Content |\n| --- | --- | --- |\n| `WorkspaceScreen` | `ws:overview` | New task form and sessions table. |\n| `SessionScreen` | `session:<id>` | Session board with gates. |\n| `ExecutionScreen` | `exec:<id>` | Usage strip, then the Activity feed or a terminal by `ExecutionView.stream`. |\n| `ArtifactScreen` | `artifact:<path>` | Spec, plan, report, or ledger. |\n| `SettingsScreen` | `ws:settings` | Workspace settings forms. |\n| `CostScreen`, `MemoryScreen`, `SkillsScreen` | `ws:cost`, `ws:memory`, `ws:skills` | Spend, lessons, skills. |\n| `DocsScreen`, `BookScreen` | `ws:docs`, `book:<id>` | Books, with search, contents, and HTML export. |\n| `ProjectScreen`, `FileScreen` | `project:<key>`, `file:<key>:<path>` | Project overview, dependencies, files, and diffs. |\n\n## Talking to the server\n\n`web/src/api/index.ts` exports `api`. It is `httpApi` by default. When `VITE_MOCK=1`, it is the mock API with fixtures. The fixtures load through a dynamic import, so they stay out of the production bundle.\n\n`socket.ts` manages the WebSocket. It decodes binary PTY frames, routes each `ServerMsg` to its channels (`channelsFor`), and answers code hint requests. A hint that the server does not answer within 30 seconds resolves to null.\n\nThe shell shares live data for each workspace: one fetch and one socket subscription for each kind (`lib/live.ts`).\n\n## Invariants\n\n- Do not edit a file in `web/src/api/gen/`. Change the Rust type, and ts-rs writes the file again. `.cargo/config.toml` sets the output folder.\n- `Question::display_options` in Rust and `orderedOptions` in `web/src/lib/gateAnswers.ts` must number options the same way, because a typed answer names options by number.\n- Heavy components load with `lazy()`: the Monaco diff, the file editor, and xterm. Import them only through their lazy wrappers, so they stay out of the main chunk.\n- Agent and repository text is untrusted. The browser security suite checks that no render path runs it.\n\n## Build and development\n\n| Command (run in `web/`) | Purpose |\n| --- | --- |\n| `npm run dev` | Vite dev server. Start the server with `--dev` so it accepts the dev host. |\n| `npm run dev:mock` | Dev server with fixtures and no backend. |\n| `npm run build` | Build `web/dist`. |\n| `npm test` | Run the Vitest tests. |\n| `npm run typecheck` | Type-check with `tsc`. |\n| `npm run check` | Lint and format check with Biome. |\n\nThe server embeds `web/dist` (`assets.rs`). An unknown path falls back to `index.html` so client routes load directly. `/sw.js` is served from the root so the service worker covers the app.",
+          "code_refs": [
+            {
+              "path": "web/src/api/index.ts",
+              "symbol": null,
+              "lines": null,
+              "note": "Real or mock API selection."
+            },
+            {
+              "path": "web/src/api/socket.ts",
+              "symbol": null,
+              "lines": null,
+              "note": "The WebSocket manager."
+            },
+            {
+              "path": "web/src/screens/README.md",
+              "symbol": null,
+              "lines": null,
+              "note": "Screen props and URLs."
+            },
+            {
+              "path": "web/src/lib/gateAnswers.ts",
+              "symbol": null,
+              "lines": null,
+              "note": "Option numbering that must match Rust."
+            },
+            {
+              "path": "web/src/features/gates/GateCard.tsx",
+              "symbol": null,
+              "lines": null,
+              "note": "The gate card entry point."
+            },
+            {
+              "path": "crates/ostra-server/src/assets.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The embedded build."
+            }
+          ]
+        },
+        {
+          "id": "testing",
+          "title": "Testing layers and eval suites",
+          "summary": "Lists each test layer, what it proves, and the commands, including the paid live evals that stay off by default.",
+          "body": "A change to the planner, the policy, or a judge can break behavior with no compile error. Each test layer catches a different class of break. This page lists the layers, what each proves, and how to run it.\n\n## Commands\n\n- Run every Rust test: `cargo test --workspace`.\n- Run one crate: `cargo test -p ostra-engine`.\n- Run one test file: `cargo test -p ostra-server --test e2e`.\n- Format: `cargo fmt --all`.\n\nThe standalone crate `tests/windows-probes` is outside the workspace. It is a probe program for a throwaway Windows VM.\n\n## Layers\n\n| Layer | Location | What it proves |\n| --- | --- | --- |\n| Unit tests | `#[cfg(test)]` modules in each crate | Local behavior: parsing, rendering, matching. |\n| Planner conformance | `tests/conformance/main.rs` (a test of `ostra-engine`) | One fixture for each rule ID. It builds an event history, folds it, and checks the next steps. |\n| Engine tests | `crates/ostra-engine/tests/` (`runner.rs`, `pause.rs`, `recover.rs`) | The runner with fakes: pause and resume, and recovery after a restart. |\n| Store tests | `crates/ostra-store/tests/workspace_db.rs` | Migrations and queries. |\n| Sandbox tests | `crates/ostra-sandbox/src/tests.rs`, `tests/env_scrub.rs` | Profile rendering and environment scrubbing. |\n| Whole stack | `crates/ostra-server/tests/e2e.rs` | A real listener, REST with cookie auth, the engine, the native loop, the policy, the tools, and git staging. A scripted model plays each agent. |\n| MCP | `crates/ostra-server/tests/mcp.rs` | The MCP gateway. |\n| Console | `web/src/**/*.test.ts(x)` and `design/src/*.test.tsx` | Components and libraries, with Vitest. |\n| Browser security | `tests/browser/` | A real Chromium against a scratch server and a fake model. |\n\nThe `test-prices` feature of `ostra-core` gives fixed model prices to the tests of the native executor, the providers, and the harness crate.\n\n## Browser security suite\n\nRun `cd tests/browser && npm test`. The run builds the web UI and a debug binary, starts a scratch server under `/tmp/pw-browser` with its own config, data dir, master key, and `HOME`, and stops it at the end. Nothing leaves the machine. The model API is a local fake, the harness is a stub script, and the MCP server is a stub. Each test string sets `window.__pwned` or requests a canary URL if it runs, so the guard fixture fails a test on either.\n\n## Live evals\n\nThe eval suites call real models and cost money. They are ignored by default.\n\n| Suite | File | Cases |\n| --- | --- | --- |\n| Judges | `crates/ostra-server/tests/judge_evals.rs` | `tests/evals/judges.toml` |\n| Coordination | `crates/ostra-server/tests/coordination_evals.rs` | `tests/evals/coordination.toml` |\n| Advisor | `crates/ostra-server/tests/advisor_evals.rs` | `tests/evals/advisor.toml` |\n| Test stage | `crates/ostra-server/tests/test_stage_evals.rs` | `tests/evals/test_stage.toml` |\n\nRun the test stage evals with:\n\n```text\nOSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 OSTRA_EVAL_RUNS=3 \\\n  cargo test -p ostra-server --test test_stage_evals -- --ignored --nocapture\n```\n\n`OSTRA_EVAL_MODELS` lists the models, `OSTRA_EVAL_RUNS` sets the runs for each case, and `OSTRA_EVAL_GRADER` names the grader model (the default is Opus). Set an API key for each provider first.\n\nA judge eval case holds a request about the source of Ostra and the route that a careful engineer picks. Add a case to `tests/evals/judges.toml` when you change a judge prompt.\n\n## Rules for a change\n\n- Add a conformance fixture for each new planner rule, because the planner has no other test that checks the order of steps.\n- Run the live evals when you change a judge or agent prompt. A prompt change gives no compile error and no failed unit test.\n- Do not call a real provider from a default test. Use `ScriptedProvider`.",
+          "code_refs": [
+            {
+              "path": "tests/conformance/main.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Planner fixtures."
+            },
+            {
+              "path": "crates/ostra-server/tests/e2e.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The whole-stack test with a scripted model."
+            },
+            {
+              "path": "crates/ostra-engine/tests/recover.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Recovery after a restart."
+            },
+            {
+              "path": "crates/ostra-server/tests/judge_evals.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "The live judge evals."
+            },
+            {
+              "path": "tests/evals/judges.toml",
+              "symbol": null,
+              "lines": null,
+              "note": "Judge eval cases."
+            },
+            {
+              "path": "tests/browser/README.md",
+              "symbol": null,
+              "lines": null,
+              "note": "The browser security suite."
+            }
+          ]
+        },
+        {
+          "id": "change-recipes",
+          "title": "Change recipes",
+          "summary": "Gives the steps for the common changes: a setting, an agent, a gate kind, a judge, an event, an API route, a migration, and a tool.",
+          "body": "Each recipe lists the files to change in order. The compiler finds most missed places, because the code uses exhaustive matches. The recipes name the places that the compiler cannot find.\n\n## Add a workspace setting\n\n1. Add the field to `WorkspaceSettings` in `crates/ostra-core/src/config.rs`. The struct has `#[serde(default)]`, so old `workspace.toml` files take the value from `WorkspaceSettings::seeded`.\n2. Add its dotted key and a description to `SETTING_KEYS`. A test checks that each key names a field.\n3. Set the seeded value in `WorkspaceSettings::seeded`.\n4. Add validation in `validate_workspace` or in `crates/ostra-workspace/src/settings.rs`.\n5. Read the value through `Services::workspace()` where it applies. The server reads it again on each execution.\n6. Add the field to `web/src/screens/workspace/settingsForm.ts`.\n7. Run `cargo test --workspace`. Commit the changed files in `web/src/api/gen`.\n\nIf the setting starts a program or loosens a check, add it to the hash in `crates/ostra-workspace/src/trust.rs`. A setting that starts a program without approval lets a repository run code.\n\n## Add an agent\n\n1. Add a variant to `AgentName` in `crates/ostra-core/src/agent.rs`. Update `ALL` (the array length), `as_str`, and `is_session_only`.\n2. Create `assets/agents/<name>/agent.toml` and `prompt.md`. `load_defs` reads a file for every name in `ALL`, so a missing file panics at first use.\n3. Add a route to `WorkspaceSettings::seeded`.\n4. Define the submit type and its schema in `crates/ostra-core/src/submit.rs` (`submit_schema`).\n5. Define the spawn params in `crates/ostra-agents/src/spawn.rs` and the case in `crates/ostra-engine/src/factory.rs`.\n6. Add an `ExecPurpose` variant, its `stage_of` mapping, and the planner step in `crates/ostra-engine/src/plan.rs`. Handle the finish in `SessionState::apply`.\n7. Add a capability and its tool names to `assets/tool-mapping.toml` if the agent needs a new capability.\n8. Add a conformance fixture.\n\n## Add a gate kind\n\n1. Add a variant to `GatePayload` in `crates/ostra-core/src/event.rs`. Update `stage`, `kind_str`, and `execution`.\n2. Add a `GateAnswer` variant if the answer has a new shape. Update `validate_answer` in `runner.rs`.\n3. Update `gate_owner` in `plan.rs`, because `Step::key` uses it to dedupe the gate.\n4. Update `yolo_plan` in `judge_input.rs`. Choose a fixed answer, a judge answer, or no answer.\n5. Open the gate in the planner and handle `GateAnswered` in the fold.\n6. Add a card in `web/src/features/gates/`.\n\n## Add a judge\n\n1. Add a variant to `JudgeKind` and to `as_str` in `event.rs`.\n2. Write `assets/judges/<as_str>.md`. The file name must match.\n3. Define the output type and its schema in `crates/ostra-engine/src/judge.rs` (`output_schema`).\n4. Build the input in `judge_input.rs`.\n5. Add the validation arm in `perform_judge`.\n6. Return the `Step::Judge` from the planner and fold the `DecisionMade` event.\n7. If the user can override the decision, add the kind to `Engine::override_decision`.\n8. Add eval cases to `tests/evals/judges.toml`.\n\n## Add an event or a field\n\n1. Add the `SessionEvent` variant in `event.rs`.\n2. Give each new field of an existing event `#[serde(default)]`. Old logs must still parse.\n3. Handle the event in `SessionState::apply`. Keep the fold free of clock, disk, and environment reads.\n4. Update `Inner::materialize` if a table for the UI needs the event.\n5. Do not rename a serialized name without `#[serde(alias)]`.\n\n## Add an API route\n\n1. Write the handler in `crates/ostra-server/src/api.rs` and add the route in `router`.\n2. Put request and response types in `crates/ostra-core/src/api.rs` with `#[ts(export)]`.\n3. Add the client method in `web/src/api/client.ts` and the mock in `web/src/api/mock/`.\n4. Add a case to `crates/ostra-server/tests/e2e.rs`.\n\n## Add a database migration\n\n1. Append one SQL string to `MIGRATIONS` in `crates/ostra-store/src/workspace.rs` or `registry.rs`.\n2. Do not edit an earlier entry. A database that applied it does not run it again.\n3. Add a test to `crates/ostra-store/tests/workspace_db.rs`.\n\n## Add a native tool\n\n1. Define the tool and its schema in `crates/ostra-tools/src/defs.rs` and implement it in a tool module.\n2. Add a capability or reuse one in `Capability` (`agent.rs`), and add the names to `assets/tool-mapping.toml`.\n3. Add the name to `KNOWN_TOOLS` in `crates/ostra-policy/src/perms.rs`, so rules can name it.\n4. Decide its policy: the family in `perms::family` and any guard in `guards.rs`.\n5. For a harness, serve the tool from the MCP shim in `crates/ostra-exec-harness/src/bridge.rs`.\n6. If the tool is read-only, add it to `is_concurrent` in `crates/ostra-exec-native/src/lib.rs`.",
+          "code_refs": [
+            {
+              "path": "crates/ostra-core/src/config.rs",
+              "symbol": "SETTING_KEYS",
+              "lines": null,
+              "note": "The settings key list."
+            },
+            {
+              "path": "crates/ostra-core/src/agent.rs",
+              "symbol": "AgentName",
+              "lines": null,
+              "note": "The agent list."
+            },
+            {
+              "path": "crates/ostra-core/src/event.rs",
+              "symbol": null,
+              "lines": null,
+              "note": "Events, gates, and judge kinds."
+            },
+            {
+              "path": "crates/ostra-engine/src/judge_input.rs",
+              "symbol": "yolo_plan",
+              "lines": null,
+              "note": "The YOLO answer for each gate."
+            },
+            {
+              "path": "crates/ostra-server/src/api.rs",
+              "symbol": "router",
+              "lines": null,
+              "note": "Where routes are added."
+            },
+            {
+              "path": "crates/ostra-store/src/workspace.rs",
+              "symbol": "MIGRATIONS",
+              "lines": null,
+              "note": "The migration list."
+            }
+          ]
+        }
+      ],
+      "updated_at": "2026-10-06T05:17:54.977988088Z"
+    }
+  ],
+  "glossary": [
+    {
+      "term": "Advisor",
+      "definition": "The agent that reads a failed init step and tells the engine how to continue.",
+      "code_ref": null
+    },
+    {
+      "term": "Agent",
+      "definition": "A model with a fixed role, tools, and a submit tool. The code lists 14 agents in `AgentName`.",
+      "code_ref": "crates/ostra-core/src/agent.rs"
+    },
+    {
+      "term": "Book",
+      "definition": "A set of documentation parts, an optional architecture, and a glossary, stored under `.ostra/docs/`.",
+      "code_ref": "crates/ostra-core/src/book.rs"
+    },
+    {
+      "term": "Category",
+      "definition": "The type of a request, such as `IMPLEMENT` or `DOCS`. The category selects the flow.",
+      "code_ref": "crates/ostra-core/src/pipeline.rs"
+    },
+    {
+      "term": "Containment signal",
+      "definition": "An event that looks like an attempt to leave the sandbox. Three signals from one execution pause the session.",
+      "code_ref": "crates/ostra-core/src/containment.rs"
+    },
+    {
+      "term": "Decision",
+      "definition": "The stored result of a judge call, with its reason, as a `DecisionMade` event.",
+      "code_ref": null
+    },
+    {
+      "term": "Decoy",
+      "definition": "A fake credential file whose read is a containment signal.",
+      "code_ref": "crates/ostra-sandbox/src/decoy.rs"
+    },
+    {
+      "term": "Egress proxy",
+      "definition": "The proxy that is the only network path out of a sandbox. It applies the host allow list.",
+      "code_ref": "crates/ostra-sandbox/src/egress.rs"
+    },
+    {
+      "term": "EPA",
+      "definition": "Execution-path analysis: the report of the `execution-path-analyzer` agent that lists the checks for `write-test`.",
+      "code_ref": null
+    },
+    {
+      "term": "Event log",
+      "definition": "The append-only list of `SessionEvent` values of a session in the `events` table.",
+      "code_ref": "crates/ostra-core/src/event.rs"
+    },
+    {
+      "term": "Execution",
+      "definition": "One run of one agent, with a route, a spawn block, a status, and a recorded usage.",
+      "code_ref": "crates/ostra-core/src/exec.rs"
+    },
+    {
+      "term": "Executor",
+      "definition": "The code that runs one execution. It is native or one of four harnesses.",
+      "code_ref": "crates/ostra-core/src/executor.rs"
+    },
+    {
+      "term": "Fold",
+      "definition": "The deterministic function `SessionState::fold` that builds the session state from the ordered events.",
+      "code_ref": "crates/ostra-engine/src/state.rs"
+    },
+    {
+      "term": "Gate",
+      "definition": "A record that stops the pipeline until the user, or YOLO, gives an answer.",
+      "code_ref": "crates/ostra-core/src/event.rs"
+    },
+    {
+      "term": "Guard",
+      "definition": "A layer 1 policy check that nothing overrides.",
+      "code_ref": "crates/ostra-policy/src/guards.rs"
+    },
+    {
+      "term": "Handoff",
+      "definition": "A request from an agent for a specialist, today always `prompt-generation`.",
+      "code_ref": null
+    },
+    {
+      "term": "Harness",
+      "definition": "An installed agent CLI (Claude Code, Codex, Grok Build, or Antigravity) that Ostra runs under a PTY.",
+      "code_ref": "crates/ostra-exec-harness/src/executor.rs"
+    },
+    {
+      "term": "Hook bridge",
+      "definition": "The path that carries each harness hook event to the policy engine through `ostra hook` and `/internal/policy`.",
+      "code_ref": "crates/ostra-exec-harness/src/bridge.rs"
+    },
+    {
+      "term": "Inventory",
+      "definition": "The file `.ostra/INVENTORY.md` that maps module paths to areas of a project.",
+      "code_ref": null
+    },
+    {
+      "term": "Judge",
+      "definition": "A single model call that returns JSON against a schema and makes one orchestration decision.",
+      "code_ref": "crates/ostra-engine/src/judge.rs"
+    },
+    {
+      "term": "Lane",
+      "definition": "A column of the session board. Each stage kind belongs to one lane.",
+      "code_ref": "crates/ostra-core/src/pipeline.rs"
+    },
+    {
+      "term": "Lesson",
+      "definition": "A durable note in the project memory that later executions recall.",
+      "code_ref": "crates/ostra-store/src/memory.rs"
+    },
+    {
+      "term": "MCP shim",
+      "definition": "The `ostra mcp-stdio` process that serves the Ostra tools to a harness over the MCP protocol.",
+      "code_ref": null
+    },
+    {
+      "term": "Native executor",
+      "definition": "The executor that runs the model loop itself on an API key.",
+      "code_ref": "crates/ostra-exec-native/src/lib.rs"
+    },
+    {
+      "term": "Part",
+      "definition": "The list of sections for one project in a book, written by the `documentation` agent.",
+      "code_ref": null
+    },
+    {
+      "term": "Permission mode",
+      "definition": "One of `default`, `acceptEdits`, `plan`, or `bypass`. It sets what layer 2 does when no rule matches.",
+      "code_ref": "crates/ostra-core/src/config.rs"
+    },
+    {
+      "term": "Phase",
+      "definition": "One unit of implement work from the plan, or one inline unit when the plan is skipped.",
+      "code_ref": "crates/ostra-core/src/pipeline.rs"
+    },
+    {
+      "term": "Planner",
+      "definition": "The pure function `next_steps` that reads the session state and returns the next steps.",
+      "code_ref": "crates/ostra-engine/src/plan.rs"
+    },
+    {
+      "term": "Project",
+      "definition": "A code folder in a workspace with a key, an inventory, and a profile.",
+      "code_ref": null
+    },
+    {
+      "term": "Project profile",
+      "definition": "The file `.ostra/project.toml` with commands, test types, skills, and review rules.",
+      "code_ref": "crates/ostra-core/src/config.rs"
+    },
+    {
+      "term": "Repo brief",
+      "definition": "A short text of project facts that Ostra appends to the first message of each execution.",
+      "code_ref": "crates/ostra-agents/src/brief.rs"
+    },
+    {
+      "term": "Rescue",
+      "definition": "The path after an agent reports `stuck`: research, a rerun with a fact, or a gate.",
+      "code_ref": null
+    },
+    {
+      "term": "Review ledger",
+      "definition": "The file `ostra-review-ledger-phase-<value>.md` where agents record `FIXED` or `WONTFIX` for each finding.",
+      "code_ref": null
+    },
+    {
+      "term": "Route",
+      "definition": "The executor, model, and tier that settings select for an agent.",
+      "code_ref": "crates/ostra-core/src/config.rs"
+    },
+    {
+      "term": "Runner",
+      "definition": "The `Engine` code that performs steps, appends events, and starts executions.",
+      "code_ref": "crates/ostra-engine/src/runner.rs"
+    },
+    {
+      "term": "Sandbox",
+      "definition": "The kernel boundary under agent commands: bubblewrap on Linux and Seatbelt on macOS.",
+      "code_ref": "crates/ostra-sandbox/src/lib.rs"
+    },
+    {
+      "term": "Session",
+      "definition": "One run of the pipeline for one user request, stored as a log of events.",
+      "code_ref": "crates/ostra-engine/src/state.rs"
+    },
+    {
+      "term": "Session dir",
+      "definition": "The folder where an agent writes its reports: the session root or its per-project subfolder.",
+      "code_ref": null
+    },
+    {
+      "term": "Skill",
+      "definition": "A `SKILL.md` file that gives instructions for one kind of task, stored under `.agents/skills/`.",
+      "code_ref": null
+    },
+    {
+      "term": "Slot",
+      "definition": "A permit to run one execution. The workspace limit is `limits.max_parallel_executions`.",
+      "code_ref": "crates/ostra-engine/src/runner.rs"
+    },
+    {
+      "term": "Spawn block",
+      "definition": "The `Label: value` text at the start of the first message of an agent.",
+      "code_ref": "crates/ostra-agents/src/spawn.rs"
+    },
+    {
+      "term": "Stage",
+      "definition": "One node kind of the pipeline, for example `Spec` or `Review`. `StageKind` lists them.",
+      "code_ref": "crates/ostra-core/src/pipeline.rs"
+    },
+    {
+      "term": "Step",
+      "definition": "One action that the planner returns for the runner to perform, for example a spawn or a gate.",
+      "code_ref": "crates/ostra-engine/src/plan.rs"
+    },
+    {
+      "term": "Subagent",
+      "definition": "One conversation of an agent. Its ID is the id of its first execution.",
+      "code_ref": "crates/ostra-core/src/coord.rs"
+    },
+    {
+      "term": "Submit tool",
+      "definition": "The `submit_<agent>` tool that ends an execution with structured data.",
+      "code_ref": null
+    },
+    {
+      "term": "Tier",
+      "definition": "A model class: `fast`, `balanced`, `advanced`, or `frontier`. Tables map tiers to models.",
+      "code_ref": null
+    },
+    {
+      "term": "Track",
+      "definition": "The depth of an `IMPLEMENT` request: `light` skips the spec and plan, and `full` runs them.",
+      "code_ref": "crates/ostra-core/src/pipeline.rs"
+    },
+    {
+      "term": "Trust approval",
+      "definition": "The stored hash of approved folder-file content. Programs start only when the file hash matches.",
+      "code_ref": "crates/ostra-workspace/src/trust.rs"
+    },
+    {
+      "term": "Work loop",
+      "definition": "A work agent paired with the `code-reviewer` agent, repeated until no HIGH or MEDIUM finding remains.",
+      "code_ref": "crates/ostra-engine/src/state.rs"
+    },
+    {
+      "term": "Workspace",
+      "definition": "A folder with `.ostra/workspace.toml` that groups projects and holds sessions.",
+      "code_ref": "crates/ostra-workspace/src/runtime.rs"
+    },
+    {
+      "term": "YOLO",
+      "definition": "A per-session mode in which the engine answers gates and permission asks without the user.",
+      "code_ref": null
+    }
+  ]
+}

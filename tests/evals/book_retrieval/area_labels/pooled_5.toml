@@ -6,7 +6,7 @@
 "exec-029" = ["ostra/exec-harness-and-5-more-providers"]
 "exec-030" = []
 "exec-031" = []
-"exec-032" = ["ostra/exec-harness-and-5-more-providers/exec-harness-and-5-more-providers-neutral"]
+"exec-032" = ["ostra/exec-harness-and-5-more-providers/neutral-types-and-errors"]
 "exec-033" = []
 "exec-034" = []
 "exec-035" = ["ostra/web-execution"]

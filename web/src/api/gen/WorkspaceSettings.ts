@@ -4,6 +4,7 @@ import type { Limits } from "./Limits";
 import type { LoopbackAccess } from "./LoopbackAccess";
 import type { McpServerConfig } from "./McpServerConfig";
 import type { NotificationSettings } from "./NotificationSettings";
+import type { PluginConfig } from "./PluginConfig";
 import type { ProjectEntry } from "./ProjectEntry";
 import type { Routing } from "./Routing";
 import type { SandboxMode } from "./SandboxMode";
@@ -56,4 +57,8 @@ sandbox_blocked_ports: Array<number>,
 /**
  * External MCP servers whose tools every executor can call (HANDOVER 10.6).
  */
-mcp_servers: Array<McpServerConfig>, };
+mcp_servers: Array<McpServerConfig>, 
+/**
+ * Rule PL1: out-of-process plugins that add agents and workflow stage logic (HANDOVER 10.10).
+ */
+plugins: Array<PluginConfig>, };

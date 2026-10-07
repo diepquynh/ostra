@@ -1,31 +1,36 @@
 import { Banner, Button, Checkbox, Panel, Select } from "@ostra/design";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { api } from "../../api";
 import type { BookSummary } from "../../api/gen/BookSummary";
-import type { ContextFile, ProjectView, SessionSummary, Track } from "../../api/types";
+import type { ContextFile, ProjectView, SessionSummary, Track, WorkflowInfo } from "../../api/types";
 import { FileTagInput } from "../../features/context/FileTagInput";
 import { useUploads } from "../../features/context/uploads";
 import { useAsync } from "../../lib/hooks";
 import { isMac, modHint } from "../../lib/keys";
 import { useShell } from "../../lib/nav";
+import { resourcePath } from "../../lib/resource";
 
 export type NewTaskProps = {
   ws: string;
   projects: ProjectView[];
+  workflows: WorkflowInfo[];
   yoloDefault: boolean;
   onCreated: (s: SessionSummary) => void;
 };
 
-/** Request text with `@` file tags, the tests, docs and YOLO toggles, and optional pinned projects. */
-export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) {
+/** Request text with `@` file tags, the tests, docs and YOLO toggles, a workflow, and optional pinned projects. */
+export function NewTask({ ws, projects, workflows, yoloDefault, onCreated }: NewTaskProps) {
   const { taskDraft, setTaskDraft } = useShell();
   const [request, setRequest] = useState("");
   const [tests, setTests] = useState(false);
   const [docs, setDocs] = useState(false);
+  const navigate = useNavigate();
   const [book, setBook] = useState("");
   const books = useAsync<BookSummary[]>(() => (docs ? api.books(ws) : Promise.resolve([])), [ws, docs]);
   const [yolo, setYolo] = useState(yoloDefault);
   const [track, setTrack] = useState<Track | null>(null);
+  const [workflow, setWorkflow] = useState("");
   const [pins, setPins] = useState<string[]>([]);
   const [files, setFiles] = useState<ContextFile[]>([]);
   const uploads = useUploads(ws);
@@ -58,6 +63,7 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
         files,
         uploads: uploads.ids,
         ...(docs && book ? { docs_book: book } : {}),
+        ...(workflow ? { workflow } : {}),
       });
       setRequest("");
       uploads.clear();
@@ -154,6 +160,24 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
               {t === null ? "Auto" : t === "light" ? "Light" : "Full"}
             </Button>
           ))}
+          <span className="wp-divider" />
+          <Select
+            size="sm"
+            aria-label="Workflow"
+            title={
+              workflows.find((w) => w.name === workflow)?.description ??
+              "Ostra runs the workflow for the category it classifies the request into"
+            }
+            value={workflow}
+            onChange={(e) => setWorkflow(e.target.value)}
+            options={[
+              { value: "", label: "Workflow: by category" },
+              ...workflows.map((w) => ({
+                value: w.name,
+                label: `Workflow: ${w.name}${w.builtin ? "" : " (workspace)"}`,
+              })),
+            ]}
+          />
           {initialized.length > 1 && (
             <>
               <span className="wp-divider" />
@@ -182,6 +206,26 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
             {busy ? "Starting…" : "Start"}
           </Button>
         </div>
+        {docs && (
+          <Banner
+            tone="info"
+            title="Tell the docs writers what the book is for"
+            actions={
+              <Button
+                size="sm"
+                onClick={() => navigate(resourcePath(ws, "ws:settings", "setting:instructions.agents.documentation"))}
+              >
+                Docs instructions in Settings
+              </Button>
+            }
+          >
+            The request steers the book. Name the readers, the topics to cover in depth, and what to leave out. Tag
+            design notes, specs, or artifacts with @, or upload them, and the writers use them as sources. For example:
+            "Document the order service for new backend engineers. Explain cancellation and refunds in depth, use
+            @docs/architecture.md for how the services talk, and leave out the admin UI." To give every docs run the
+            same instructions, write them once in Settings.
+          </Banner>
+        )}
         {yolo && (
           <Banner tone="warn">
             YOLO: every permission is granted and every gate is answered by Ostra. Guards, deny rules, the fact-check

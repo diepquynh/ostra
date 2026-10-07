@@ -81,7 +81,7 @@ The payload is the event, serialized as JSON. The state of a session is only the
 order. If you load the rows and fold them, you get the session exactly as it was. The server uses this method
 to recover after a restart. The tests use it to build a session from a written history.
 
-Only one function appends events: `Inner::append` in `crates/ostra-engine/src/runner.rs`. It holds the state
+Only one function appends events: `Inner::append` in `crates/ostra-engine/src/runner/driver.rs`. It holds the state
 lock of the session. Thus, the events of one session get numbers in the order of the fold. The `append_event`
 function of the store takes an immediate write transaction. It reads the next `seq`, inserts the row, and
 updates the `updated_at` of the session. Then the runner updates the tables below and applies the event to the

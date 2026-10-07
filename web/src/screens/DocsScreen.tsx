@@ -36,7 +36,6 @@ export function DocsScreen({ ws }: { ws: string }) {
             { key: "title", label: "Book", render: (b) => b.title || b.id },
             { key: "projects", label: "Projects", render: (b) => b.projects.join(", ") },
             { key: "sections", label: "Sections", num: true, render: (b) => String(b.sections) },
-            { key: "arch", label: "Architecture", render: (b) => (b.has_architecture ? "Yes" : "No") },
             { key: "updated", label: "Updated", render: (b) => new Date(b.updated_at).toLocaleString() },
           ]}
         />
@@ -82,17 +81,11 @@ function BookReader({ ws, book }: { ws: string; book: Book }) {
   const prev = docs.pages[at - 1];
   const next = docs.pages[at + 1];
 
-  const subsections = useMemo(() => {
-    const out = new Map<string, Set<string>>();
-    for (const part of book.parts)
-      for (const s of part.sections)
-        out.set(
-          sectionPage(part.project, s.id),
-          new Set(s.subsections.map((x) => x.title.replace(/\s+/g, " ").trim())),
-        );
-    return out;
-  }, [book]);
-  const subsOf = (p: DocPage) => p.toc.filter((t) => subsections.get(p.id)?.has(t.text));
+  const sectionPages = useMemo(
+    () => new Set(book.parts.flatMap((part) => part.sections.map((s) => sectionPage(part.project, s.id)))),
+    [book],
+  );
+  const subsOf = (p: DocPage) => (sectionPages.has(p.id) ? p.toc.filter((t) => t.text !== "Code references") : []);
 
   const spy = useCallback(() => {
     const el = pane.current;

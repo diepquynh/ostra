@@ -24,7 +24,7 @@ use futures::StreamExt;
 use ostra_core::agent::{AgentName, Capability};
 use ostra_core::api::{CreateSession, FileIndex};
 use ostra_core::config::{GlobalConfig, ProjectEntry, ResolvedRoute, WorkspaceSettings, save_toml};
-use ostra_core::coord::{AskTarget, CoordReply, RunEnd, SUBAGENT_ASK, SUBAGENT_REPLY};
+use ostra_core::coord::{CoordReply, MessageTarget, SEND_MESSAGE};
 use ostra_core::event::{ExecPurpose, SessionEvent, SessionOptions, StoredEvent};
 use ostra_core::exec::{
     CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
@@ -35,8 +35,10 @@ use ostra_core::ids::{ExecutionId, SessionId, WorkspaceId};
 use ostra_core::model::Effort;
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, PolicyDecision, RuleRef, ToolCall};
-use ostra_engine::factory::AgentsFactory;
-use ostra_engine::state::{ExploreOrigin, SessionState};
+use ostra_default_plugin::data::ExploreOrigin;
+use ostra_default_plugin::data::OsExt;
+use ostra_default_plugin::factory::AgentsFactory;
+use ostra_engine::state::SessionState;
 use ostra_engine::{Engine, Notice, Services, SpawnFactory};
 use ostra_exec_native::NativeExecutor;
 use ostra_store::WorkspaceDb;
@@ -649,7 +651,7 @@ impl Router {
 
         if let Some(q) = &actor.ask {
             let input = match (&actor.ask_agent, &actor.ask_subagent) {
-                (Some(agent), _) => json!({"message": fill(q), "agent": agent}),
+                (Some(agent), _) => json!({"message": fill(q), "agent": agent, "wait": true}),
                 (None, Some(agent)) => {
                     let Some(first) = st
                         .executions
@@ -658,40 +660,44 @@ impl Router {
                     else {
                         return ExecutionResult::error(format!("eval: no {agent} run to ask"));
                     };
-                    json!({"message": fill(q), "subagent_id": st.subagent_of(&first.id).as_str()})
+                    json!({"message": fill(q), "to": st.subagent_of(&first.id).as_str(), "wait": true})
                 }
                 (None, None) => return ExecutionResult::error("eval: an ask names no target"),
             };
-            return match self.coordinate(&spec.id, SUBAGENT_ASK, input) {
+            return match self.coordinate(&spec.id, SEND_MESSAGE, input) {
                 Ok(_) => ok(
                     ExecutionStatus::Waiting,
-                    ostra_core::coord::end_payload(SUBAGENT_ASK, q),
+                    ostra_core::coord::end_payload(SEND_MESSAGE, q),
                 ),
                 Err(e) => ExecutionResult::error(format!("eval: the ask was refused: {e}")),
             };
         }
-        let owes = st.owed_by(&spec.id).is_some()
-            || matches!(
-                st.executions.get(&spec.id).map(|x| &x.purpose),
-                Some(ExecPurpose::Consult { .. })
-            );
-        let reply = actor
-            .reply
-            .clone()
-            .or_else(|| owes.then(|| "Nothing to add beyond my earlier work.".to_string()));
+        // Rule SM6: a run replies to every sender that waits for it.
+        let owed = st.owed_by(&spec.id);
+        let continued = matches!(
+            st.executions.get(&spec.id).map(|x| &x.purpose),
+            Some(ExecPurpose::Message { .. })
+        );
+        let reply = actor.reply.clone().or_else(|| {
+            (!owed.is_empty() || continued)
+                .then(|| "Nothing to add beyond my earlier work.".to_string())
+        });
         if let Some(text) = reply {
-            return match self.coordinate(&spec.id, SUBAGENT_REPLY, json!({"message": fill(&text)}))
-            {
-                Ok(CoordReply { end, .. }) => ok(
-                    if end == RunEnd::Wait {
-                        ExecutionStatus::Waiting
-                    } else {
-                        ExecutionStatus::Ok
-                    },
-                    ostra_core::coord::end_payload(SUBAGENT_REPLY, &text),
-                ),
-                Err(e) => ExecutionResult::error(format!("eval: the reply was refused: {e}")),
-            };
+            for to in &owed {
+                if let Err(e) = self.coordinate(
+                    &spec.id,
+                    SEND_MESSAGE,
+                    json!({"message": fill(&text), "to": to.as_str()}),
+                ) {
+                    return ExecutionResult::error(format!("eval: the reply was refused: {e}"));
+                }
+            }
+            if continued || actor.submit.is_none() {
+                return ok(
+                    ExecutionStatus::Ok,
+                    ostra_core::coord::end_payload(SEND_MESSAGE, &text),
+                );
+            }
         }
         if let Some(s) = &actor.submit {
             return match serde_json::from_str(&fill(s)) {
@@ -704,6 +710,8 @@ impl Router {
             AgentName::Explore => {
                 let helper = match rec.map(|x| &x.purpose) {
                     Some(ExecPurpose::Explore { task }) => st
+                        .ext
+                        .os()
                         .explore
                         .get(*task as usize)
                         .is_some_and(|t| matches!(t.origin, ExploreOrigin::Ask { .. })),
@@ -924,6 +932,9 @@ struct EvalServices {
 
 #[async_trait::async_trait]
 impl Services for EvalServices {
+    fn pipeline(&self) -> std::sync::Arc<dyn ostra_engine::pipeline::Pipeline> {
+        ostra_default_plugin::pipeline()
+    }
     fn global(&self) -> GlobalConfig {
         let mut g = GlobalConfig::default();
         if let Some(t) = g.tiers.get_mut("native") {
@@ -1098,6 +1109,7 @@ async fn run_session(
         case: case.clone(),
     });
     let db = WorkspaceDb::open_in_memory().unwrap();
+    ostra_default_plugin::install();
     let engine = Engine::new(ws.clone(), WorkspaceId::new(), db, services);
     // The router needs the session before its first run, and the first run waits for the classify judge, so
     // the slot is filled right after the session is created.
@@ -1112,6 +1124,7 @@ async fn run_session(
             files: vec![],
             uploads: vec![],
             docs_book: None,
+            workflow: None,
         })
         .unwrap();
     let session = summary.id.clone();
@@ -1180,15 +1193,27 @@ fn runs_of<'a>(runs: &'a [RunLog], exec: &ExecutionId) -> Vec<&'a RunLog> {
     runs.iter().filter(|r| r.exec == *exec).collect()
 }
 
-fn target_name(st: &SessionState, t: &AskTarget) -> String {
+fn target_name(st: &SessionState, t: &MessageTarget) -> String {
     match t {
-        AskTarget::Agent { agent, .. } => agent.as_str().to_string(),
-        AskTarget::Subagent { id } => st
+        MessageTarget::Agent { agent, .. } => agent.as_str().to_string(),
+        MessageTarget::Subagent { id } => st
             .executions
             .get(id)
             .map(|r| r.agent.as_str().to_string())
             .unwrap_or_default(),
     }
+}
+
+/// A message that asks: one that pauses its sender or starts a helper. Any other is an answer.
+fn is_question(e: &SessionEvent) -> bool {
+    matches!(
+        e,
+        SessionEvent::MessageSent { wait: true, .. }
+            | SessionEvent::MessageSent {
+                to: MessageTarget::Agent { .. },
+                ..
+            }
+    )
 }
 
 /// The code checks. Each failure is one line for the report.
@@ -1203,16 +1228,13 @@ fn check(case: &Case, s: &Session, key: &str) -> Vec<String> {
     if s.stop == "timeout" || s.stop.starts_with("stalled") {
         fails.push(format!("the session did not reach its end: {}", s.stop));
     }
-    let asks: Vec<(ExecutionId, AskTarget, String)> = s
+    let asks: Vec<(ExecutionId, MessageTarget, String)> = s
         .events
         .iter()
         .filter_map(|e| match &e.event {
-            SessionEvent::AgentAsked {
-                from,
-                target,
-                message,
-                ..
-            } => Some((from.clone(), target.clone(), message.clone())),
+            SessionEvent::MessageSent { from, to, text, .. } if is_question(&e.event) => {
+                Some((from.clone(), to.clone(), text.clone()))
+            }
             _ => None,
         })
         .collect();
@@ -1220,15 +1242,15 @@ fn check(case: &Case, s: &Session, key: &str) -> Vec<String> {
         .events
         .iter()
         .filter_map(|e| match &e.event {
-            SessionEvent::AgentReplied { from, message, .. } => {
-                Some((from.clone(), message.clone()))
+            SessionEvent::MessageSent { from, text, .. } if !is_question(&e.event) => {
+                Some((from.clone(), text.clone()))
             }
             _ => None,
         })
         .collect();
     for exp in &case.expect.asks {
         let from = addr(&exp.from).unwrap();
-        let found: Vec<&(ExecutionId, AskTarget, String)> = asks
+        let found: Vec<&(ExecutionId, MessageTarget, String)> = asks
             .iter()
             .filter(|(f, _, _)| from.matches_exec(&runs_of(&runs, f)))
             .collect();
@@ -1425,23 +1447,23 @@ fn record(s: &Session) -> String {
     out.push_str("\n# Questions and answers, in order\n\n");
     for e in &s.events {
         match &e.event {
-            SessionEvent::AgentAsked {
+            SessionEvent::MessageSent {
                 from,
-                target,
-                message,
+                to: target,
+                text: message,
                 ..
-            } => out.push_str(&format!(
+            } if is_question(&e.event) => out.push_str(&format!(
                 "- QUESTION from {} to {}:\n{}\n\n",
                 who(from),
                 match target {
-                    AskTarget::Agent { agent, .. } => format!("a new {agent} helper"),
-                    AskTarget::Subagent { .. } =>
+                    MessageTarget::Agent { agent, .. } => format!("a new {agent} helper"),
+                    MessageTarget::Subagent { .. } =>
                         format!("the {} subagent", target_name(&s.state, target)),
                 },
                 message
             )),
-            SessionEvent::AgentReplied { from, message, .. } => {
-                out.push_str(&format!("- ANSWER from {}:\n{}\n\n", who(from), message))
+            SessionEvent::MessageSent { from, text, .. } => {
+                out.push_str(&format!("- ANSWER from {}:\n{}\n\n", who(from), text))
             }
             _ => {}
         }
@@ -1665,11 +1687,7 @@ async fn run_one(
         cost: live.iter().map(|r| r.usage.cost_usd).sum(),
         grader_cost,
         live_runs: live.len(),
-        asks: s
-            .events
-            .iter()
-            .filter(|e| matches!(e.event, SessionEvent::AgentAsked { .. }))
-            .count(),
+        asks: s.events.iter().filter(|e| is_question(&e.event)).count(),
         cache_ratio,
         secs: s.secs,
         runs: run_values,

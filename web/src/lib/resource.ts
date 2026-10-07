@@ -1,8 +1,8 @@
 // Resource ids name everything the console can open in a tab. The URL of the active tab is derived
 // from its id, and a URL maps back to exactly one id, so reloads and deep links restore the same tab.
 //
-//   ws:overview | ws:cost | ws:settings | ws:memory | ws:skills | ws:docs
-//                                                    /w/:ws, /w/:ws/cost, /w/:ws/settings, /w/:ws/memory, /w/:ws/skills, /w/:ws/docs
+//   ws:overview | ws:cost | ws:settings | ws:memory | ws:skills | ws:docs | ws:agents | ws:workflows
+//                                                    /w/:ws, /w/:ws/<page>; ws:workflows#<name> opens the Workflow builder
 //   book:<id>                                        /w/:ws/b/:id   (a documentation book)
 //   session:<id>                                     /w/:ws/s/:id
 //   exec:<id>                                        /w/:ws/x/:id
@@ -11,7 +11,7 @@
 //   file:<key>:<project-relative path>               /w/:ws/f/:key/<path>
 //   dep:<key>:<language server URI>                  /w/:ws/d/:key?uri=<uri>   (a dependency file, read-only)
 
-export type WorkspacePage = "overview" | "cost" | "settings" | "memory" | "skills" | "docs";
+export type WorkspacePage = "overview" | "cost" | "settings" | "memory" | "skills" | "docs" | "agents" | "workflows";
 
 export type Resource =
   | { type: "ws"; page: WorkspacePage }
@@ -23,7 +23,7 @@ export type Resource =
   | { type: "file"; key: string; path: string }
   | { type: "dep"; key: string; uri: string };
 
-const PAGES: WorkspacePage[] = ["overview", "cost", "settings", "memory", "skills", "docs"];
+const PAGES: WorkspacePage[] = ["overview", "cost", "settings", "memory", "skills", "docs", "agents", "workflows"];
 
 /** Parse a resource id. Returns null for anything that is not one. */
 export function parseResource(id: string): Resource | null {

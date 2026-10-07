@@ -343,7 +343,7 @@ impl Files {
             let Ok(st) = w.engine.state(&s.id) else {
                 continue;
             };
-            for (path, by) in ostra_engine::view::file_changes(&st, key) {
+            for (path, by) in ostra_default_plugin::view::file_changes(&st, key) {
                 if map.get(&path).is_none_or(|c| c.at < by.at) {
                     map.insert(path, by);
                 }

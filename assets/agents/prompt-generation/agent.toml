@@ -1,7 +1,11 @@
 description = "Writes or edits instruction files (LLM system prompts, SKILL.md skills, agent definitions) to the meta-author standard. Runs for a PROMPT request and when an implementer hands off prompt authoring."
 default_tier = "advanced"
 timeout_seconds = 1800
-capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill", "report", "code"]
+capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill", "report", "code", "test_files"]
+
+returns = "prompt"
+write_scope = "project"
+brief = ["skills"]
 
 [effort]
 native = "high"

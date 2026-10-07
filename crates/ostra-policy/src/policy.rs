@@ -414,18 +414,6 @@ impl ExecutionPolicy {
         drop(state);
 
         let tool = call.tool.as_str();
-        if self.ctx.answer_only {
-            let writes = !self.write_paths(call).is_empty()
-                || matches!(tool, "Report" | "Document" | "Memory")
-                || ostra_core::manage::is_manage_tool(tool)
-                || parsed.is_some_and(|p| {
-                    !guards::shell_targets(&self.roots, p, &self.start_cwd(call)).is_empty()
-                });
-            if writes {
-                return Some(guards::answer_only_denial());
-            }
-        }
-        let tool = call.tool.as_str();
         if tool == "Report" {
             let reason = call.str_field("reason").map(str::trim).unwrap_or_default();
             if let Some(rec) = &pending
@@ -442,10 +430,6 @@ impl ExecutionPolicy {
         }
         if ostra_core::manage::is_manage_tool(tool) {
             return guards::check_manage(&self.ctx, tool, &call.input);
-        }
-        // Rule H3: a run that owes an answer replies before anything ends it.
-        if self.ctx.owes_reply && tool.starts_with("submit_") {
-            return Some(guards::reply_first_denial());
         }
         if tool.starts_with("submit_") {
             let status = call.str_field("status").unwrap_or("ok");
@@ -547,7 +531,12 @@ impl ExecutionPolicy {
     }
 
     fn rule_decision(&self, subject: &Subject<'_>, allow_extra: &[Rule]) -> Option<PolicyDecision> {
-        let (repo, home) = (&self.roots.repo, &self.roots.home);
+        // Rule WD1: a relative path rule applies in each work dir, as it does in each project.
+        let repo = match subject {
+            Subject::Path { path, .. } => self.roots.repo_of(path),
+            _ => &self.roots.repo,
+        };
+        let home = &self.roots.home;
         if let Some(r) = self.deny.iter().find(|r| r.matches(subject, repo, home)) {
             return Some(PolicyDecision::deny(
                 RuleRef::permission(&r.raw),
@@ -945,10 +934,10 @@ impl ExecutionPolicy {
             Family::Edit => self
                 .write_paths(call)
                 .first()
-                .map(|(p, _)| perms::suggestion_for_path(&call.tool, p, &self.roots.repo)),
+                .map(|(p, _)| perms::suggestion_for_path(&call.tool, p, self.roots.repo_of(p))),
             Family::Read => self
                 .file_path(call)
-                .map(|(p, _)| perms::suggestion_for_path("Read", &p, &self.roots.repo)),
+                .map(|(p, _)| perms::suggestion_for_path("Read", &p, self.roots.repo_of(&p))),
             Family::WebFetch => call
                 .str_field("url")
                 .and_then(perms::url_host)

@@ -8,6 +8,6 @@ export type FactCheckSubmit = {
  */
 verdict: Verdict, 
 /**
- * `spec` or `plan`.
+ * `spec`, `plan`, or `page` (a docs draft, Rule B10).
  */
 target: string, findings: Array<FactCheckFinding>, };

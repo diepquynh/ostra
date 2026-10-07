@@ -206,7 +206,6 @@ const ROUTED = [
   "code-reviewer",
   "execution-path-analyzer",
   "documentation",
-  "system-architecture",
   "prompt-generation",
   "initializer",
   "quick-answer",

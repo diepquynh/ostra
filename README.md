@@ -145,6 +145,7 @@ Other commands:
 | `ostra sessions` | List signed-in browsers; `ostra sessions revoke <id>` signs one out. |
 | `ostra signout` | Sign out every browser. |
 | `ostra stop <session-id>` | Stop a session while the server is not running. |
+| `ostra plugin add <name> -- <command>...` | Register a plugin program in the workspace that holds the current folder. |
 
 ### Run as a service
 
@@ -233,8 +234,11 @@ scratch setup.
 | Path | Contents |
 | --- | --- |
 | `crates/ostra-core` | Ids, settings and route resolution, pipeline enums, submit schemas, the event log, API types (exported to TypeScript) |
-| `crates/ostra-engine` | Event-sourced session state, the planner, judge calls, the runner, the spawn factory |
+| `crates/ostra-engine` | Event-sourced session state, the planner, judge calls, the runner, gates, workflows, and the `Pipeline` trait |
 | `crates/ostra-agents` | Embedded prompts, minijinja rendering per executor, spawn structs, the repo brief |
+| `crates/ostra-sdk` | The plugin SDK: helpers, typed result contracts, workflow builders, the stdio transport |
+| `crates/ostra-standard` | The definitions of the standard plugin `ostra`: its agent files and default workflows |
+| `crates/ostra-default-plugin` | The standard plugin's pipeline: the built-in stages, judges, views, and the spawn factory |
 | `crates/ostra-exec-native` | The native agent loop |
 | `crates/ostra-exec-harness` | Harness executors: PTY, per-harness adapters, hook bridge, MCP stdio shim |
 | `crates/ostra-tools` | Read, Write, Edit, Bash, Grep, Glob, Skill, WebFetch, Report, Memory |

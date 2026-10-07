@@ -32,9 +32,9 @@ const TOKENS: [(&str, &str); 28] = [
     ("tool_code_map", "code:map"),
     ("tool_project_list", "manage_projects:list"),
     ("tool_project_create", "manage_projects:create"),
-    ("tool_subagent_list", "coordinate:list"),
-    ("tool_subagent_ask", "coordinate:ask"),
-    ("tool_subagent_reply", "coordinate:reply"),
+    ("tool_list_agents", "coordinate:list_agents"),
+    ("tool_send_message", "coordinate:send_message"),
+    ("tool_wait_for_message", "coordinate:wait_for_message"),
     ("tool_submit", "submit"),
 ];
 
@@ -65,7 +65,14 @@ fn capability_key(c: Capability) -> &'static str {
         Capability::WebSearch => "web_search",
         Capability::WebFetch => "web_fetch",
         Capability::Report => "report",
-        Capability::Document => "document",
+        Capability::DocumentResearch | Capability::DocumentSpec | Capability::DocumentPlan => {
+            "document"
+        }
+        // Grants of file ownership, which add no tool.
+        Capability::ReviewLedger
+        | Capability::SecurityBlock
+        | Capability::ProgressLog
+        | Capability::TestFiles => "",
         Capability::Memory => "memory",
         Capability::MemoryRecall => "memory_recall",
         Capability::DocsSearch => "docs_search",
@@ -90,8 +97,16 @@ impl Mapping {
         let value = self.capabilities.get(key)?.get(executor.tier_table())?;
         let mut v = value.replace("{agent}", &agent.snake());
         if let Some(op) = op {
-            let mut cap = op.to_string();
-            cap[..1].make_ascii_uppercase();
+            let cap: String = op
+                .split('_')
+                .map(|w| {
+                    let mut w = w.to_string();
+                    if let Some(f) = w.get_mut(..1) {
+                        f.make_ascii_uppercase();
+                    }
+                    w
+                })
+                .collect();
             v = v.replace("{op}", op).replace("{Op}", &cap);
         }
         Some(v)
@@ -134,7 +149,12 @@ impl Mapping {
             harness.display_name()
         ));
         out.push_str("| Capability | Tool |\n| --- | --- |\n");
-        let mut keys: Vec<&str> = caps.iter().map(|c| capability_key(*c)).collect();
+        let mut keys: Vec<&str> = vec![];
+        for k in caps.iter().map(|c| capability_key(*c)) {
+            if !k.is_empty() && !keys.contains(&k) {
+                keys.push(k);
+            }
+        }
         keys.push("submit");
         for key in &keys {
             let ops: Vec<&str> = match *key {
@@ -148,7 +168,7 @@ impl Mapping {
                     .collect(),
                 "coordinate" => ostra_core::coord::COORD_TOOLS
                     .iter()
-                    .map(|(name, _)| name.trim_start_matches("subagent_"))
+                    .map(|(name, _)| *name)
                     .collect(),
                 _ => vec![],
             };

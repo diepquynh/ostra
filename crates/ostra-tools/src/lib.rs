@@ -44,7 +44,11 @@ pub type LiveOutput = Arc<dyn Fn(&str, &str) + Send + Sync>;
 #[derive(Clone)]
 pub struct ToolEnvConfig {
     pub agent: AgentName,
+    /// Rule CA6: the typed documents the run is granted, which the Document tool writes.
+    pub doc_kinds: Vec<ostra_core::doc::DocKind>,
     pub repo_root: PathBuf,
+    /// Rule WD1: the project folders the run works in, the main one (`repo_root`) first.
+    pub work_dirs: Vec<ostra_core::exec::WorkDir>,
     /// Empty outside a workspace. Custom skills among its artifacts load by name.
     pub workspace_root: PathBuf,
     pub session_dir: PathBuf,
@@ -118,6 +122,26 @@ impl ToolOutput {
             is_error: true,
             ..Default::default()
         }
+    }
+}
+
+impl ToolEnvConfig {
+    /// Rule WD1: `repo_root`, then each other work dir that is not the same folder.
+    pub fn work_roots(&self) -> Vec<&Path> {
+        let mut roots: Vec<&Path> = vec![&self.repo_root];
+        for w in &self.work_dirs {
+            if !w.path.as_os_str().is_empty() && !roots.contains(&w.path.as_path()) {
+                roots.push(&w.path);
+            }
+        }
+        roots
+    }
+
+    /// Rule WD1: the work dirs other than `repo_root`, with their project keys.
+    pub fn other_work_dirs(&self) -> impl Iterator<Item = &ostra_core::exec::WorkDir> {
+        self.work_dirs
+            .iter()
+            .filter(|w| !w.path.as_os_str().is_empty() && w.path != self.repo_root)
     }
 }
 
@@ -282,7 +306,7 @@ pub async fn execute(
 ) -> ToolOutput {
     let started = Instant::now();
     let mut input = call.input.clone();
-    if let Some(schema) = defs::input_schema(&call.tool, env.config().agent) {
+    if let Some(schema) = defs::input_schema(&call.tool, &env.config().doc_kinds) {
         ostra_core::args::coerce_json_strings(&mut input, &schema);
     }
     let input = &input;
@@ -384,6 +408,7 @@ pub(crate) mod testutil {
         let session = ostra_core::paths::canonical(&session).unwrap();
         ToolEnv::new(ToolEnvConfig {
             agent: AgentName::Implementer,
+            doc_kinds: vec![],
             report_file: Some(session.join("ostra-implementer-phase-1.md")),
             memory_db: session.join("memory/knowledge.sqlite3"),
             memory_source: "implementer x_test".into(),
@@ -396,6 +421,7 @@ pub(crate) mod testutil {
                 })
             }),
             repo_root: repo,
+            work_dirs: vec![],
             workspace_root: dir.to_path_buf(),
             session_dir: session,
             code: None,
@@ -403,6 +429,26 @@ pub(crate) mod testutil {
             manage: None,
             coord: None,
         })
+    }
+
+    /// Rule WD1: an env whose main work dir is `repo`, with one more work dir `api` at `dir/api`.
+    pub fn env_with_api(dir: &Path) -> ToolEnv {
+        let main = env_in(dir);
+        let api = dir.join("api");
+        std::fs::create_dir_all(&api).unwrap();
+        let api = ostra_core::paths::canonical(&api).unwrap();
+        let mut cfg = main.config().clone();
+        cfg.work_dirs = vec![
+            ostra_core::exec::WorkDir {
+                project: "web".into(),
+                path: cfg.repo_root.clone(),
+            },
+            ostra_core::exec::WorkDir {
+                project: "api".into(),
+                path: api,
+            },
+        ];
+        ToolEnv::new(cfg)
     }
 
     pub async fn run(env: &ToolEnv, tool: &str, input: serde_json::Value) -> ToolOutput {

@@ -37,7 +37,7 @@ use ostra_core::config::{
     GlobalConfig, ProjectEntry, ProjectProfile, ResolvedRoute, WorkspaceSettings, load_toml,
     save_toml,
 };
-use ostra_core::coord::{CoordReply, RunEnd, SUBAGENT_REPLY};
+use ostra_core::coord::{CoordReply, SEND_MESSAGE};
 use ostra_core::event::{ExecPurpose, SessionOptions};
 use ostra_core::exec::{
     CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
@@ -49,7 +49,7 @@ use ostra_core::model::Effort;
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, PolicyDecision, RuleRef, ToolCall};
 use ostra_core::submit::ReportSubmit;
-use ostra_engine::factory::AgentsFactory;
+use ostra_default_plugin::factory::AgentsFactory;
 use ostra_engine::state::SessionState;
 use ostra_engine::{Engine, Notice, Services, SpawnFactory};
 use ostra_exec_native::NativeExecutor;
@@ -746,27 +746,29 @@ impl Router {
             native_session_id: None,
             error: None,
         };
-        // A question from a live run gets a plain answer, so the asker goes on.
-        if kind == "consult" || st.owed_by(&spec.id).is_some() {
+        // Rule SM6: a sender that waits gets a plain reply, so it goes on; a run continued only
+        // for its messages ends there.
+        let owed = st.owed_by(&spec.id);
+        if !owed.is_empty() || kind == "message" {
             let text = "Nothing to add beyond my report.";
             host.record_message("assistant", &text_blocks(text));
             let (engine, session) = self.slot.get().unwrap();
-            return match engine.coordinate(
-                session,
-                &spec.id,
-                SUBAGENT_REPLY,
-                &json!({"message": text}),
-            ) {
-                Ok(CoordReply { end, .. }) => ok(
-                    if end == RunEnd::Wait {
-                        ExecutionStatus::Waiting
-                    } else {
-                        ExecutionStatus::Ok
-                    },
-                    ostra_core::coord::end_payload(SUBAGENT_REPLY, text),
-                ),
-                Err(e) => ExecutionResult::error(format!("eval: the reply was refused: {e}")),
-            };
+            for to in &owed {
+                if let Err(e) = engine.coordinate(
+                    session,
+                    &spec.id,
+                    SEND_MESSAGE,
+                    &json!({"message": text, "to": to.as_str()}),
+                ) {
+                    return ExecutionResult::error(format!("eval: the reply was refused: {e}"));
+                }
+            }
+            if kind == "message" {
+                return ok(
+                    ExecutionStatus::Ok,
+                    ostra_core::coord::end_payload(SEND_MESSAGE, text),
+                );
+            }
         }
         host.record_message("assistant", &text_blocks("Done."));
         let write = |path: &Path, text: &str| {
@@ -1040,6 +1042,9 @@ struct EvalServices {
 
 #[async_trait::async_trait]
 impl Services for EvalServices {
+    fn pipeline(&self) -> std::sync::Arc<dyn ostra_engine::pipeline::Pipeline> {
+        ostra_default_plugin::pipeline()
+    }
     fn global(&self) -> GlobalConfig {
         let mut g = GlobalConfig::default();
         if let Some(t) = g.tiers.get_mut("native") {
@@ -1236,6 +1241,7 @@ async fn run_session(
         case: case.clone(),
     });
     let db = WorkspaceDb::open_in_memory().unwrap();
+    ostra_default_plugin::install();
     let engine = Engine::new(ws.clone(), WorkspaceId::new(), db, services);
     let summary = engine
         .create_session(CreateSession {
@@ -1250,6 +1256,7 @@ async fn run_session(
             files: vec![],
             uploads: vec![],
             docs_book: None,
+            workflow: None,
         })
         .unwrap();
     let session = summary.id.clone();

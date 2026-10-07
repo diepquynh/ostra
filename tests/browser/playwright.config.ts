@@ -1,6 +1,5 @@
-import fs from "node:fs";
 import { defineConfig } from "@playwright/test";
-import { CHROME, EVIL_HOST } from "./lib/env";
+import { BROWSER, EVIL_HOST } from "./lib/env";
 
 export default defineConfig({
   testDir: "specs",
@@ -16,7 +15,7 @@ export default defineConfig({
     headless: true,
     trace: "retain-on-failure",
     launchOptions: {
-      executablePath: fs.existsSync(CHROME) ? CHROME : undefined,
+      ...BROWSER,
       args: [`--host-resolver-rules=MAP ${EVIL_HOST} 127.0.0.1`],
     },
   },

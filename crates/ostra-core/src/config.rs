@@ -2,7 +2,7 @@
 //! `<project>/.ostra/project.toml`. Route resolution and save-time validation live here, because a
 //! route that does not resolve is a settings error shown at save time, not at spawn time.
 
-use crate::agent::{AgentName, JUDGE_ROUTE, RETIRED_AGENTS, route_keys};
+use crate::agent::{AgentName, JUDGE_ROUTE, RETIRED_AGENTS};
 use crate::executor::{ExecutorKind, HarnessKind};
 use crate::model::{Complexity, Effort, Tier};
 use crate::slug::{is_project_key, is_stack_name, stack_issue};
@@ -555,6 +555,9 @@ pub struct WorkspaceSettings {
     pub sandbox_blocked_ports: Vec<u16>,
     /// External MCP servers whose tools every executor can call (HANDOVER 10.6).
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Rule PL1: out-of-process plugins that add agents and workflow stage logic (HANDOVER 10.10).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<crate::plugin::PluginConfig>,
 }
 
 /// `[[mcp_servers]]`: one external MCP server. Set `command` for a local server Ostra starts
@@ -959,7 +962,6 @@ impl WorkspaceSettings {
             ("code-reviewer", "balanced"),
             ("execution-path-analyzer", "balanced"),
             ("documentation", "advanced"),
-            ("system-architecture", "advanced"),
             ("prompt-generation", "advanced"),
             ("initializer", "balanced"),
             ("judge", "advanced"),
@@ -1003,6 +1005,7 @@ impl WorkspaceSettings {
             sandbox_loopback: LoopbackAccess::Open,
             sandbox_blocked_ports: vec![],
             mcp_servers: vec![],
+            plugins: vec![],
         }
     }
 
@@ -1151,24 +1154,21 @@ fn model_choice<'w>(
         .or_else(|| ws.routing.model.by_agent.get(key))
 }
 
-/// Route keys with no model route on some complexity. Each is a validation error that `default`
-/// fixes, because every agent has a default tier; it happens when a new agent ships and a
-/// workspace saved before it has no entry for it.
-pub fn keys_without_route(ws: &WorkspaceSettings) -> Vec<&'static str> {
-    route_keys()
-        .into_iter()
-        .filter(|key| {
-            let by_complexity = AgentName::ALL
-                .iter()
-                .any(|a| a.as_str() == *key && a.routes_by_complexity());
-            if by_complexity {
+/// Route keys with no model route on some complexity. Each resolves to the agent's default tier
+/// (Rule CA4); Ostra offers to write `default` for each, so the settings say it outright.
+pub fn keys_without_route<'a>(ws: &WorkspaceSettings, agents: &'a [AgentRoute]) -> Vec<&'a str> {
+    agents
+        .iter()
+        .filter(|a| {
+            if a.per_phase {
                 Complexity::ALL
                     .iter()
-                    .any(|c| model_choice(ws, key, Some(*c)).is_none())
+                    .any(|c| model_choice(ws, &a.name, Some(*c)).is_none())
             } else {
-                model_choice(ws, key, None).is_none()
+                model_choice(ws, &a.name, None).is_none()
             }
         })
+        .map(|a| a.name.as_str())
         .collect()
 }
 
@@ -1199,12 +1199,10 @@ pub fn resolve_route(
     if let Some(tier) = q.tier_override {
         return from_tier(tier);
     }
-    let choice = model_choice(ws, q.key, q.complexity).ok_or_else(|| {
-        RouteError(format!(
-            "`{}` has no model route. Add `{}` under `[routing.model.byAgent]` (a tier, `default`, or a model)",
-            q.key, q.key
-        ))
-    })?;
+    // Rule CA4: an agent without a route runs on its own default tier.
+    let Some(choice) = model_choice(ws, q.key, q.complexity) else {
+        return from_tier(q.default_tier);
+    };
     match choice {
         ModelChoice::Value(v) => {
             let v = v.trim();
@@ -1277,6 +1275,20 @@ pub struct Environment {
     pub installed_harnesses: Vec<HarnessKind>,
     /// Providers with a usable key.
     pub providers_with_keys: Vec<String>,
+    /// Rule CA1: every agent the workspace can run, which routes may name. Empty means the
+    /// built-in agents with no phase routing known.
+    pub agents: Vec<AgentRoute>,
+}
+
+/// What routing needs to know about one agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRoute {
+    pub name: String,
+    pub default_tier: Tier,
+    /// Rule CA5: its contract runs per plan phase, so routes may differ by phase complexity.
+    pub per_phase: bool,
+    /// Rule CA5: it returns answers, which run on the native executor only (HANDOVER 12.3).
+    pub native_only: bool,
 }
 
 /// Validate workspace settings against the global config. Returns every problem found.
@@ -1288,6 +1300,21 @@ pub fn validate_workspace(
 ) -> Vec<ValidationIssue> {
     let mut issues = vec![];
     let issue = |path: String, message: String| ValidationIssue { path, message };
+    let agents: Vec<AgentRoute> = if env.agents.is_empty() {
+        AgentName::ALL
+            .iter()
+            .map(|a| AgentRoute {
+                name: a.as_str().into(),
+                default_tier: default_tier(a.as_str()),
+                per_phase: false,
+                native_only: false,
+            })
+            .collect()
+    } else {
+        env.agents.clone()
+    };
+    let is_agent =
+        |key: &str| agents.iter().any(|a| a.name == key) || RETIRED_AGENTS.contains(&key);
 
     if ws.name.trim().is_empty() {
         issues.push(issue("name".into(), "The workspace needs a name.".into()));
@@ -1384,7 +1411,7 @@ pub fn validate_workspace(
     }
 
     for key in ws.routing.executor.by_agent.keys() {
-        if !route_keys().contains(&key.as_str()) && !RETIRED_AGENTS.contains(&key.as_str()) {
+        if !is_agent(key) && key != JUDGE_ROUTE {
             issues.push(issue(
                 format!("routing.executor.byAgent.{key}"),
                 format!("`{key}` is not an agent."),
@@ -1392,7 +1419,7 @@ pub fn validate_workspace(
         }
     }
     for key in ws.routing.model.by_agent.keys() {
-        if !route_keys().contains(&key.as_str()) && !RETIRED_AGENTS.contains(&key.as_str()) {
+        if !is_agent(key) && key != JUDGE_ROUTE {
             issues.push(issue(
                 format!("routing.model.byAgent.{key}"),
                 format!("`{key}` is not an agent."),
@@ -1400,9 +1427,7 @@ pub fn validate_workspace(
         }
     }
     for key in ws.routing.effort.by_agent.keys() {
-        if !AgentName::ALL.iter().any(|a| a.as_str() == key)
-            && !RETIRED_AGENTS.contains(&key.as_str())
-        {
+        if !is_agent(key) {
             issues.push(issue(
                 format!("routing.effort.byAgent.{key}"),
                 format!("`{key}` is not an agent."),
@@ -1410,17 +1435,16 @@ pub fn validate_workspace(
         }
     }
     for key in ws.routing.effort.by_phase_complexity.keys() {
-        if !AgentName::ALL
-            .iter()
-            .any(|a| a.as_str() == key && a.routes_by_complexity())
-        {
+        if !agents.iter().any(|a| &a.name == key && a.per_phase) {
             issues.push(issue(
                 format!("routing.effort.byPhaseComplexity.{key}"),
                 format!("`{key}` does not run per plan phase; set its effort under `byAgent`."),
             ));
         }
     }
-    crate::mcp::validate(&ws.mcp_servers, &mut issues);
+    let names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
+    crate::mcp::validate(&ws.mcp_servers, &names, &mut issues);
+    crate::plugin::validate(&ws.plugins, &mut issues);
     if ws.limits.max_parallel_executions == 0 {
         issues.push(issue(
             "limits.max_parallel_executions".into(),
@@ -1439,25 +1463,31 @@ pub fn validate_workspace(
             "Judge calls always run natively; remove this route.".into(),
         ));
     }
-    if ws
-        .routing
-        .executor
-        .by_agent
-        .get("quick-answer")
-        .is_some_and(|e| *e != ExecutorKind::Native)
-    {
-        issues.push(issue(
-            "routing.executor.byAgent.quick-answer".into(),
-            "Quick answers run on the native executor only; remove this route.".into(),
-        ));
+    for a in agents.iter().filter(|a| a.native_only) {
+        if ws
+            .routing
+            .executor
+            .by_agent
+            .get(&a.name)
+            .is_some_and(|e| *e != ExecutorKind::Native)
+        {
+            issues.push(issue(
+                format!("routing.executor.byAgent.{}", a.name),
+                "Answers run on the native executor only; remove this route.".into(),
+            ));
+        }
     }
 
     // Every route key, on every complexity, must resolve on the executor it would run on.
-    for key in route_keys() {
-        let complexities: Vec<Option<Complexity>> = if AgentName::ALL
-            .iter()
-            .any(|a| a.as_str() == key && a.routes_by_complexity())
-        {
+    let judge = AgentRoute {
+        name: JUDGE_ROUTE.into(),
+        default_tier: default_tier(JUDGE_ROUTE),
+        per_phase: false,
+        native_only: false,
+    };
+    for a in agents.iter().chain(std::iter::once(&judge)) {
+        let key = a.name.as_str();
+        let complexities: Vec<Option<Complexity>> = if a.per_phase {
             Complexity::ALL.iter().copied().map(Some).collect()
         } else {
             vec![None]
@@ -1465,7 +1495,7 @@ pub fn validate_workspace(
         for c in complexities {
             let q = RouteQuery {
                 complexity: c,
-                ..RouteQuery::new(key, default_tier(key))
+                ..RouteQuery::new(key, a.default_tier)
             };
             match resolve_route(global, ws, q) {
                 Ok(route) => {
@@ -1815,15 +1845,24 @@ mod tests {
     #[test]
     fn a_key_with_no_route_is_found_for_the_fix() {
         let mut ws = WorkspaceSettings::seeded("x");
+        let agents: Vec<AgentRoute> = AgentName::ALL
+            .iter()
+            .map(|a| AgentRoute {
+                name: a.as_str().into(),
+                default_tier: Tier::Balanced,
+                per_phase: matches!(a, AgentName::Implementer | AgentName::WriteTest),
+                native_only: false,
+            })
+            .collect();
         assert!(
-            keys_without_route(&ws).is_empty(),
+            keys_without_route(&ws, &agents).is_empty(),
             "seeded settings route every agent"
         );
         ws.routing.model.by_agent.remove("advisor");
-        assert_eq!(keys_without_route(&ws), ["advisor"]);
+        assert_eq!(keys_without_route(&ws, &agents), ["advisor"]);
         ws.routing.model.by_phase_complexity.remove("implementer");
         assert_eq!(
-            keys_without_route(&ws),
+            keys_without_route(&ws, &agents),
             ["implementer", "advisor"],
             "an agent routed by complexity needs every complexity"
         );
@@ -1832,7 +1871,7 @@ mod tests {
             .by_agent
             .insert("implementer".into(), "default".into());
         assert_eq!(
-            keys_without_route(&ws),
+            keys_without_route(&ws, &agents),
             ["advisor"],
             "byAgent covers every complexity"
         );
@@ -1940,7 +1979,6 @@ fact-check = "advanced"
 code-reviewer = "balanced"
 execution-path-analyzer = "balanced"
 documentation = "advanced"
-system-architecture = "advanced"
 prompt-generation = "advanced"
 initializer = "balanced"
 judge = "advanced"
@@ -2022,6 +2060,7 @@ deny = ["Bash(git push *)"]
         let env = Environment {
             installed_harnesses: vec![],
             providers_with_keys: vec!["anthropic".into()],
+            agents: vec![],
         };
         let issues = validate_workspace(&GlobalConfig::default(), &ws, &env, tier);
         assert_eq!(
@@ -2060,18 +2099,20 @@ deny = ["Bash(git push *)"]
     }
 
     #[test]
-    fn missing_route_is_an_error() {
+    fn ca4_an_agent_without_a_route_runs_on_its_default_tier() {
         let mut ws = WorkspaceSettings::seeded("x");
         ws.routing.model.by_agent.remove("plan");
         let g = GlobalConfig::default();
-        assert!(resolve_route(&g, &ws, RouteQuery::new("plan", Tier::Advanced)).is_err());
+        let r = resolve_route(&g, &ws, RouteQuery::new("plan", Tier::Advanced)).unwrap();
+        assert_eq!(r.tier, Some(Tier::Advanced));
         let env = Environment {
             installed_harnesses: vec![],
             providers_with_keys: vec!["anthropic".into()],
+            agents: vec![],
         };
         let issues = validate_workspace(&g, &ws, &env, tier);
         assert!(
-            issues
+            !issues
                 .iter()
                 .any(|i| i.path == "routing.model.byAgent.plan")
         );
@@ -2084,6 +2125,7 @@ deny = ["Bash(git push *)"]
         let env = Environment {
             installed_harnesses: vec![],
             providers_with_keys: vec!["anthropic".into()],
+            agents: vec![],
         };
         assert_eq!(validate_workspace(&g, &ws, &env, tier), vec![]);
     }
@@ -2102,6 +2144,7 @@ deny = ["Bash(git push *)"]
         let env = Environment {
             installed_harnesses: vec![],
             providers_with_keys: vec!["anthropic".into()],
+            agents: vec![],
         };
         let paths: Vec<String> = validate_workspace(&GlobalConfig::default(), &ws, &env, tier)
             .into_iter()
@@ -2135,6 +2178,7 @@ deny = ["Bash(git push *)"]
         let env = Environment {
             installed_harnesses: vec![],
             providers_with_keys: vec!["anthropic".into()],
+            agents: vec![],
         };
         let paths: Vec<String> = validate_workspace(&GlobalConfig::default(), &ws, &env, tier)
             .into_iter()
@@ -2158,6 +2202,7 @@ deny = ["Bash(git push *)"]
         let env = Environment {
             installed_harnesses: vec![],
             providers_with_keys: vec!["anthropic".into()],
+            agents: vec![],
         };
         let issues = validate_workspace(&g, &ws, &env, tier);
         assert!(issues.iter().any(|i| i.message.contains("Codex")));
@@ -2248,6 +2293,15 @@ deny = ["Bash(git push *)"]
         let env = Environment {
             installed_harnesses: vec![],
             providers_with_keys: vec!["anthropic".into()],
+            agents: AgentName::ALL
+                .iter()
+                .map(|a| AgentRoute {
+                    name: a.as_str().into(),
+                    default_tier: tier(a.as_str()),
+                    per_phase: *a == AgentName::WriteTest,
+                    native_only: false,
+                })
+                .collect(),
         };
         let issues = validate_workspace(&GlobalConfig::default(), &ws, &env, tier);
         let paths: Vec<_> = issues.iter().map(|i| i.path.as_str()).collect();

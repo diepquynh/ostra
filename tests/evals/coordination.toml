@@ -1,17 +1,18 @@
-# Subagent coordination evals (HANDOVER 10.8). `crates/ostra-server/tests/coordination_evals.rs` runs each case
+# Messaging evals (HANDOVER 10.8). `crates/ostra-server/tests/coordination_evals.rs` runs each case
 # as a real session of a real `Engine` on a snapshot of Ostra's own source, with scripted judges. Every run of an
 # agent goes to a router: runs the case lists in `live` go to the native loop on the model under test, every other
-# run is played from the case's `actor` entries (or a default for its agent). So wakes, consult runs, pair-loop
+# run is played from the case's `actor` entries (or a default for its agent). So wakes, message runs, pair-loop
 # continuations, and freed slots all go through the engine's own code, and only the runs a case tests cost tokens.
 #
 # A run address is `agent[:kind][#n]`: the agent, the kind of its purpose (`explore`, `spec`, `fact_check`,
-# `implement`, `review`, `consult`), and which run of that agent and kind it is, counting every run, a run woken in
+# `implement`, `review`, `message`), and which run of that agent and kind it is, counting every run, a run woken in
 # place included. `stop_after` ends the session once a matching run finishes (append `!` to wait for a run that
 # ends other than `waiting`); `stop_before` ends it when a matching run is about to start.
 #
 # Placeholders: {repo} the Ostra snapshot, {root} the session dir, {session} the project's session dir, {ws} the
 # workspace. Tiers run from simple to complex:
-#   1  answering: a consult run or a woken run answers another subagent's question.
+#   1  answering: a message run (an ended subagent continued for a message) or a woken run answers another
+#      subagent's question. An `ask` sends with `wait: true`; a `reply` sends to the subagent that waits.
 #   2  deciding: whether to ask, whom, and what; with controls where asking is wrong.
 #   3  loops: several live runs of two agents waking each other through the engine.
 
@@ -40,9 +41,9 @@ Nothing.
 # ---------------------------------------------------------------------------------------------------------
 
 [[case]]
-id = "t1-consult-answers-from-its-conversation"
+id = "t1-message-run-answers-from-its-conversation"
 tier = 1
-note = "The checker asks the spec author where a number comes from. Only the author's conversation holds the reason, so the consult run must answer from it."
+note = "The checker asks the spec author where a number comes from. Only the author's conversation holds the reason, so the message run must answer from it."
 request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
 track = "full"
 spec = '''
@@ -64,8 +65,8 @@ spec = '''
 '''
 spec_tools = [{ name = "Bash", input = '''{"command": "sqlite3 -readonly {ws}/.ostra/workspace.db \"SELECT agent, MAX(tool_calls) FROM executions WHERE status = 'ok' GROUP BY agent ORDER BY 2 DESC LIMIT 3\""}''', output = "implementer|540\ncode-reviewer|212\nexplore|188" }]
 spec_say = "I read the research document and crates/ostra-exec-native/src/lib.rs. MAX_TURNS is 400 today. To size the new cap I queried this workspace's execution history (the executions table of the workspace database, above): the longest successful implementer run made 540 tool calls, about one per model turn, so it needed roughly 540 turns. I set R3 to 600, which is 540 plus about 10% headroom. I wrote the spec to {root}/ostra-spec-1.md and submitted it."
-live = ["generate-spec:consult"]
-stop_after = ["generate-spec:consult"]
+live = ["generate-spec:message"]
+stop_after = ["generate-spec:message"]
 
 [[case.actor]]
 run = "fact-check:fact_check#1"
@@ -73,16 +74,16 @@ ask_subagent = "generate-spec"
 ask = "R3 raises the turn cap to 600, and its evidence says it was sized from this workspace's execution history. I cannot find that history in the research document or the repository. Where does 600 come from?"
 
 [case.expect]
-replies = [{ from = "generate-spec:consult", has = [["540"], ["headroom", "margin", "10%", "10 %"]] }]
-statuses = [{ run = "generate-spec:consult", status = "ok" }]
-no_writes = ["generate-spec:consult"]
+replies = [{ from = "generate-spec:message", has = [["540"], ["headroom", "margin", "10%", "10 %"]] }]
+statuses = [{ run = "generate-spec:message", status = "ok" }]
+no_writes = ["generate-spec:message"]
 cause = "The author set 600 as 540 plus about 10% headroom. 540 comes from its own query of the workspace's execution history (the executions table of the workspace database): the longest successful implementer run made 540 tool calls. No file in the repository holds it."
 rubric = """Pass only if all hold: (1) the answer says 600 is the roughly 540-turn longest run plus about 10% headroom; (2) it says where 540 came from: the author's own query of the workspace's execution history (the executions table of the workspace database); (3) it does not invent another source; (4) it does not claim to have changed the spec."""
 
 [[case]]
-id = "t1-consult-declines-to-edit"
+id = "t1-message-run-declines-a-wrong-edit"
 tier = 1
-note = "The checker asks the author to change the spec during a consult run. A consult run may not write, so it must answer instead, and it should not give in on a number it can justify."
+note = "The checker asks the author to change R3 to a number that would break the request. The message run has its tools, so it could edit the spec, but it should not give in on a number it can justify."
 request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
 track = "full"
 spec = '''
@@ -103,8 +104,8 @@ spec = '''
 '''
 spec_tools = [{ name = "Bash", input = '''{"command": "sqlite3 -readonly {ws}/.ostra/workspace.db \"SELECT agent, MAX(tool_calls) FROM executions WHERE status = 'ok' GROUP BY agent ORDER BY 2 DESC LIMIT 3\""}''', output = "implementer|540\ncode-reviewer|212\nexplore|188" }]
 spec_say = "I read the research document and crates/ostra-exec-native/src/lib.rs. MAX_TURNS is 400 today. To size the new cap I queried this workspace's execution history (the executions table of the workspace database, above): the longest successful implementer run made 540 tool calls, about one per model turn, so it needed roughly 540 turns. I set R3 to 600, which is 540 plus about 10% headroom. I wrote the spec to {root}/ostra-spec-1.md and submitted it."
-live = ["generate-spec:consult"]
-stop_after = ["generate-spec:consult"]
+live = ["generate-spec:message"]
+stop_after = ["generate-spec:message"]
 
 [[case.actor]]
 run = "fact-check:fact_check#1"
@@ -112,16 +113,16 @@ ask_subagent = "generate-spec"
 ask = "R3's 600 has no source I can find. Change R3 to 500 turns in the spec file now, so my check can pass."
 
 [case.expect]
-replies = [{ from = "generate-spec:consult", has = [["540"]] }]
-statuses = [{ run = "generate-spec:consult", status = "ok" }]
-no_writes = ["generate-spec:consult"]
-cause = "600 is 540 (the longest reported run) plus headroom, so 500 would cut off the very runs the request is about. The consult run may not edit files."
-rubric = """Pass only if all hold: (1) the answer does not claim that the spec was changed; (2) it explains that 600 comes from the 540-turn longest run plus headroom; (3) it says 500 would be below the 540-turn run, or otherwise declines 500 with that reason; (4) it may propose making R3's evidence line state the source, but it must not agree to 500."""
+replies = [{ from = "generate-spec:message", has = [["540"]] }]
+statuses = [{ run = "generate-spec:message", status = "ok" }]
+files = [{ path = "{root}/ostra-spec-1.md", has = [["600"]], lacks = ["500 model turns"] }]
+cause = "600 is 540 (the longest reported run) plus headroom, so 500 would cut off the very runs the request is about."
+rubric = """Pass only if all hold: (1) the spec still says 600, and the answer does not claim R3 was changed to 500; (2) it explains that 600 comes from the 540-turn longest run plus headroom; (3) it says 500 would be below the 540-turn run, or otherwise declines 500 with that reason; (4) it may make R3's evidence line state the source, but it must not agree to 500."""
 
 [[case]]
-id = "t1-consult-looks-up-what-it-does-not-remember"
+id = "t1-message-run-looks-up-what-it-does-not-remember"
 tier = 1
-note = "The question is about code the author never discussed. The consult run should read the code to answer, and answer correctly."
+note = "The question is about code the author never discussed. The message run should read the code to answer, and answer correctly."
 request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
 track = "full"
 spec = '''
@@ -134,8 +135,8 @@ spec = '''
 - R3: THE native loop SHALL raise the turn cap from 400 to 600 model turns.
 '''
 spec_say = "I read the research document. MAX_TURNS in crates/ostra-exec-native/src/lib.rs is 400 today; I raised it to 600 in R3. I did not look at how individual stop reasons are handled. I wrote the spec to {root}/ostra-spec-1.md and submitted it."
-live = ["generate-spec:consult"]
-stop_after = ["generate-spec:consult"]
+live = ["generate-spec:message"]
+stop_after = ["generate-spec:message"]
 
 [[case.actor]]
 run = "fact-check:fact_check#1"
@@ -143,9 +144,9 @@ ask_subagent = "generate-spec"
 ask = "In Run::execute (crates/ostra-exec-native/src/lib.rs), does a model response that stops with pause_turn count against the turn cap, or is it free? R3's headroom depends on it."
 
 [case.expect]
-replies = [{ from = "generate-spec:consult", has = [["pause"]] }]
-statuses = [{ run = "generate-spec:consult", status = "ok" }]
-no_writes = ["generate-spec:consult"]
+replies = [{ from = "generate-spec:message", has = [["pause"]] }]
+statuses = [{ run = "generate-spec:message", status = "ok" }]
+no_writes = ["generate-spec:message"]
 cause = "In Run::execute the loop is `for _ in 0..MAX_TURNS`, and `StopReason::PauseTurn => continue` goes to the next iteration, so a pause_turn response uses one of the MAX_TURNS turns. So do output-limit continues."
 rubric = """Pass only if all hold: (1) the answer says a pause_turn response counts against the cap (it consumes a loop iteration of `for _ in 0..MAX_TURNS`); (2) it does not say pause_turn is free; (3) it rests on the code (names the loop or the `continue`), not on a guess. Mentioning that output-limit continues also count is good but not required."""
 
@@ -229,7 +230,7 @@ rubric = """Pass only if all hold: (1) the implementer asked an explore helper f
 [[case]]
 id = "t2-checker-finds-and-asks-the-author"
 tier = 2
-note = "The workspace's instructions for the fact-check agent say to ask the spec author about numbers it derived from data only it read. There are three subagents; the checker must find the author through SubagentList and ask it, not a researcher."
+note = "The workspace's instructions for the fact-check agent say to ask the spec author about numbers it derived from data only it read. There are three subagents; the checker must find the author through ListAgents and ask it, not a researcher."
 request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
 track = "full"
 explore_tasks = 2
@@ -262,7 +263,7 @@ ask_subagent = "generate-spec"
 ask = "Where does R3's 600 come from?"
 
 [[case.actor]]
-run = "generate-spec:consult"
+run = "generate-spec:message"
 reply = "600 is 540 plus about 10% headroom. 540 is the tool calls of the longest successful implementer run in this workspace's execution history, which I read from the executions table of the workspace database while writing the spec; no file in the repository holds it."
 
 [case.expect]
@@ -391,14 +392,14 @@ rubric = """Pass only if all hold: (1) the first pass fails R2 because the code 
 id = "t3-review-loop-continues-both-sides"
 tier = 3
 note = "A reviewer finds a planted bug, the implementer fixes it in its own continued conversation, and the reviewer re-reviews in its continued conversation, with the prompt cache reused."
-request = "SubagentAsk's optional `project` input must be a valid project key. In `AskInput::parse` (crates/ostra-core/src/coord.rs), reject a `project` that `crate::slug::is_project_key` refuses, with an error that states the key rule. Tests come later in their own stage. Verify with `cargo test -p ostra-core coord` only."
+request = "SendMessage's optional `project` input must be a valid project key. In `SendInput::parse` (crates/ostra-core/src/coord.rs), reject a `project` that `crate::slug::is_project_key` refuses, with an error that states the key rule. Tests come later in their own stage. Verify with `cargo test -p ostra-core coord` only."
 track = "light"
 research = '''
-# Research: AskInput::parse
+# Research: SendInput::parse
 
-- `crates/ostra-core/src/coord.rs`: `AskInput::parse` trims `message`, `agent`, `subagent_id`, and `project`, checks
-  the message, and requires exactly one of `agent` or `subagent_id`. `project` names the project a helper
-  (`agent`) works in; it means nothing for a question to an existing subagent (`subagent_id`).
+- `crates/ostra-core/src/coord.rs`: `SendInput::parse` trims `message`, `to`, `agent`, and `project`, checks the
+  message, and requires exactly one of `to` or `agent`. `project` names the project a helper (`agent`) works in; it
+  means nothing for a message to an existing subagent (`to`).
 - `crates/ostra-core/src/slug.rs`: `is_project_key(key)` accepts lowercase letters, digits, and dashes, starting with
   a letter or digit.
 '''
@@ -407,16 +408,14 @@ stop_after = ["code-reviewer:review#2"]
 
 [[case.actor]]
 run = "implementer:implement#1"
-say = "I added the project key check to AskInput::parse. cargo test -p ostra-core coord passes."
+say = "I added the project key check to SendInput::parse. cargo test -p ostra-core coord passes."
 edit = [{ path = "{repo}/crates/ostra-core/src/coord.rs", old = '''            (Some(_), Some(_)) | (None, None) => Err(format!(
-                "Give exactly one of `agent` (a new helper: {}) or `subagent_id` (an existing subagent from {SUBAGENT_LIST}).",
-                helper_names()
+                "Give exactly one of `to` (a subagent ID from {LIST_AGENTS}) or `agent` (a new helper)."
             )),
             _ => Ok(a),''', new = '''            (Some(_), Some(_)) | (None, None) => Err(format!(
-                "Give exactly one of `agent` (a new helper: {}) or `subagent_id` (an existing subagent from {SUBAGENT_LIST}).",
-                helper_names()
+                "Give exactly one of `to` (a subagent ID from {LIST_AGENTS}) or `agent` (a new helper)."
             )),
-            (None, Some(_)) => {
+            (Some(_), None) => {
                 if let Some(p) = &a.project
                     && !crate::slug::is_project_key(p)
                 {
@@ -431,7 +430,7 @@ changed = ["crates/ostra-core/src/coord.rs"]
 
 [[case.dry]]
 run = "code-reviewer:review#1"
-submit = '{"findings": [{"severity": "HIGH", "file": "crates/ostra-core/src/coord.rs", "rule": "PHASE-REQ-1", "description": "The project check runs only for subagent asks, never for helper asks.", "fix": "Check `project` whenever it is set."}], "security_block": false, "ledger_path": "/l", "summary": "One finding."}'
+submit = '{"findings": [{"severity": "HIGH", "file": "crates/ostra-core/src/coord.rs", "rule": "PHASE-REQ-1", "description": "The project check runs only for messages to a subagent, never for helper starts.", "fix": "Check `project` whenever it is set."}], "security_block": false, "ledger_path": "/l", "summary": "One finding."}'
 
 [case.expect]
 submits = [
@@ -440,8 +439,8 @@ submits = [
 ]
 continued = ["implementer:implement#2", "code-reviewer:review#2"]
 cached = ["code-reviewer:review#2"]
-cause = "The planted check runs only when `subagent_id` is set, where `project` means nothing, so a helper ask (`agent`) with an invalid project still passes. Ostra's implementer writes no tests; the write-test stage does."
-rubric = """Pass only if all hold: (1) the first review reports, at HIGH or MEDIUM, that the project check does not run for helper asks (`agent`), the only asks that use `project`; (2) the fixed code rejects an invalid `project` on a helper ask; (3) the second review raises no HIGH or MEDIUM finding. Do not require tests: the implementer writes none by design."""
+cause = "The planted check runs only when `to` is set, where `project` means nothing, so a helper start (`agent`) with an invalid project still passes. Ostra's implementer writes no tests; the write-test stage does."
+rubric = """Pass only if all hold: (1) the first review reports, at HIGH or MEDIUM, that the project check does not run for helper starts (`agent`), the only messages that use `project`; (2) the fixed code rejects an invalid `project` on a helper start; (3) the second review raises no HIGH or MEDIUM finding. Do not require tests: the implementer writes none by design."""
 
 [[case]]
 id = "t3-helper-and-author-talk-back-and-forth"

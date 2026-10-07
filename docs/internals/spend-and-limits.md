@@ -40,7 +40,7 @@ The two limits are on the General tab of Settings:
 ## Parallel executions: the slot limiter
 
 Each agent execution needs a slot before it starts. The limiter is a counter and a notifier on the engine of
-the workspace, in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs):
+the workspace, in [`crates/ostra-engine/src/runner/driver.rs`](../../crates/ostra-engine/src/runner/driver.rs):
 
 ```rust
 /// Wait for a slot under the workspace's parallelism limit, re-read each time so a settings
@@ -70,10 +70,10 @@ These rules tell which executions hold a slot:
 
 - **Holds a slot:** each agent execution that a session spawns, on all executors, native or harness. The limit
   is for each workspace. Thus, two sessions in the same workspace share it.
-- **Gives its slot back when it waits:** a harness run that asked a different subagent a question and waits with
-  a live process (Rule H2). It takes a slot again before Ostra types in the answer. A native run that asks
-  ends, so it holds nothing when it waits. Without this rule, a limit of one causes a problem. The asker holds
-  the only slot, and the helper that it waits for cannot start.
+- **Gives its slot back when it waits:** a harness run or a programmatic agent that paused for a message and
+  waits with a live process (Rule SM3). It takes a slot again before Ostra gives it the message. A native run that
+  pauses ends, so it holds nothing when it waits. Without this rule, a limit of one causes a problem. The waiting
+  run holds the only slot, and the run that it waits for cannot start.
 - **Does not hold a slot:** judge calls and side-panel quick answers. A judge call is one structured request
   that the engine makes between steps. A quick answer runs outside all sessions. Both are short, and by default
   they run on the `fast` or `balanced` tier.
@@ -159,14 +159,17 @@ To get the spend of the workspace over time, use `GET /api/workspaces/{ws}/cost`
 
 ### When the budget is checked
 
-The planner enforces the budget, not the executors. Each time before the planner emits a spawn, it compares
-the spend of the session with its limit. This occurs in `Planner::push` in
+The planner enforces the budget, not the executors. Each time before the planner emits a spawn or the model call
+of a workflow prompt node (`Step::RunNode` with `model: true`), it compares the spend of the session with its
+limit. This occurs in `Planner::push` in
 [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs):
 
 ```rust
 // Budget guard: once the session has spent its budget, no new execution starts until
 // the user raises it. Running executions finish.
-if matches!(step, Step::Spawn(_)) && let Some(budget) = self.ctx.budget_usd {
+if matches!(step, Step::Spawn(_) | Step::RunNode { model: true, .. })
+    && let Some(budget) = self.ctx.budget_usd
+{
     let limit = budget + self.s.budget_raised;
     let spent = self.s.spent_usd();
     if spent >= limit {
@@ -179,14 +182,15 @@ if matches!(step, Step::Spawn(_)) && let Some(budget) = self.ctx.budget_usd {
 
 Three details control this behavior:
 
-- **Spent means finished.** `SessionState::spent_usd` adds the cost of the executions that finished. Ostra
-  counts a running execution when it ends. Thus, the budget is a maximum that Ostra checks between executions.
-  Executions that run when the session gets to the limit run to the end. A spawn that already waited for a slot
-  still starts. A session can finish a small amount above its budget. The maximum excess is the spend of these
-  executions.
-- **Judge calls are not counted against it.** The budget covers agent executions. Judge calls are in the
-  displayed cost of the session, but they do not open the gate. They are small, and the session cannot
-  continue without them.
+- **Spent means finished.** `SessionState::spent_usd` adds the cost of the executions that finished. It also adds
+  the spend of workflow prompt nodes (`node_cost`, from each `NodeRan` event, Rule WB3). Ostra counts a running
+  execution when it ends. Thus, the budget is a maximum that Ostra checks between executions. Executions that
+  run when the session gets to the limit run to the end. A spawn that already waited for a slot still starts. A
+  session can finish a small amount above its budget. The maximum excess is the spend of these executions.
+- **Judge calls are not counted against it.** The budget covers agent executions and prompt nodes. Judge calls
+  are in the displayed cost of the session, but they do not open the gate. They are small, and the session cannot
+  continue without them. A prompt node uses the same judge path, but it counts, because a workflow can hold any
+  number of prompt nodes. A transform node calls no model, and the budget never holds it.
 - **The setting is read on every planning pass.** Each time the runner plans, it puts `session_budget_usd`
   into the context of the planner (`plan_ctx`). Thus, a budget that you change on the Settings screen applies
   to running sessions at their next step. A value of 0 removes the limit.
@@ -220,14 +224,23 @@ restarts and applies only to that session. Other sessions keep the budget of the
 
 In YOLO mode, the engine answers gates and does not wait for you: approvals, open questions, and failed
 executions. It does not answer the budget gate. Two places enforce this rule, so that one mistake cannot remove
-it. The planner skips budget gates when it emits YOLO answers. Also, `yolo_plan` in
-[`crates/ostra-engine/src/judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) returns no plan for a
-budget gate:
+it. Both places are in the engine, so the rule holds for every pipeline. The planner in
+[`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) emits no YOLO answer for a budget
+gate. Also, `perform_yolo` in
+[`crates/ostra-engine/src/runner/judges.rs`](../../crates/ostra-engine/src/runner/judges.rs) returns before it
+asks the pipeline for a plan:
 
 ```rust
-// Spending more is the user's decision, so YOLO leaves a budget gate open.
-GatePayload::BudgetReached { .. } => return None,
+// Pattern 8: spending more is the user's decision, whatever the pipeline says.
+if st.gates.get(&gate).is_some_and(|g| {
+    matches!(g.payload, ostra_core::event::GatePayload::BudgetReached { .. })
+}) {
+    return Ok(());
+}
 ```
+
+The engine also folds the budget gate itself. `SessionState::apply` records the open gate and the answer in
+`budget_gate` and `budget_raised`, and it does not give the gate to the pipeline.
 
 A YOLO session that gets to its budget waits for you, the same as all other sessions. If push notifications
 are on, the open gate sends a notification.
@@ -249,16 +262,34 @@ the budget and the slot limiter. The init flow has two caps:
 Each generated skill runs on the `advanced` tier. Thus, the second cap limits the most expensive part of init.
 Under YOLO, Ostra uses the defaults of the proposal with no change. Thus, the cap also applies under YOLO.
 
-Questions between subagents can also start runs, so they have their own caps (Rule H4):
+Messages between subagents can also start or wake runs, so they have their own caps (Rule SM5):
 
-- One run can start at most three explore helpers (`coord::MAX_HELPERS_PER_RUN`).
-- A session can ask at most 24 questions (`coord::MAX_SESSION_ASKS`).
+- One run can start at most three helpers (`coord::MAX_HELPERS_PER_RUN`).
+- The agents of a session can send at most 48 messages (`coord::MAX_SESSION_MESSAGES`). The result of a helper,
+  which Ostra sends, does not count.
 - A helper cannot start helpers. Thus, the fan-out has only one level.
 
-Helpers and the consult runs that answer a question go through the slot limiter and the budget guard, the same
-as all other spawns. A pair loop that continues a conversation is not a new fan-out. But a conversation that
-gets to six runs (`coord::MAX_CONVERSATION_RUNS`) starts again with no history. Each turn of a long
-conversation sends its full history again.
+Helpers, and the runs that continue an ended subagent for its messages, go through the slot limiter and the
+budget guard, the same as all other spawns. A pair loop that continues a conversation is not a new fan-out. But a
+conversation that gets to six runs (`coord::MAX_CONVERSATION_RUNS`) starts again with no history, because each
+turn of a long conversation sends its full history again. For the same reason, a subagent whose conversation
+already has six runs takes no message.
+
+Workflows add their own limits (Rule WF7):
+
+- A workflow holds at most 24 custom stages (`workflow::MAX_CUSTOM_STAGES`).
+- Each stage runs at most `max_rounds` times. A workflow file can set this value from 1 to 10
+  (`workflow::MAX_STAGE_ROUNDS`). The default is 3.
+
+After the last round, a stage that fails asks you and does not run again. YOLO does not answer that gate, because
+only you can decide to spend more on the stage. A plugin stage counts a decision to run past `max_rounds` as a
+failure. A `project` stage runs one time for each project in scope, and a `phase` stage one time for each passed
+phase. Each stage run goes through the slot limiter and the budget guard, the same as all other spawns. Thus,
+stages with the same dependencies that run at the same time never exceed `max_parallel_executions`.
+
+A programmatic agent is a plugin agent that runs in code. It has no turn count. Thus, its tool calls and model calls
+together have a cap of 2,000 for each run (`MAX_PROGRAM_CALLS` in `crates/ostra-exec-native/src/program.rs`). Its
+model calls run on the route of the agent and count toward the usage of the run and the spend of the session.
 
 The engine has other loop limits that limit spend:
 
@@ -297,10 +328,12 @@ because the running server holds the session. In that case, use the board or the
 | --- | --- |
 | `Limits` and their defaults, save-time checks | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
 | Limits kept in the registry (Rule A2) | [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs) |
-| Slot limiter, budget in `plan_ctx`, live cost updates, stop and pause | [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
+| Slot limiter, budget in `plan_ctx`, live cost updates, stop and pause | [`crates/ostra-engine/src/runner/`](../../crates/ostra-engine/src/runner/) |
 | Budget guard and the budget gate | `Planner::push` in [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) |
-| `spent_usd`, `budget_raised`, and how a raise folds | [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
-| YOLO handling of each gate | `yolo_plan` in [`crates/ostra-engine/src/judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) |
-| Init caps | [`crates/ostra-engine/src/init.rs`](../../crates/ostra-engine/src/init.rs) |
+| `spent_usd` and `budget_raised` | [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
+| How a raise folds | `SessionState::budget_answered` in [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
+| YOLO and the budget gate | `Planner::next_steps` in [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) and `perform_yolo` in [`crates/ostra-engine/src/runner/judges.rs`](../../crates/ostra-engine/src/runner/judges.rs) |
+| YOLO handling of each other gate | `yolo_leaves_open` and `yolo_plan` in [`crates/ostra-default-plugin/src/judge_input/yolo.rs`](../../crates/ostra-default-plugin/src/judge_input/yolo.rs) |
+| Init caps | [`crates/ostra-default-plugin/src/stages/init/planner.rs`](../../crates/ostra-default-plugin/src/stages/init/planner.rs) |
 | Prices and the cost formula | [`crates/ostra-core/src/pricing.rs`](../../crates/ostra-core/src/pricing.rs), [`crates/ostra-server/src/prices.rs`](../../crates/ostra-server/src/prices.rs) |
 | Harness transcript usage | [`crates/ostra-exec-harness/src/transcript.rs`](../../crates/ostra-exec-harness/src/transcript.rs) |

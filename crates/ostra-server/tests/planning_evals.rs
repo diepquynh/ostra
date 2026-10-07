@@ -41,8 +41,10 @@ use ostra_core::ids::{ExecutionId, SessionId, WorkspaceId};
 use ostra_core::model::Effort;
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, RuleRef, ToolCall};
-use ostra_engine::factory::AgentsFactory;
-use ostra_engine::state::{ExploreOrigin, SessionState};
+use ostra_default_plugin::data::ExploreOrigin;
+use ostra_default_plugin::data::OsExt;
+use ostra_default_plugin::factory::AgentsFactory;
+use ostra_engine::state::SessionState;
 use ostra_engine::{Engine, Notice, Services, SpawnFactory};
 use ostra_exec_native::NativeExecutor;
 use ostra_providers::{Providers, ScriptedProvider};
@@ -330,6 +332,8 @@ struct RunLog {
     calls: Vec<(String, Value)>,
     /// Document results: the output text and whether it was an error.
     documents: Vec<(String, bool)>,
+    /// Every failed tool call and every submit result: the tool, the output, and whether it was an error.
+    results: Vec<(String, String, bool)>,
     turns: usize,
     secs: f64,
 }
@@ -340,6 +344,7 @@ struct Tap {
     calls: Mutex<Vec<(String, Value)>>,
     tools: Mutex<HashMap<String, String>>,
     documents: Mutex<Vec<(String, bool)>>,
+    results: Mutex<Vec<(String, String, bool)>>,
     turns: Mutex<usize>,
 }
 
@@ -359,8 +364,12 @@ impl ExecutionHost for Tap {
                 is_error,
                 ..
             } => {
-                if self.tools.lock().get(call_id).map(String::as_str) == Some("Document") {
+                let tool = self.tools.lock().get(call_id).cloned().unwrap_or_default();
+                if tool == "Document" {
                     self.documents.lock().push((output.clone(), *is_error));
+                }
+                if *is_error || tool.starts_with("submit_") {
+                    self.results.lock().push((tool, output.clone(), *is_error));
                 }
             }
             ExecutionDelta::Turn { .. } => *self.turns.lock() += 1,
@@ -517,6 +526,8 @@ fn stage_of(agent: AgentName, st: &SessionState, exec: &ExecutionId) -> String {
         AgentName::Explore => {
             let helper = match rec.map(|x| &x.purpose) {
                 Some(ExecPurpose::Explore { task }) => st
+                    .ext
+                    .os()
                     .explore
                     .get(*task as usize)
                     .is_some_and(|t| matches!(t.origin, ExploreOrigin::Ask { .. })),
@@ -557,6 +568,7 @@ impl Executor for Router {
             calls: Mutex::new(vec![]),
             tools: Mutex::new(HashMap::new()),
             documents: Mutex::new(vec![]),
+            results: Mutex::new(vec![]),
             turns: Mutex::new(0),
         });
         let started = Instant::now();
@@ -616,6 +628,7 @@ impl Executor for Router {
             usage: result.usage,
             calls: tap.calls.lock().clone(),
             documents: tap.documents.lock().clone(),
+            results: tap.results.lock().clone(),
             turns: *tap.turns.lock(),
             secs: started.elapsed().as_secs_f64(),
         });
@@ -691,6 +704,9 @@ impl EvalServices {
 
 #[async_trait::async_trait]
 impl Services for EvalServices {
+    fn pipeline(&self) -> std::sync::Arc<dyn ostra_engine::pipeline::Pipeline> {
+        ostra_default_plugin::pipeline()
+    }
     fn global(&self) -> GlobalConfig {
         let mut g = GlobalConfig::default();
         if let Some(t) = g.tiers.get_mut("native") {
@@ -857,6 +873,7 @@ async fn run_session(
         slot: slot.clone(),
     });
     let db = WorkspaceDb::open_in_memory().unwrap();
+    ostra_default_plugin::install();
     let engine = Engine::new(ws.clone(), WorkspaceId::new(), db, services);
     let summary = engine
         .create_session(CreateSession {
@@ -869,6 +886,7 @@ async fn run_session(
             files: vec![],
             uploads: vec![],
             docs_book: None,
+            workflow: None,
         })
         .unwrap();
     let session = summary.id.clone();
@@ -1339,6 +1357,7 @@ fn run_json(r: &RunLog) -> Value {
         "cache_write_tokens": r.usage.cache_write_tokens, "output_tokens": r.usage.output_tokens,
         "seconds": r.secs, "tool_calls": r.calls.iter().map(|(t, i)| format!("{t} {}", clip(&i.to_string(), 400))).collect::<Vec<_>>(),
         "document_results": r.documents.iter().map(|(t, e)| json!({"error": e, "text": clip(t, 2000)})).collect::<Vec<_>>(),
+        "tool_results": r.results.iter().map(|(t, o, e)| json!({"tool": t, "error": e, "text": clip(o, 2000)})).collect::<Vec<_>>(),
     })
 }
 

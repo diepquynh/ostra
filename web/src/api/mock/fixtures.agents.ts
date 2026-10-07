@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentName, Capability, Effort, ExecutorKind, Tier } from "../types";
+import type { AgentInfo, AgentName, Capability, Contract, Effort, ExecutorKind, Tier } from "../types";
 
 const NATIVE: Record<Tier, string> = {
   fast: "anthropic:claude-haiku-4-5-20251001",
@@ -104,14 +104,6 @@ const ROWS: Row[] = [
     { executor: "native", tier: "advanced" },
   ],
   [
-    "system-architecture",
-    "Writes the architecture of a book of two or more projects.",
-    "advanced",
-    [...READ, "shell"],
-    "high",
-    { executor: "native", tier: "advanced" },
-  ],
-  [
     "prompt-generation",
     "Writes prompts, skills, and agent definitions.",
     "advanced",
@@ -145,7 +137,23 @@ const route = (executor: ExecutorKind, tier: Tier) => ({
 
 const label = (n: string) => n.charAt(0).toUpperCase() + n.slice(1).replace(/-/g, " ");
 
-export const agents: AgentInfo[] = ROWS.map(([name, description, tier, capabilities, effort, current]) => ({
+const RETURNS: Record<string, Contract> = {
+  advisor: "advice",
+  "code-reviewer": "review",
+  documentation: "documentation",
+  "execution-path-analyzer": "path-analysis",
+  explore: "research",
+  "fact-check": "fact-check",
+  "generate-spec": "spec",
+  implementer: "implementation",
+  initializer: "setup",
+  plan: "plan",
+  "prompt-generation": "prompt",
+  "quick-answer": "answer",
+  "write-test": "tests",
+};
+
+const builtinAgents: AgentInfo[] = ROWS.map(([name, description, tier, capabilities, effort, current]) => ({
   name,
   label: label(name),
   description,
@@ -162,6 +170,32 @@ export const agents: AgentInfo[] = ROWS.map(([name, description, tier, capabilit
   timeout_secs: name === "quick-answer" ? 300 : 1800,
   resolved: route(current.executor, current.tier),
   default_route: route(current.executor, tier),
+  source: { kind: "ostra" },
+  returns: RETURNS[name] ?? "stage",
+  write_scope: capabilities.includes("write") ? "project" : "session",
+  helper: name === "explore",
+  programmatic: false,
 }));
+
+export const agents: AgentInfo[] = [
+  ...builtinAgents,
+  {
+    name: "security-auditor",
+    label: "Security auditor",
+    description: "Audits changed files for secrets and unsafe input handling.",
+    default_tier: "balanced",
+    effort: {},
+    default_effort: "high",
+    capabilities: READ,
+    timeout_secs: 1200,
+    resolved: route("native", "balanced"),
+    default_route: route("native", "balanced"),
+    source: { kind: "workspace", file: ".ostra/agents/security-auditor.md" },
+    returns: "stage",
+    write_scope: "session",
+    helper: false,
+    programmatic: false,
+  },
+];
 
 export const stacks = ["go", "java-spring", "python", "typescript-node"];

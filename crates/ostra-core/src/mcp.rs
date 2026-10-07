@@ -99,7 +99,7 @@ pub fn serves(server: &McpServerConfig, agent: AgentName) -> bool {
 }
 
 /// Save-time checks of `mcp_servers`.
-pub fn validate(servers: &[McpServerConfig], issues: &mut Vec<ValidationIssue>) {
+pub fn validate(servers: &[McpServerConfig], agents: &[&str], issues: &mut Vec<ValidationIssue>) {
     let mut push = |path: String, message: String| issues.push(ValidationIssue { path, message });
     let mut seen = std::collections::BTreeSet::new();
     for (i, s) in servers.iter().enumerate() {
@@ -165,7 +165,12 @@ pub fn validate(servers: &[McpServerConfig], issues: &mut Vec<ValidationIssue>) 
             );
         }
         for a in &s.agents {
-            if !AgentName::ALL.iter().any(|n| n.as_str() == a) {
+            let known = if agents.is_empty() {
+                AgentName::ALL.iter().any(|n| n.as_str() == a)
+            } else {
+                agents.contains(&a.as_str())
+            };
+            if !known {
                 push(format!("{at}.agents"), format!("`{a}` is not an agent."));
             }
         }
@@ -294,7 +299,7 @@ mod tests {
         bad.agents = vec!["nobody".into()];
         bad.timeout_secs = 0;
         let mut issues = vec![];
-        validate(&[ok.clone(), ok, bad], &mut issues);
+        validate(&[ok.clone(), ok, bad], &[], &mut issues);
         let paths: Vec<&str> = issues.iter().map(|i| i.path.as_str()).collect();
         assert_eq!(
             paths,

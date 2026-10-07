@@ -2,7 +2,7 @@
 
 export type PlanPhaseSubmit = { id: number, deliverable: string, 
 /**
- * Project key.
+ * Rule WD2: the project key, or a comma-separated list of keys with the main project first.
  */
 project: string, title: string, 
 /**
@@ -18,6 +18,6 @@ test_policy: string,
  */
 test_rationale: string | null, depends_on: Array<number>, 
 /**
- * Absolute path of the phase file.
+ * Absolute path of the phase file. Empty means the path Ostra renders for the phase.
  */
 file: string, };

@@ -18,7 +18,8 @@ YOLO session, the harness is a stub script, and the MCP server is a stub.
 - `npm run test:fast` skips the build, for reruns after a spec change. The site's pages still rebuild,
   because the test page names the fake's port; the console shot inside them does not.
 - `PW_KEEP_SERVER=1` leaves the scratch server running after the run (`/tmp/pw-browser/server.pid`).
-- `PW_CHROME=/path/to/chrome` overrides the Chromium binary (default: the cached `chromium-1217`).
+- `PW_CHROME=/path/to/chrome` overrides the Chromium binary (default: Playwright's own Chromium in new
+  headless mode, installed with `npx playwright install chromium`).
 
 Every test string would set `window.__pwned` or request `<fake>/canary/<id>` if it ran or loaded.
 The `guard` fixture (`lib/guard.ts`) fails a test on either, on any CSP violation on the app

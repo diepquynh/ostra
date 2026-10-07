@@ -281,6 +281,21 @@ pub fn workspace_runtime(workspace: &Path) -> PathBuf {
     workspace.join(RUNTIME_DIR)
 }
 
+/// Rule CA1: the workspace's custom agents, one markdown file each.
+pub fn workspace_agents_dir(workspace: &Path) -> PathBuf {
+    workspace_runtime(workspace).join("agents")
+}
+
+/// Rule WF1: the workspace's workflows, one TOML file each.
+pub fn workspace_workflows_dir(workspace: &Path) -> PathBuf {
+    workspace_runtime(workspace).join("workflows")
+}
+
+/// Rule WB7: the workspace's composite transform functions.
+pub fn workspace_transforms_dir(workspace: &Path) -> PathBuf {
+    workspace_runtime(workspace).join("transforms")
+}
+
 pub fn workspace_toml(workspace: &Path) -> PathBuf {
     workspace_runtime(workspace).join("workspace.toml")
 }
@@ -404,9 +419,9 @@ pub mod report {
     pub fn docs_request() -> String {
         "ostra-docs-request.md".into()
     }
-    /// The book's parts from this session, written by the engine for the architecture agent.
-    pub fn docs_parts() -> String {
-        "ostra-docs-parts.json".into()
+    /// Rule B10: the folder of the docs drafts the engine writes before each docs run.
+    pub fn docs_drafts() -> String {
+        "ostra-docs-drafts".into()
     }
     pub fn prompt_gen(n: u32) -> String {
         format!("ostra-prompt-gen-{n}.md")

@@ -8,7 +8,8 @@ plus the generic review categories, and submit concrete findings as structured d
 **Required invocation parameters:** `Changed files:`, `Change rationale:`, `Workspace root:`, `Repo root:`,
 `Session dir:`, `Repo key:`, `Phase:`, plus one of `Phase file:` / `No plan:`.
 Use the named files and rationale as context while keeping git as the source of truth. Read and write review
-state only under `Session dir:` and review only the worktree at `Repo root:`. Before the first tool call,
+state only under `Session dir:` and review only the worktrees of the folders listed in `Work dirs:` (or
+`Repo root:` alone). Run each version control command in the folder of the changed file. Before the first tool call,
 return `ERROR: missing required parameter {label}` for any absent named line. Never infer it.
 
 **Audience awareness:** Findings are consumed by smaller fix agents (implementer, write-test) that read
@@ -37,6 +38,7 @@ you mean. When a literal phrase is available, use it.
 | Term | Definition |
 | --- | --- |
 | **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.agents/skills/...` path and repo-relative source path in this file resolves against it. Run all git and build commands with it as the working directory (for example `git -C {repo-root} status`) so change detection targets the right repo. |
+| **work dirs** | The folders listed on the prompt's optional `Work dirs:` line, one `{repo key}: {absolute root}` per project, with the `Repo root:` project first. If the line is absent, `Repo root:` is your only work dir. Work only in the folders listed in `Work dirs:`. Use absolute paths for files outside `Repo root:`, and run the commands of each project from its own root. The brief's `Other work dirs` section gives the commands, skills, and instruction files of each other project. |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. |
 | **repo brief** | A `## Repo brief for code-reviewer` section at the end of your prompt, resolved for you from this repo's profile and inventory. It carries the **complete Review Rule Set** (every ID, rule text, severity, auto-fixable flag), the exact command strings, this repo's conventions, and the convention skill paths. It is your rule catalog. |
 | **repo profile / inventory** | `{repo-root}/.ostra/project.toml` and `{repo-root}/.ostra/INVENTORY.md`. Your brief already carries the rule set and commands. Open them only if the brief is absent or a rule you need is missing from it. |

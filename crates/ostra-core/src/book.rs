@@ -1,7 +1,6 @@
 //! Documentation books (HANDOVER 8.5): what the docs stage writes into the workspace. A book
-//! covers a set of projects. Each project is one part of sections and sub-sections, and a book of
-//! two or more projects also has a system architecture. The engine writes every book file from the
-//! agents' submit payloads; no agent writes one (Rule B5).
+//! covers a set of projects, and each project is one part of pages. The engine writes every book
+//! file from the agents' submit payloads; no agent writes one (Rule B5).
 
 use crate::paths;
 use crate::submit::{StuckInfo, SubmitStatus};
@@ -9,7 +8,7 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use ts_rs::TS;
@@ -22,15 +21,20 @@ pub const MAX_SEQUENCE_MESSAGES: usize = 20;
 pub const MAX_FLOWCHART_NODES: usize = 15;
 /// Longest book ID, so a book folder name stays short on every file system.
 pub const MAX_BOOK_ID: usize = 80;
-/// Rule B9: tracked source one documentation writer covers. A project at or under it gets one
-/// writer, because the one-writer book of a large repository answered 127 of 221 questions and
-/// the book written per crate answered 220. A writer given six small crates in 858 KB wrote only
-/// 7 sections, so the target stays well under that.
-pub const AREA_TARGET_BYTES: u64 = 384 * 1024;
-/// Rule B9: writers one project's part may fan out to. On a repository larger than
-/// `AREA_TARGET_BYTES * MAX_DOCS_AREAS` the cap, not the target, sets each writer's share.
-pub const MAX_DOCS_AREAS: usize = 20;
+/// Rule B11: the key of the book part for the flows, contracts, and setups that span projects. No
+/// project key can take it, because project keys start with a letter or a digit.
+pub const CROSS_PART: &str = "_cross";
+/// Rule B10: the key that a session-wide docs run carries in place of a project key.
+pub const SESSION_DOCS: &str = "_session";
 
+/// Rule B11: the name of a part as a reader sees it.
+pub fn part_label(part: &str) -> String {
+    if part == CROSS_PART {
+        "Across projects".into()
+    } else {
+        part.to_string()
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
@@ -49,46 +53,13 @@ pub struct Diagram {
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema, Default)]
-#[ts(export)]
-pub struct Boundaries {
-    /// What this part of the code is responsible for.
-    #[serde(default)]
-    pub owns: Vec<String>,
-    /// What it leaves to other parts, each naming the part that owns it.
-    #[serde(default)]
-    pub does_not_own: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct BusinessStep {
-    /// Who acts: a user role, a service, or a component.
-    pub actor: String,
-    pub action: String,
-    /// What is true after the step.
-    pub outcome: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct DocTable {
-    pub title: String,
-    pub columns: Vec<String>,
-    /// Each row has one cell per column.
-    pub rows: Vec<Vec<String>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct Concern {
-    pub component: String,
-    pub responsibility: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[ts(export)]
 pub struct CodeRef {
+    /// Rule B11: the project whose folder holds `path`. Absent means the project of the page's part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<String>,
     /// Project-relative path, `/`-separated.
     pub path: String,
     #[serde(default)]
@@ -110,144 +81,186 @@ pub struct GlossaryEntry {
     pub code_ref: Option<String>,
 }
 
-/// One unit of work in a section. Same fields as a section, without sub-sections (Rule B1).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct DocSubsection {
-    /// Lowercase slug, unique in the submit.
-    pub id: String,
-    pub title: String,
-    pub purpose: String,
-    #[serde(default)]
-    pub boundaries: Boundaries,
-    pub assumptions: Vec<String>,
-    #[serde(default)]
-    pub business_flow: Vec<BusinessStep>,
-    #[serde(default)]
-    pub diagrams: Vec<Diagram>,
-    #[serde(default)]
-    pub tables: Vec<DocTable>,
-    #[serde(default)]
-    pub concerns: Vec<Concern>,
-    #[serde(default)]
-    pub code_refs: Vec<CodeRef>,
-}
-
-/// One work section of a project (Rule B1).
+/// One page of a project's part (Rule B1). The writer picks the page's topic and structure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[ts(export)]
 pub struct DocSection {
     /// Lowercase slug, unique in the submit.
     pub id: String,
     pub title: String,
-    pub purpose: String,
-    #[serde(default)]
-    pub boundaries: Boundaries,
-    pub assumptions: Vec<String>,
-    #[serde(default)]
-    pub business_flow: Vec<BusinessStep>,
-    #[serde(default)]
-    pub diagrams: Vec<Diagram>,
-    #[serde(default)]
-    pub tables: Vec<DocTable>,
-    #[serde(default)]
-    pub concerns: Vec<Concern>,
+    /// One or two sentences: what a reader learns on the page. The index shows it.
+    pub summary: String,
+    /// The page as Markdown. Headings start at `##`, and diagrams are `mermaid` code blocks.
+    pub body: String,
+    /// The files a reader opens after the page. The page shows them last.
     #[serde(default)]
     pub code_refs: Vec<CodeRef>,
+    /// Rule B10: the group the page belongs to in the book's contents, such as `Security`.
     #[serde(default)]
-    pub subsections: Vec<DocSubsection>,
+    pub group: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+/// Rule B10: which step of the docs stage a `submit_documentation` call answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema, Default)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
-pub enum LinkMode {
-    Sync,
-    Async,
+pub enum DocsStep {
+    /// One writer for the whole part, as in a log from before the docs pipeline.
+    #[default]
+    Part,
+    /// The inventory of what is available, and the page plan.
+    Survey,
+    /// One page, written or revised.
+    Page,
+    /// One synthesis pass over every draft.
+    Synthesis,
 }
 
+impl DocsStep {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DocsStep::Part => "part",
+            DocsStep::Survey => "survey",
+            DocsStep::Page => "page",
+            DocsStep::Synthesis => "synthesis",
+        }
+    }
+}
+
+/// Rule B10: one thing the book must cover, found by the survey.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[ts(export)]
-pub struct Component {
-    /// Unique among the components; links name it.
+pub struct InventoryItem {
+    /// Lowercase slug, unique in the inventory.
+    pub id: String,
+    /// The feature, subsystem, rule, setting family, or user source, in a few words.
     pub name: String,
-    /// The workspace project that holds it, or empty for an external system.
+    /// Where it lives: project-relative paths, user sources, artifacts, or memory lessons.
+    pub sources: Vec<String>,
+    /// The ID of the one page that owns it. Empty when it is out of scope.
     #[serde(default)]
-    pub project: String,
-    pub role: String,
-    /// Data and decisions only this component changes.
+    pub owner: String,
+    /// Why the book leaves it out.
     #[serde(default)]
-    pub owns: Vec<String>,
+    pub out_of_scope: Option<String>,
+    /// The setting keys, environment variables, and CLI flags that a user sets for it.
+    #[serde(default)]
+    pub settings: Vec<String>,
+    /// The code names that identify it on any page: its own functions, types, and constants.
+    #[serde(default)]
+    pub names: Vec<String>,
 }
 
+/// Rule B10: one page the survey plans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[ts(export)]
-pub struct Link {
-    pub from: String,
-    pub to: String,
-    /// For example `HTTP/JSON`, `gRPC`, `Kafka topic orders.v1`, `SQL`.
-    pub protocol: String,
-    pub mode: LinkMode,
-    /// What travels over the link.
-    pub payload: String,
+pub struct PlannedPage {
+    /// Lowercase slug, unique in the plan.
+    pub id: String,
+    pub title: String,
+    /// The group of the book's contents, such as `Get started`, `How it works`, or `Security`.
+    pub group: String,
+    /// What the page explains and where it stops.
+    pub covers: String,
+    /// What its writer reads first: project-relative paths, user sources, artifacts, or lessons.
+    #[serde(default)]
+    pub sources: Vec<String>,
+    /// Write the page in this session. A page that is not rewritten keeps its text from the book.
+    #[serde(default = "yes")]
+    pub rewrite: bool,
+    /// Rule B11: the part that holds the page: a project key, or `_cross` for a page that spans
+    /// projects. Absent in a survey of one project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub part: Option<String>,
 }
 
+/// Rule B11: the introduction of one part of the book, from a session-wide survey.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[ts(export)]
-pub struct FailureCase {
-    pub failure: String,
-    pub detection: String,
-    pub recovery: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct ScalingCase {
-    pub component: String,
-    pub scales_by: String,
-    /// The first limit it reaches, and what bounds it.
-    pub limit: String,
-}
-
-/// Rule B4: how the projects of a book work together.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct Architecture {
+pub struct PartOverview {
+    /// A project key, or `_cross`.
+    pub part: String,
     pub overview: String,
-    /// A flowchart of the components and their links.
-    pub diagram: Diagram,
-    pub components: Vec<Component>,
-    pub links: Vec<Link>,
-    pub failure_recovery: Vec<FailureCase>,
-    pub scalability: Vec<ScalingCase>,
 }
 
-/// `submit_documentation`: one project's part of the book.
+fn yes() -> bool {
+    true
+}
+
+/// Rule B10: one module of the project, from its module map or its source folders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DocsModule {
+    pub name: String,
+    /// Project-relative globs.
+    pub globs: Vec<String>,
+}
+
+/// Rule B10: one named constant in the source, a reference fact a reader looks up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RefItem {
+    pub name: String,
+    /// Project-relative path of the file that defines it.
+    pub file: String,
+}
+
+/// Rule B10: what a synthesis pass asks the writer of one page to change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export)]
+pub struct PageEdit {
+    pub page: String,
+    /// Each a specific change: what to add, remove, move to which page, or link.
+    pub instructions: Vec<String>,
+}
+
+/// Rule B10: one check of the definition of done, as a synthesis pass judged it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export)]
+pub struct DoneCheck {
+    pub check: String,
+    pub passed: bool,
+    #[serde(default)]
+    pub note: String,
+}
+
+/// `submit_documentation`: one step of the docs stage for one project (Rule B10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[ts(export)]
 pub struct DocumentationSubmit {
     pub status: SubmitStatus,
-    /// Two or three sentences for the user: what the part covers and what changed in it.
+    /// Rule B10: the step of the docs stage this call answers.
+    #[serde(default)]
+    pub step: DocsStep,
+    /// Two or three sentences for the user: what the step did.
     pub summary: String,
-    /// The project's introduction: what it does, for whom, and its main parts.
+    /// The project's introduction, from the survey. A session-wide survey writes the introduction
+    /// of the whole book here.
     #[serde(default)]
     pub overview: String,
+    /// Rule B11: a session-wide survey's introduction of each part.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<PartOverview>>", optional)]
+    pub part_overviews: Vec<PartOverview>,
+    /// The page of a page step, or every page of a whole-part writer.
     #[serde(default)]
     pub sections: Vec<DocSection>,
+    /// The survey's inventory.
     #[serde(default)]
-    pub glossary: Vec<GlossaryEntry>,
+    pub inventory: Vec<InventoryItem>,
+    /// The survey's page plan.
     #[serde(default)]
-    pub stuck: Option<StuckInfo>,
-}
-
-/// `submit_system_architecture`: the book's architecture.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct ArchitectureSubmit {
-    pub status: SubmitStatus,
-    pub summary: String,
+    pub pages: Vec<PlannedPage>,
+    /// A synthesis pass's changes for each page.
     #[serde(default)]
-    pub architecture: Option<Architecture>,
+    pub edits: Vec<PageEdit>,
+    /// A synthesis pass's judgment of the definition of done, check by check.
+    #[serde(default)]
+    pub checks: Vec<DoneCheck>,
+    /// A synthesis pass found the book done.
+    #[serde(default)]
+    pub done: bool,
     #[serde(default)]
     pub glossary: Vec<GlossaryEntry>,
     #[serde(default)]
@@ -260,43 +273,14 @@ pub struct ArchitectureSubmit {
 pub struct BookPart {
     pub project: String,
     pub overview: String,
+    /// Rule B9: a book written before free pages holds typed sections, which load as pages.
+    #[serde(deserialize_with = "legacy::sections")]
     pub sections: Vec<DocSection>,
     #[ts(type = "string")]
     pub updated_at: DateTime<Utc>,
-    /// Rule B9: the areas that wrote the part, in order, when more than one writer did.
+    /// Rule B10: the survey's inventory, so a later survey can update it.
     #[serde(default)]
-    pub areas: Vec<BookArea>,
-}
-
-/// Rule B9: one writer's slice of a large project, grouped from its module map.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct DocsArea {
-    /// Lowercase slug, unique in the project.
-    pub id: String,
-    /// The module-map areas it groups, joined with commas.
-    pub title: String,
-    /// Module-map globs the area covers.
-    pub globs: Vec<String>,
-    /// The area also covers every file no other area's globs match.
-    #[serde(default)]
-    pub rest: bool,
-    /// Bytes of tracked source it held when the stage was planned.
-    #[ts(type = "number")]
-    pub bytes: u64,
-}
-
-/// Rule B9: which sections of a part one area wrote, so a later session that rewrites some areas
-/// keeps the sections of the others.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct BookArea {
-    pub id: String,
-    pub title: String,
-    #[serde(default)]
-    pub overview: String,
-    /// Section IDs, in the part's order.
-    pub sections: Vec<String>,
+    pub inventory: Vec<InventoryItem>,
 }
 
 /// A documentation book as `book.json` holds it and `GET /api/workspaces/{ws}/docs/{book}` returns it.
@@ -313,8 +297,6 @@ pub struct Book {
     #[serde(default)]
     pub sessions: Vec<String>,
     #[serde(default)]
-    pub architecture: Option<Architecture>,
-    #[serde(default)]
     pub parts: Vec<BookPart>,
     /// Sorted by term.
     #[serde(default)]
@@ -330,7 +312,6 @@ pub struct BookSummary {
     #[ts(type = "string")]
     pub updated_at: DateTime<Utc>,
     pub sections: u32,
-    pub has_architecture: bool,
 }
 
 impl Book {
@@ -341,7 +322,6 @@ impl Book {
             projects: self.projects.clone(),
             updated_at: self.updated_at,
             sections: self.parts.iter().map(|p| p.sections.len() as u32).sum(),
-            has_architecture: self.architecture.is_some(),
         }
     }
 }
@@ -350,222 +330,67 @@ impl Book {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BookUpdate {
     pub session: String,
-    /// Each documented project's part as this session wrote it. For a project split into areas,
-    /// only the areas it rewrote, combined (see [`combine_areas`]).
-    pub parts: Vec<(String, DocumentationSubmit)>,
-    /// Rule B9: for each project split into areas, every planned area in order with the submit
-    /// this session wrote for it, or `None` to keep the area's sections from the book.
-    pub areas: BTreeMap<String, Vec<(DocsArea, Option<DocumentationSubmit>)>>,
-    pub architecture: Option<Architecture>,
+    /// Each documented project's part as this session wrote it.
+    pub parts: Vec<PartUpdate>,
+}
+
+/// Rule B6: one project's new part, as a book writer hands it to the engine. It replaces the
+/// project's part in the book.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PartUpdate {
+    pub project: String,
+    pub overview: String,
+    /// Every page of the part, in order.
+    pub pages: Vec<PageUpdate>,
+    /// Merged into the book's glossary by term, the newer definition kept.
     pub glossary: Vec<GlossaryEntry>,
+    /// What the book covers, so a later writer can update it. Kept as given.
+    pub inventory: Vec<InventoryItem>,
 }
 
-fn slug(s: &str) -> String {
-    let mut out = String::new();
-    for c in s.to_lowercase().chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c);
-        } else if !out.is_empty() && !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    let out = out.trim_end_matches('-');
-    let cut = out
-        .char_indices()
-        .map(|(i, _)| i)
-        .take_while(|i| *i <= 40)
-        .last()
-        .unwrap_or(0);
-    let out = if out.len() > 40 { &out[..cut] } else { out };
-    if out.is_empty() {
-        "area".into()
-    } else {
-        out.trim_end_matches('-').to_string()
-    }
+/// One page of a part update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageUpdate {
+    /// A page this session wrote.
+    Write(DocSection),
+    /// Keep the page with this ID from the book, under the group the writer gives it. A page the
+    /// book does not hold is left out.
+    Keep { id: String, group: String },
 }
 
-/// Rule B9: group a project's module-map areas into writer areas of about [`AREA_TARGET_BYTES`]
-/// of source each, keeping map order so neighbouring areas share a writer, at most
-/// [`MAX_DOCS_AREAS`]. `areas` holds each module-map area with its globs and measured bytes;
-/// `rest` is the bytes no glob matched. Empty means one writer for the whole project: the project
-/// is small, or only one area holds source.
-pub fn plan_areas(areas: &[(String, Vec<String>, u64)], rest: u64) -> Vec<DocsArea> {
-    struct Member<'a> {
-        name: &'a str,
-        globs: &'a [String],
-        bytes: u64,
-        rest: bool,
-    }
-    let mut members: Vec<Member> = areas
-        .iter()
-        .filter(|(_, _, b)| *b > 0)
-        .map(|(n, g, b)| Member {
-            name: n,
-            globs: g,
-            bytes: *b,
-            rest: false,
-        })
-        .collect();
-    if rest > 0 {
-        members.push(Member {
-            name: "other files",
-            globs: &[],
-            bytes: rest,
-            rest: true,
-        });
-    }
-    let total: u64 = members.iter().map(|m| m.bytes).sum();
-    if members.len() < 2 || total <= AREA_TARGET_BYTES {
-        return vec![];
-    }
-    let pack = |target: u64| -> Vec<Vec<&Member>> {
-        let mut groups: Vec<Vec<&Member>> = vec![];
-        let mut size = 0;
-        for m in &members {
-            if groups.is_empty() || (size + m.bytes > target && size > 0) {
-                groups.push(vec![]);
-                size = 0;
-            }
-            groups.last_mut().unwrap().push(m);
-            size += m.bytes;
-        }
-        groups
-    };
-    let mut target = AREA_TARGET_BYTES.max(total.div_ceil(MAX_DOCS_AREAS as u64));
-    let mut groups = pack(target);
-    while groups.len() > MAX_DOCS_AREAS {
-        target += target / 4;
-        groups = pack(target);
-    }
-    if groups.len() < 2 {
-        return vec![];
-    }
-    let mut seen = BTreeSet::new();
-    groups
-        .into_iter()
-        .map(|g| {
-            let names: Vec<&str> = g.iter().map(|m| m.name).collect();
-            let base = slug(names[0]);
-            let mut id = if g.len() > 1 {
-                format!("{base}-and-{}-more", g.len() - 1)
-            } else {
-                base
-            };
-            let mut n = 2;
-            while !seen.insert(id.clone()) {
-                id = format!(
-                    "{}-{n}",
-                    id.trim_end_matches(char::is_numeric).trim_end_matches('-')
-                );
-                n += 1;
-            }
-            DocsArea {
-                id,
-                title: names.join(", "),
-                globs: g.iter().flat_map(|m| m.globs.iter().cloned()).collect(),
-                rest: g.iter().any(|m| m.rest),
-                bytes: g.iter().map(|m| m.bytes).sum(),
-            }
-        })
-        .collect()
-}
-
-/// Rule B9: the areas' submits as one part: overviews in area order, each named after its area,
-/// then every section, with a section ID another area already used suffixed with the area's ID.
-pub fn combine_areas(areas: &[(&DocsArea, &DocumentationSubmit)]) -> DocumentationSubmit {
-    let mut seen = BTreeSet::new();
-    let mut sections = vec![];
-    let mut glossary = vec![];
-    let mut overviews = vec![];
-    let mut summaries = vec![];
-    for (area, sub) in areas {
-        if !sub.overview.trim().is_empty() {
-            overviews.push(format!("{}: {}", area.title, sub.overview.trim()));
-        }
-        summaries.push(sub.summary.trim().to_string());
-        for s in &sub.sections {
-            let mut s = s.clone();
-            s.id = unique_id(&mut seen, &s.id, &area.id);
-            sections.push(s);
-        }
-        glossary.extend(sub.glossary.iter().cloned());
-    }
-    DocumentationSubmit {
-        status: SubmitStatus::Ok,
-        summary: summaries.join(" "),
-        overview: overviews.join("\n\n"),
-        sections,
-        glossary,
-        stuck: None,
-    }
-}
-
-fn unique_id(seen: &mut BTreeSet<String>, id: &str, area: &str) -> String {
-    if seen.insert(id.to_string()) {
-        return id.to_string();
-    }
-    let mut candidate = format!("{id}-{area}");
-    let mut n = 2;
-    while !seen.insert(candidate.clone()) {
-        candidate = format!("{id}-{area}-{n}");
-        n += 1;
-    }
-    candidate
-}
-
-/// Rule B9: a project's new part from its planned areas: each rewritten area's sections, and each
-/// kept area's sections and overview from the old part.
-fn merge_areas(
-    project: &str,
+/// Rule B6: a project's new part: each written page, and each kept page from the old part. A
+/// kept page that a session-wide survey moved comes from the part that held it before.
+fn merge_part(
+    update: &PartUpdate,
     old: Option<&BookPart>,
-    areas: &[(DocsArea, Option<DocumentationSubmit>)],
+    before: &[BookPart],
     now: DateTime<Utc>,
 ) -> BookPart {
-    let mut seen = BTreeSet::new();
-    let mut sections = vec![];
-    let mut records = vec![];
-    for (area, sub) in areas {
-        let (overview, secs): (String, Vec<DocSection>) = match sub {
-            Some(sub) => (sub.overview.trim().to_string(), sub.sections.clone()),
-            None => {
-                let Some(rec) = old.and_then(|p| p.areas.iter().find(|a| a.id == area.id)) else {
-                    continue;
-                };
-                let old_secs = old.map(|p| p.sections.as_slice()).unwrap_or_default();
-                (
-                    rec.overview.clone(),
-                    rec.sections
-                        .iter()
-                        .filter_map(|id| old_secs.iter().find(|s| &s.id == id).cloned())
-                        .collect(),
-                )
-            }
-        };
-        let mut ids = vec![];
-        for mut s in secs {
-            s.id = unique_id(&mut seen, &s.id, &area.id);
-            ids.push(s.id.clone());
-            sections.push(s);
-        }
-        records.push(BookArea {
-            id: area.id.clone(),
-            title: area.title.clone(),
-            overview,
-            sections: ids,
-        });
-    }
-    let overview = records
+    let sections = update
+        .pages
         .iter()
-        .filter(|r| !r.overview.is_empty())
-        .map(|r| format!("{}: {}", r.title, r.overview))
-        .collect::<Vec<_>>()
-        .join("\n\n");
+        .filter_map(|p| match p {
+            PageUpdate::Write(s) => Some(s.clone()),
+            PageUpdate::Keep { id, group } => old
+                .and_then(|o| o.sections.iter().find(|s| &s.id == id))
+                .or_else(|| {
+                    before
+                        .iter()
+                        .flat_map(|o| o.sections.iter())
+                        .find(|s| &s.id == id)
+                })
+                .map(|s| DocSection {
+                    group: group.clone(),
+                    ..s.clone()
+                }),
+        })
+        .collect();
     BookPart {
-        project: project.to_string(),
-        overview,
+        project: update.project.clone(),
+        overview: update.overview.clone(),
         sections,
         updated_at: now,
-        areas: records,
+        inventory: update.inventory.clone(),
     }
 }
 
@@ -633,8 +458,7 @@ pub fn list(workspace: &Path) -> Vec<BookSummary> {
     out
 }
 
-/// Rule B6: a project's new part replaces its old one, a new architecture replaces the old one, and
-/// glossary entries merge by term with the newer definition kept.
+/// Rule B6: a project's new part replaces its old one, and glossary entries merge by term with the newer definition kept.
 pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTime<Utc>) -> Book {
     let mut book = existing.unwrap_or_else(|| Book {
         id: id.to_string(),
@@ -642,37 +466,24 @@ pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTim
         projects: vec![],
         updated_at: now,
         sessions: vec![],
-        architecture: None,
         parts: vec![],
         glossary: vec![],
     });
-    for (project, submit) in &update.parts {
+    let before = book.parts.clone();
+    for part in &update.parts {
         let old = book
             .parts
             .iter()
-            .position(|p| &p.project == project)
+            .position(|p| p.project == part.project)
             .map(|i| book.parts.remove(i));
-        let part = match update.areas.get(project) {
-            Some(areas) => merge_areas(project, old.as_ref(), areas, now),
-            None => BookPart {
-                project: project.clone(),
-                overview: submit.overview.clone(),
-                sections: submit.sections.clone(),
-                updated_at: now,
-                areas: vec![],
-            },
-        };
-        book.parts.push(part);
+        book.parts
+            .push(merge_part(part, old.as_ref(), &before, now));
     }
-    book.parts.sort_by(|a, b| a.project.cmp(&b.project));
-    if let Some(a) = &update.architecture {
-        book.architecture = Some(a.clone());
-    }
-    let incoming = update
-        .parts
-        .iter()
-        .flat_map(|(_, s)| s.glossary.iter())
-        .chain(update.glossary.iter());
+    // Rule B11: the project parts by key, then the part across projects.
+    book.parts.sort_by(|a, b| {
+        (a.project == CROSS_PART, &a.project).cmp(&(b.project == CROSS_PART, &b.project))
+    });
+    let incoming = update.parts.iter().flat_map(|p| p.glossary.iter());
     for entry in incoming {
         let key = entry.term.trim().to_lowercase();
         book.glossary
@@ -680,7 +491,12 @@ pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTim
         book.glossary.push(entry.clone());
     }
     book.glossary.sort_by_key(|g| g.term.to_lowercase());
-    let projects: BTreeSet<String> = book.parts.iter().map(|p| p.project.clone()).collect();
+    let projects: BTreeSet<String> = book
+        .parts
+        .iter()
+        .filter(|p| p.project != CROSS_PART)
+        .map(|p| p.project.clone())
+        .collect();
     book.projects = projects.into_iter().collect();
     book.title = format!("Documentation for {}", book.projects.join(", "));
     if !book.sessions.contains(&update.session) {
@@ -713,7 +529,7 @@ pub fn remove(workspace: &Path, id: &str) -> std::io::Result<()> {
     std::fs::remove_dir_all(book_dir(workspace, id))
 }
 
-/// Write `book.json` plus the Markdown agents read: `index.md`, `architecture.md`, `glossary.md`,
+/// Write `book.json` plus the Markdown agents read: `index.md`, `glossary.md`,
 /// and one file per section under `<project>/`. Files of sections that no longer exist are removed.
 pub fn write(workspace: &Path, book: &Book) -> std::io::Result<()> {
     let root = book_dir(workspace, &book.id);
@@ -734,18 +550,46 @@ pub fn write(workspace: &Path, book: &Book) -> std::io::Result<()> {
     )?;
     put("index.md".into(), render_index(book))?;
     put("glossary.md".into(), render_glossary(&book.glossary))?;
-    if let Some(a) = &book.architecture {
-        put("architecture.md".into(), render_architecture(a))?;
-    }
+    let homes: Vec<(&str, &str)> = book
+        .parts
+        .iter()
+        .flat_map(|p| {
+            p.sections
+                .iter()
+                .map(|s| (p.project.as_str(), s.id.as_str()))
+        })
+        .collect();
     for part in &book.parts {
         for s in &part.sections {
+            let s = DocSection {
+                body: relink(&s.body, &part.project, &homes),
+                ..s.clone()
+            };
             put(
                 Path::new(&part.project).join(format!("{}.md", s.id)),
-                render_section(&part.project, s),
+                render_section(&part.project, &s),
             )?;
         }
     }
     remove_stale(&root, &root, &keep)
+}
+
+/// Rule B11: a link to a page of another part, written `](page.md)`, points into that part's
+/// folder, because each part is its own folder of the book.
+fn relink(body: &str, part: &str, homes: &[(&str, &str)]) -> String {
+    static LINK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\]\(([a-z0-9][a-z0-9-]*)\.md").expect("valid regex"));
+    LINK.replace_all(body, |c: &regex::Captures| {
+        let id = &c[1];
+        if homes.contains(&(part, id)) {
+            return c[0].to_string();
+        }
+        match homes.iter().find(|(_, i)| *i == id) {
+            Some((home, _)) => format!("](../{home}/{id}.md"),
+            None => c[0].to_string(),
+        }
+    })
+    .into_owned()
 }
 
 fn remove_stale(root: &Path, dir: &Path, keep: &BTreeSet<PathBuf>) -> std::io::Result<()> {
@@ -799,176 +643,45 @@ fn diagram(out: &mut String, h: &str, d: &Diagram) {
     ));
 }
 
-struct Body<'a> {
-    purpose: &'a str,
-    boundaries: &'a Boundaries,
-    assumptions: &'a [String],
-    business_flow: &'a [BusinessStep],
-    diagrams: &'a [Diagram],
-    tables: &'a [DocTable],
-    concerns: &'a [Concern],
-    code_refs: &'a [CodeRef],
-}
-
-impl<'a> From<&'a DocSection> for Body<'a> {
-    fn from(s: &'a DocSection) -> Self {
-        Body {
-            purpose: &s.purpose,
-            boundaries: &s.boundaries,
-            assumptions: &s.assumptions,
-            business_flow: &s.business_flow,
-            diagrams: &s.diagrams,
-            tables: &s.tables,
-            concerns: &s.concerns,
-            code_refs: &s.code_refs,
-        }
+fn code_refs_table(out: &mut String, h: &str, refs: &[CodeRef]) {
+    if refs.is_empty() {
+        return;
     }
-}
-
-impl<'a> From<&'a DocSubsection> for Body<'a> {
-    fn from(s: &'a DocSubsection) -> Self {
-        Body {
-            purpose: &s.purpose,
-            boundaries: &s.boundaries,
-            assumptions: &s.assumptions,
-            business_flow: &s.business_flow,
-            diagrams: &s.diagrams,
-            tables: &s.tables,
-            concerns: &s.concerns,
-            code_refs: &s.code_refs,
-        }
-    }
-}
-
-/// Rule B1: the fixed order of a work section, with code references last.
-fn render_body(out: &mut String, level: usize, b: &Body) {
-    let h = "#".repeat(level);
-    out.push_str(&format!("{}\n\n", b.purpose.trim()));
-    if !b.boundaries.owns.is_empty() || !b.boundaries.does_not_own.is_empty() {
-        out.push_str(&format!("{h} Boundaries\n\n"));
-        if !b.boundaries.owns.is_empty() {
-            out.push_str("Owns:\n\n");
-            list_items(out, &b.boundaries.owns);
-        }
-        if !b.boundaries.does_not_own.is_empty() {
-            out.push_str("Does not own:\n\n");
-            list_items(out, &b.boundaries.does_not_own);
-        }
-    }
-    out.push_str(&format!("{h} Assumptions\n\n"));
-    list_items(out, b.assumptions);
-    if !b.business_flow.is_empty() {
-        out.push_str(&format!("{h} Business flow\n\n"));
-        table(
-            out,
-            &["Step", "Actor", "Action", "Outcome"],
-            b.business_flow.iter().enumerate().map(|(i, f)| {
-                vec![
-                    (i + 1).to_string(),
-                    f.actor.clone(),
-                    f.action.clone(),
-                    f.outcome.clone(),
-                ]
-            }),
-        );
-    }
-    for d in b.diagrams {
-        diagram(out, &h, d);
-    }
-    for t in b.tables {
-        out.push_str(&format!("{h} {}\n\n", t.title.trim()));
-        let cols: Vec<&str> = t.columns.iter().map(String::as_str).collect();
-        table(out, &cols, t.rows.iter().cloned());
-    }
-    if !b.concerns.is_empty() {
-        out.push_str(&format!("{h} Separation of concerns\n\n"));
-        table(
-            out,
-            &["Component", "Responsibility"],
-            b.concerns
-                .iter()
-                .map(|c| vec![c.component.clone(), c.responsibility.clone()]),
-        );
-    }
-    if !b.code_refs.is_empty() {
-        out.push_str(&format!("{h} Code references\n\n"));
-        table(
-            out,
-            &["Path", "Symbol", "Lines", "What it holds"],
-            b.code_refs.iter().map(|r| {
-                vec![
-                    format!("`{}`", r.path),
-                    r.symbol
-                        .clone()
-                        .map(|s| format!("`{s}`"))
-                        .unwrap_or_default(),
-                    r.lines.clone().unwrap_or_default(),
-                    r.note.clone(),
-                ]
-            }),
-        );
-    }
-}
-
-pub fn render_section(project: &str, s: &DocSection) -> String {
-    let mut out = format!("# {}\n\nProject: `{project}`\n\n", s.title.trim());
-    render_body(&mut out, 2, &Body::from(s));
-    for sub in &s.subsections {
-        out.push_str(&format!("## {}\n\n", sub.title.trim()));
-        render_body(&mut out, 3, &Body::from(sub));
-    }
-    out
-}
-
-pub fn render_architecture(a: &Architecture) -> String {
-    let mut out = format!("# System architecture\n\n{}\n\n", a.overview.trim());
-    diagram(&mut out, "##", &a.diagram);
-    out.push_str("## Components\n\n");
+    out.push_str(&format!("{h} Code references\n\n"));
     table(
-        &mut out,
-        &["Component", "Project", "Role", "Owns"],
-        a.components.iter().map(|c| {
+        out,
+        &["Path", "Symbol", "Lines", "What it holds"],
+        refs.iter().map(|r| {
             vec![
-                c.name.clone(),
-                c.project.clone(),
-                c.role.clone(),
-                c.owns.join("; "),
-            ]
-        }),
-    );
-    out.push_str("## Communication\n\n");
-    table(
-        &mut out,
-        &["From", "To", "Protocol", "Mode", "Payload"],
-        a.links.iter().map(|l| {
-            vec![
-                l.from.clone(),
-                l.to.clone(),
-                l.protocol.clone(),
-                match l.mode {
-                    LinkMode::Sync => "sync".into(),
-                    LinkMode::Async => "async".into(),
+                match &r.project {
+                    Some(p) => format!("`{p}/{}`", r.path),
+                    None => format!("`{}`", r.path),
                 },
-                l.payload.clone(),
+                r.symbol
+                    .clone()
+                    .map(|s| format!("`{s}`"))
+                    .unwrap_or_default(),
+                r.lines.clone().unwrap_or_default(),
+                r.note.clone(),
             ]
         }),
     );
-    out.push_str("## Failure and recovery\n\n");
-    table(
-        &mut out,
-        &["Failure", "Detection", "Recovery"],
-        a.failure_recovery
-            .iter()
-            .map(|f| vec![f.failure.clone(), f.detection.clone(), f.recovery.clone()]),
+}
+
+/// Rule B1: the title, the summary, the writer's own Markdown, and the code references last.
+pub fn render_section(project: &str, s: &DocSection) -> String {
+    let part = if project == CROSS_PART {
+        "Part: across projects".to_string()
+    } else {
+        format!("Project: `{project}`")
+    };
+    let mut out = format!(
+        "# {}\n\n{part}\n\n{}\n\n{}\n\n",
+        s.title.trim(),
+        s.summary.trim(),
+        s.body.trim()
     );
-    out.push_str("## Scalability\n\n");
-    table(
-        &mut out,
-        &["Component", "Scales by", "Limit"],
-        a.scalability
-            .iter()
-            .map(|s| vec![s.component.clone(), s.scales_by.clone(), s.limit.clone()]),
-    );
+    code_refs_table(&mut out, "##", &s.code_refs);
     out
 }
 
@@ -997,13 +710,10 @@ pub fn render_index(book: &Book) -> String {
         book.title,
         book.updated_at.format("%Y-%m-%d %H:%M UTC")
     );
-    if book.architecture.is_some() {
-        out.push_str("- [System architecture](architecture.md)\n");
-    }
     for part in &book.parts {
         out.push_str(&format!(
             "\n## {}\n\n{}\n\n",
-            part.project,
+            part_label(&part.project),
             part.overview.trim()
         ));
         for s in &part.sections {
@@ -1012,7 +722,7 @@ pub fn render_index(book: &Book) -> String {
                 s.title.trim(),
                 part.project,
                 s.id,
-                first_sentence(&s.purpose)
+                first_sentence(&s.summary)
             ));
         }
     }
@@ -1031,7 +741,8 @@ fn first_sentence(s: &str) -> &str {
 // Validation
 // -----------------------------------------------------------------------------------------------
 
-fn is_slug(s: &str) -> bool {
+/// Rule B1: a page ID is a lowercase slug of letters, digits, and dashes, at most 64 long.
+pub fn is_page_id(s: &str) -> bool {
     let mut chars = s.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
         && s.len() <= 64
@@ -1050,12 +761,7 @@ fn is_relative(path: &str) -> bool {
 
 /// Rule B3: the Mermaid kind matches the declared kind and the diagram stays within its caps.
 pub fn check_diagram(where_: &str, d: &Diagram, issues: &mut Vec<String>) {
-    let mut lines = d
-        .source
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with("%%"));
-    let head = lines.next().unwrap_or_default();
+    let head = mermaid_head(&d.source);
     let is_sequence = head == "sequenceDiagram";
     let is_flow = head.starts_with("flowchart") || head.starts_with("graph");
     match d.kind {
@@ -1067,25 +773,105 @@ pub fn check_diagram(where_: &str, d: &Diagram, issues: &mut Vec<String>) {
             "Start the Mermaid source of {where_} diagram \"{}\" with `flowchart TD` or `flowchart LR`, because its kind is flowchart.",
             d.title
         )),
-        DiagramKind::Sequence => {
-            let (participants, messages) = sequence_size(lines);
-            if participants > MAX_SEQUENCE_PARTICIPANTS || messages > MAX_SEQUENCE_MESSAGES {
-                issues.push(format!(
-                    "Split {where_} diagram \"{}\" into one diagram per step: it has {participants} participants and {messages} messages, and a sequence diagram may have at most {MAX_SEQUENCE_PARTICIPANTS} and {MAX_SEQUENCE_MESSAGES}, because a reader follows a small diagram and loses a large one.",
-                    d.title
-                ));
-            }
+        _ => check_mermaid(where_, &d.title, &d.source, issues),
+    }
+}
+
+fn mermaid_lines(source: &str) -> impl Iterator<Item = &str> {
+    source
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("%%"))
+}
+
+fn mermaid_head(source: &str) -> &str {
+    mermaid_lines(source).next().unwrap_or_default()
+}
+
+/// Rule B3: a sequence diagram or a flowchart stays within its caps. Other Mermaid kinds have none.
+fn check_mermaid(where_: &str, title: &str, source: &str, issues: &mut Vec<String>) {
+    let mut lines = mermaid_lines(source);
+    let head = lines.next().unwrap_or_default();
+    if head == "sequenceDiagram" {
+        let (participants, messages) = sequence_size(lines);
+        if participants > MAX_SEQUENCE_PARTICIPANTS || messages > MAX_SEQUENCE_MESSAGES {
+            issues.push(format!(
+                "Split {where_} diagram \"{title}\" into one diagram per step: it has {participants} participants and {messages} messages, and a sequence diagram can have at most {MAX_SEQUENCE_PARTICIPANTS} and {MAX_SEQUENCE_MESSAGES}, because a reader follows a small diagram and loses a large one."
+            ));
         }
-        DiagramKind::Flowchart => {
-            let nodes = flowchart_nodes(lines);
-            if nodes > MAX_FLOWCHART_NODES {
-                issues.push(format!(
-                    "Split {where_} diagram \"{}\" into smaller flowcharts: it has {nodes} nodes, and a flowchart may have at most {MAX_FLOWCHART_NODES}, because a reader follows a small diagram and loses a large one.",
-                    d.title
-                ));
-            }
+    } else if head.starts_with("flowchart") || head.starts_with("graph") {
+        let nodes = flowchart_nodes(lines);
+        if nodes > MAX_FLOWCHART_NODES {
+            issues.push(format!(
+                "Split {where_} diagram \"{title}\" into smaller flowcharts: it has {nodes} nodes, and a flowchart can have at most {MAX_FLOWCHART_NODES}, because a reader follows a small diagram and loses a large one."
+            ));
         }
     }
+}
+
+/// The `mermaid` code blocks of a Markdown body, each with the heading above it as its title.
+fn mermaid_blocks(body: &str) -> Vec<(String, String)> {
+    let mut out = vec![];
+    let mut heading = String::new();
+    let mut fence: Option<(String, bool, Vec<&str>)> = None;
+    for line in body.lines() {
+        let t = line.trim_start();
+        if let Some((marker, is_mermaid, lines)) = &mut fence {
+            if t.starts_with(marker.as_str())
+                && t.trim_start_matches(marker.as_str()).trim().is_empty()
+            {
+                if *is_mermaid {
+                    let title = if heading.is_empty() {
+                        format!("{} in the page", ordinal(out.len() + 1))
+                    } else {
+                        heading.clone()
+                    };
+                    out.push((title, lines.join("\n")));
+                }
+                fence = None;
+            } else {
+                lines.push(line);
+            }
+            continue;
+        }
+        let marker: String = t.chars().take_while(|c| *c == '`' || *c == '~').collect();
+        if marker.len() >= 3 && marker.chars().all(|c| c == marker.chars().next().unwrap()) {
+            let lang = t[marker.len()..].trim();
+            fence = Some((marker, lang.starts_with("mermaid"), vec![]));
+        } else if t.starts_with('#') {
+            heading = t.trim_start_matches('#').trim().to_string();
+        }
+    }
+    out
+}
+
+fn ordinal(n: usize) -> String {
+    match n {
+        1 => "the first".into(),
+        2 => "the second".into(),
+        3 => "the third".into(),
+        n => format!("number {n}"),
+    }
+}
+
+/// Lines of a Markdown body that start a level-1 heading outside a code block.
+fn top_headings(body: &str) -> Vec<&str> {
+    let mut out = vec![];
+    let mut fence: Option<String> = None;
+    for line in body.lines() {
+        let t = line.trim_start();
+        let marker: String = t.chars().take_while(|c| *c == '`' || *c == '~').collect();
+        if let Some(m) = &fence {
+            if t.starts_with(m.as_str()) {
+                fence = None;
+            }
+        } else if marker.len() >= 3 {
+            fence = Some(marker);
+        } else if t.starts_with("# ") {
+            out.push(t);
+        }
+    }
+    out
 }
 
 const SEQ_ARROWS: [&str; 10] = [
@@ -1200,7 +986,8 @@ fn flowchart_nodes<'a>(lines: impl Iterator<Item = &'a str>) -> usize {
     nodes.len()
 }
 
-fn check_glossary(g: &[GlossaryEntry], issues: &mut Vec<String>) {
+/// Each glossary entry has a term and a definition, and each term appears once.
+pub fn check_glossary(g: &[GlossaryEntry], issues: &mut Vec<String>) {
     let mut seen = BTreeSet::new();
     for e in g {
         if e.term.trim().is_empty() || e.definition.trim().is_empty() {
@@ -1214,127 +1001,235 @@ fn check_glossary(g: &[GlossaryEntry], issues: &mut Vec<String>) {
     }
 }
 
-fn check_body(where_: &str, b: &Body, issues: &mut Vec<String>) {
-    if b.purpose.trim().is_empty() {
-        issues.push(format!("Write the purpose of {where_}."));
-    }
-    // Rule B2: every unit of work states what it takes as given.
-    if b.assumptions.iter().all(|a| a.trim().is_empty()) {
+/// Rules B1 and B3: the problems with one page as the book format holds it: its ID, title,
+/// summary, and body, its headings, its diagrams, and its code references. Each issue states the
+/// correction first.
+pub fn check_page(where_: &str, sec: &DocSection, issues: &mut Vec<String>) {
+    if !is_page_id(&sec.id) {
         issues.push(format!(
-            "List the assumptions of {where_}: what the code takes as given about its inputs, callers, data, and environment. Write `None found in the code` only after checking, because readers and agents rely on this list."
+            "Write the ID \"{}\" as a lowercase slug of letters, digits, and dashes, for example `order-cancellation`.",
+            sec.id
         ));
     }
-    for d in b.diagrams {
-        check_diagram(where_, d, issues);
+    if sec.title.trim().is_empty() {
+        issues.push(format!("Give {where_} a title."));
     }
-    for t in b.tables {
-        if t.columns.is_empty() || t.rows.iter().any(|r| r.len() != t.columns.len()) {
-            issues.push(format!(
-                "Give every row of table \"{}\" in {where_} one cell per column.",
-                t.title
-            ));
-        }
+    if sec.summary.trim().is_empty() {
+        issues.push(format!(
+            "Write the summary of {where_}: one or two sentences that say what a reader learns on the page."
+        ));
     }
-    for r in b.code_refs {
+    if sec.body.trim().is_empty() {
+        issues.push(format!("Write the Markdown body of {where_}."));
+    }
+    if let Some(h) = top_headings(&sec.body).first() {
+        issues.push(format!(
+            "Start the headings in the body of {where_} at `##`: \"{h}\" is a level-1 heading, and Ostra writes the title as the only one."
+        ));
+    }
+    for (title, source) in mermaid_blocks(&sec.body) {
+        check_mermaid(where_, &title, &source, issues);
+    }
+    for r in &sec.code_refs {
         if !is_relative(&r.path) {
             issues.push(format!(
-                "Write code reference \"{}\" in {where_} as a path relative to the project root, with `/` separators and no `..`.",
+                "Write code reference \"{}\" in {where_} as a path relative to the root of its project, with `/` separators and no `..`.",
                 r.path
             ));
         }
     }
 }
 
-/// Validate a documentation submit. Each issue states the correction first.
-pub fn check_documentation(s: &DocumentationSubmit) -> Vec<String> {
+/// The book format's checks of a part's pages and glossary: each page by [`check_page`], each
+/// page ID once, and each glossary term once.
+pub fn check_pages(pages: &[DocSection], glossary: &[GlossaryEntry]) -> Vec<String> {
     let mut issues = vec![];
-    if s.status != SubmitStatus::Ok {
-        return issues;
-    }
-    if s.sections.is_empty() {
-        issues.push("Return at least one section in `sections`, because the book shows only what you submit.".into());
-    }
     let mut ids = BTreeSet::new();
-    for sec in &s.sections {
-        let where_ = format!("section `{}`", sec.id);
-        if sec.title.trim().is_empty() {
-            issues.push(format!("Give {where_} a title."));
+    for sec in pages {
+        if is_page_id(&sec.id) && !ids.insert(sec.id.clone()) {
+            issues.push(format!(
+                "Give \"{}\" to one section only: the ID is used twice.",
+                sec.id
+            ));
         }
-        check_body(&where_, &Body::from(sec), &mut issues);
-        let all = std::iter::once(&sec.id).chain(sec.subsections.iter().map(|x| &x.id));
-        for id in all {
-            if !is_slug(id) {
-                issues.push(format!(
-                    "Write the ID \"{id}\" as a lowercase slug of letters, digits, and dashes, for example `order-cancellation`."
-                ));
-            } else if !ids.insert(id.clone()) {
-                issues.push(format!(
-                    "Give \"{id}\" to one section only: the ID is used twice."
-                ));
-            }
-        }
-        for sub in &sec.subsections {
-            let w = format!("sub-section `{}`", sub.id);
-            if sub.title.trim().is_empty() {
-                issues.push(format!("Give {w} a title."));
-            }
-            check_body(&w, &Body::from(sub), &mut issues);
-        }
+        check_page(&format!("section `{}`", sec.id), sec, &mut issues);
     }
-    check_glossary(&s.glossary, &mut issues);
+    check_glossary(glossary, &mut issues);
     issues
 }
 
-/// Validate an architecture submit (Rule B4).
-pub fn check_architecture(s: &ArchitectureSubmit) -> Vec<String> {
-    let mut issues = vec![];
+/// Validate a documentation submit with the check its book writer installed (Rule B10), or,
+/// without one, with the book format's checks of its pages and glossary.
+#[deprecated(
+    note = "use `ostra_core::submit::validate_submit(Contract::Documentation, ..)`; the standard plugin owns the docs-stage checks"
+)]
+pub fn check_documentation(s: &DocumentationSubmit) -> Vec<String> {
     if s.status != SubmitStatus::Ok {
-        return issues;
+        return vec![];
     }
-    let Some(a) = &s.architecture else {
-        return vec!["Return the architecture in `architecture`, because the book shows only what you submit.".into()];
-    };
-    if a.overview.trim().is_empty() {
-        issues.push("Write the architecture overview.".into());
+    if let Some(check) = crate::submit::contract_check(&crate::Contract::Documentation)
+        && let Ok(v) = serde_json::to_value(s)
+    {
+        return check(&v);
     }
-    if a.diagram.kind != DiagramKind::Flowchart {
-        issues.push(
-            "Draw the architecture diagram as a flowchart of the components and their links."
-                .into(),
-        );
+    let mut issues = vec![];
+    if s.sections.is_empty() {
+        issues.push("Return at least one section in `sections`, because the book shows only what you submit.".into());
     }
-    check_diagram("the architecture", &a.diagram, &mut issues);
-    let names: BTreeSet<&str> = a.components.iter().map(|c| c.name.trim()).collect();
-    if names.len() < 2 || names.len() != a.components.len() {
-        issues.push(
-            "List at least two components, each with a unique name, because links name them."
-                .into(),
-        );
+    issues.extend(check_pages(&s.sections, &s.glossary));
+    issues
+}
+
+/// Rule B9: books written before free pages held typed sections: purpose, boundaries, assumptions,
+/// flow, diagrams, tables, concerns, and sub-sections. They load as pages, so an old book stays
+/// readable and searchable until the next docs run rewrites it.
+mod legacy {
+    use super::{CodeRef, Diagram, DocSection, code_refs_table, diagram, list_items, table};
+    use serde::{Deserialize, Deserializer};
+
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct Boundaries {
+        owns: Vec<String>,
+        does_not_own: Vec<String>,
     }
-    for l in &a.links {
-        for end in [&l.from, &l.to] {
-            if !names.contains(end.trim()) {
-                issues.push(format!(
-                    "Name a listed component in link {} to {}: \"{end}\" is not in `components`.",
-                    l.from, l.to
-                ));
-            }
+
+    #[derive(Deserialize)]
+    struct Step {
+        actor: String,
+        action: String,
+        outcome: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Table {
+        title: String,
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    }
+
+    #[derive(Deserialize)]
+    struct Concern {
+        component: String,
+        responsibility: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Typed {
+        id: String,
+        title: String,
+        #[serde(default)]
+        purpose: String,
+        #[serde(default)]
+        boundaries: Boundaries,
+        #[serde(default)]
+        assumptions: Vec<String>,
+        #[serde(default)]
+        business_flow: Vec<Step>,
+        #[serde(default)]
+        diagrams: Vec<Diagram>,
+        #[serde(default)]
+        tables: Vec<Table>,
+        #[serde(default)]
+        concerns: Vec<Concern>,
+        #[serde(default)]
+        code_refs: Vec<CodeRef>,
+        #[serde(default)]
+        subsections: Vec<Typed>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Page(DocSection),
+        Typed(Typed),
+    }
+
+    pub fn sections<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<DocSection>, D::Error> {
+        Ok(Vec::<Stored>::deserialize(d)?
+            .into_iter()
+            .map(|s| match s {
+                Stored::Page(p) => p,
+                Stored::Typed(t) => page(t),
+            })
+            .collect())
+    }
+
+    /// The section's own fields under `###` headings, then each sub-section as a `##` heading
+    /// with its fields under `####`, so a sub-section stays its own search unit.
+    fn page(t: Typed) -> DocSection {
+        let mut body = String::new();
+        fields(&mut body, "###", &t);
+        for sub in &t.subsections {
+            body.push_str(&format!(
+                "## {}\n\n{}\n\n",
+                sub.title.trim(),
+                sub.purpose.trim()
+            ));
+            fields(&mut body, "####", sub);
+            code_refs_table(&mut body, "####", &sub.code_refs);
+        }
+        DocSection {
+            id: t.id,
+            title: t.title,
+            summary: t.purpose.trim().to_string(),
+            body: body.trim_end().to_string(),
+            code_refs: t.code_refs,
+            group: String::new(),
         }
     }
-    if a.links.is_empty() {
-        issues.push("List how the components communicate in `links`.".into());
+
+    fn fields(out: &mut String, h: &str, t: &Typed) {
+        let b = &t.boundaries;
+        if !b.owns.is_empty() || !b.does_not_own.is_empty() {
+            out.push_str(&format!("{h} Boundaries\n\n"));
+            if !b.owns.is_empty() {
+                out.push_str("Owns:\n\n");
+                list_items(out, &b.owns);
+            }
+            if !b.does_not_own.is_empty() {
+                out.push_str("Does not own:\n\n");
+                list_items(out, &b.does_not_own);
+            }
+        }
+        if !t.assumptions.is_empty() {
+            out.push_str(&format!("{h} Assumptions\n\n"));
+            list_items(out, &t.assumptions);
+        }
+        if !t.business_flow.is_empty() {
+            out.push_str(&format!("{h} Business flow\n\n"));
+            table(
+                out,
+                &["Step", "Actor", "Action", "Outcome"],
+                t.business_flow.iter().enumerate().map(|(i, f)| {
+                    vec![
+                        (i + 1).to_string(),
+                        f.actor.clone(),
+                        f.action.clone(),
+                        f.outcome.clone(),
+                    ]
+                }),
+            );
+        }
+        for d in &t.diagrams {
+            diagram(out, h, d);
+        }
+        for tb in &t.tables {
+            out.push_str(&format!("{h} {}\n\n", tb.title.trim()));
+            let cols: Vec<&str> = tb.columns.iter().map(String::as_str).collect();
+            table(out, &cols, tb.rows.iter().cloned());
+        }
+        if !t.concerns.is_empty() {
+            out.push_str(&format!("{h} Separation of concerns\n\n"));
+            table(
+                out,
+                &["Component", "Responsibility"],
+                t.concerns
+                    .iter()
+                    .map(|c| vec![c.component.clone(), c.responsibility.clone()]),
+            );
+        }
     }
-    if a.failure_recovery.is_empty() {
-        issues.push(
-            "List at least one failure with its detection and recovery in `failure_recovery`."
-                .into(),
-        );
-    }
-    if a.scalability.is_empty() {
-        issues.push("List how each component scales in `scalability`.".into());
-    }
-    check_glossary(&s.glossary, &mut issues);
-    issues
 }
 
 #[cfg(test)]
@@ -1424,137 +1319,6 @@ mod tests {
         assert!(!is_book_id("../x"));
     }
 
-    fn area_submit(ids: &[&str], overview: &str) -> DocumentationSubmit {
-        serde_json::from_value(serde_json::json!({
-            "status": "ok", "summary": "s", "overview": overview,
-            "sections": ids.iter().map(|id| serde_json::json!({
-                "id": id, "title": id, "purpose": format!("{id} purpose"), "assumptions": ["x"]
-            })).collect::<Vec<_>>()
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn b9_small_projects_and_single_areas_get_one_writer() {
-        let kb = 1024;
-        let a = |n: &str, b: u64| (n.to_string(), vec![format!("{n}/**")], b);
-        assert!(plan_areas(&[a("core", 100 * kb), a("web", 100 * kb)], 0).is_empty());
-        assert!(plan_areas(&[a("core", 5000 * kb), a("empty", 0)], 0).is_empty());
-    }
-
-    #[test]
-    fn b9_areas_pack_in_map_order_under_the_target() {
-        let kb = 1024;
-        let a = |n: &str, b: u64| (n.to_string(), vec![format!("{n}/**")], b);
-        let areas = plan_areas(
-            &[
-                a("engine", 600 * kb),
-                a("store", 100 * kb),
-                a("notify", 50 * kb),
-                a("server", 300 * kb),
-            ],
-            20 * kb,
-        );
-        let ids: Vec<&str> = areas.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(ids, ["engine", "store-and-1-more", "server-and-1-more"]);
-        assert_eq!(areas[1].title, "store, notify");
-        assert_eq!(areas[2].title, "server, other files");
-        assert!(areas[2].rest && !areas[1].rest);
-        assert_eq!(areas[1].globs, ["store/**", "notify/**"]);
-    }
-
-    #[test]
-    fn b9_the_writer_count_is_capped() {
-        let many: Vec<(String, Vec<String>, u64)> = (0..40)
-            .map(|i| (format!("m{i}"), vec![format!("m{i}/**")], 600 * 1024))
-            .collect();
-        let areas = plan_areas(&many, 0);
-        assert!(
-            areas.len() <= MAX_DOCS_AREAS && areas.len() >= 2,
-            "{}",
-            areas.len()
-        );
-        let ids: BTreeSet<&str> = areas.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(ids.len(), areas.len(), "area IDs are unique");
-    }
-
-    #[test]
-    fn b9_combined_areas_keep_every_section_with_unique_ids() {
-        let a = DocsArea {
-            id: "core".into(),
-            title: "core".into(),
-            globs: vec![],
-            rest: false,
-            bytes: 1,
-        };
-        let b = DocsArea {
-            id: "web".into(),
-            title: "web".into(),
-            globs: vec![],
-            rest: false,
-            bytes: 1,
-        };
-        let (sa, sb) = (
-            area_submit(&["setup", "orders"], "Core."),
-            area_submit(&["setup"], "Web."),
-        );
-        let c = combine_areas(&[(&a, &sa), (&b, &sb)]);
-        let ids: Vec<&str> = c.sections.iter().map(|s| s.id.as_str()).collect();
-        assert_eq!(ids, ["setup", "orders", "setup-web"]);
-        assert_eq!(c.overview, "core: Core.\n\nweb: Web.");
-    }
-
-    #[test]
-    fn b9_a_later_session_rewrites_only_its_areas() {
-        let now = Utc::now();
-        let area = |id: &str| DocsArea {
-            id: id.into(),
-            title: id.into(),
-            globs: vec![],
-            rest: false,
-            bytes: 1,
-        };
-        let first = BookUpdate {
-            session: "s1".into(),
-            parts: vec![("p".into(), area_submit(&[], ""))],
-            areas: BTreeMap::from([(
-                "p".to_string(),
-                vec![
-                    (area("core"), Some(area_submit(&["orders"], "Core v1."))),
-                    (area("web"), Some(area_submit(&["pages"], "Web v1."))),
-                ],
-            )]),
-            ..Default::default()
-        };
-        let book = merge(None, "p", &first, now);
-        assert_eq!(book.parts[0].areas.len(), 2);
-        let second = BookUpdate {
-            session: "s2".into(),
-            parts: vec![("p".into(), area_submit(&[], ""))],
-            areas: BTreeMap::from([(
-                "p".to_string(),
-                vec![
-                    (area("core"), None),
-                    (
-                        area("web"),
-                        Some(area_submit(&["pages", "forms"], "Web v2.")),
-                    ),
-                ],
-            )]),
-            ..Default::default()
-        };
-        let book = merge(Some(book), "p", &second, now);
-        let part = &book.parts[0];
-        let ids: Vec<&str> = part.sections.iter().map(|s| s.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            ["orders", "pages", "forms"],
-            "core is kept, web is rewritten"
-        );
-        assert_eq!(part.overview, "core: Core v1.\n\nweb: Web v2.");
-        assert_eq!(part.areas[1].sections, ["pages", "forms"]);
-    }
-
     #[test]
     fn logs_from_before_books_still_read() {
         use crate::agent::AgentName;
@@ -1567,7 +1331,8 @@ mod tests {
             p,
             ExecPurpose::Docs {
                 project: "p".into(),
-                area: None,
+                page: None,
+                round: 0,
             }
         );
         let a: AgentName = serde_json::from_value("module-documentation".into()).unwrap();
@@ -1580,26 +1345,285 @@ mod tests {
         assert_eq!(k, StageKind::Documentation);
     }
 
+    fn page_submit(body: &str) -> DocumentationSubmit {
+        serde_json::from_value(serde_json::json!({
+            "status": "ok", "summary": "s",
+            "sections": [{"id": "a", "title": "A", "summary": "What A does.", "body": body,
+                "code_refs": [{"path": "src/a.rs", "note": "n"}]}]
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn documentation_submit_is_checked() {
-        let ok: DocumentationSubmit = serde_json::from_value(serde_json::json!({
-            "status": "ok", "summary": "s",
-            "sections": [{"id": "a", "title": "A", "purpose": "p", "assumptions": ["x"],
-                "code_refs": [{"path": "src/a.rs", "note": "n"}],
-                "subsections": [{"id": "a-step", "title": "Step", "purpose": "p", "assumptions": ["y"]}]}]
-        }))
-        .unwrap();
-        assert!(check_documentation(&ok).is_empty());
-        let mut bad = ok.clone();
-        bad.sections[0].subsections[0].id = "a".into();
-        bad.sections[0].subsections[0].assumptions = vec![];
+        let ok = page_submit(
+            "Text.\n\n## Step\n\n```mermaid\nsequenceDiagram\nA->>B: go\n```\n\n```rust\n# not a heading\n```",
+        );
+        assert!(
+            check_pages(&ok.sections, &ok.glossary).is_empty(),
+            "{:?}",
+            check_pages(&ok.sections, &ok.glossary)
+        );
+        let mut big = "sequenceDiagram\n".to_string();
+        for i in 0..21 {
+            big.push_str(&format!("A->>B: m{i}\n"));
+        }
+        let mut bad = page_submit(&format!(
+            "# Title again\n\n## Calls\n\n```mermaid\n{big}```"
+        ));
+        bad.sections[0].summary = " ".into();
         bad.sections[0].code_refs[0].path = "/abs/a.rs".into();
-        let issues = check_documentation(&bad);
-        assert_eq!(issues.len(), 3, "{issues:?}");
+        bad.sections.push(bad.sections[0].clone());
+        let issues = check_pages(&bad.sections, &bad.glossary);
         assert!(
             issues
                 .iter()
-                .any(|i| i.starts_with("List the assumptions of sub-section"))
+                .any(|i| i.starts_with("Give \"a\" to one section only")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.starts_with("Write the summary")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.starts_with("Start the headings")),
+            "{issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.starts_with("Split section `a` diagram \"Calls\"")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.starts_with("Write code reference")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn other_mermaid_kinds_have_no_caps() {
+        let mut src = "stateDiagram-v2\n".to_string();
+        for i in 0..40 {
+            src.push_str(&format!("S{i} --> S{}\n", i + 1));
+        }
+        let s = page_submit(&format!("```mermaid\n{src}```"));
+        assert!(check_pages(&s.sections, &s.glossary).is_empty());
+    }
+
+    #[test]
+    fn typed_sections_from_old_books_load_as_pages() {
+        let part: BookPart = serde_json::from_value(serde_json::json!({
+            "project": "p", "overview": "o", "updated_at": "2026-09-30T00:00:00Z",
+            "areas": [{"id": "core", "title": "core", "sections": ["orders"]}],
+            "sections": [
+                {"id": "orders", "title": "Orders", "purpose": "Creates orders.",
+                 "assumptions": ["Auth is done upstream."],
+                 "code_refs": [{"path": "src/orders.rs", "note": "n"}],
+                 "subsections": [{"id": "orders-cancel", "title": "Cancel", "purpose": "Cancels.",
+                    "assumptions": ["x"], "code_refs": [{"path": "src/cancel.rs", "note": "c"}]}]},
+                {"id": "new", "title": "New", "summary": "S.", "body": "B."}
+            ]
+        }))
+        .unwrap();
+        let old = &part.sections[0];
+        assert_eq!(old.summary, "Creates orders.");
+        assert!(
+            old.body
+                .starts_with("### Assumptions\n\n- Auth is done upstream."),
+            "{}",
+            old.body
+        );
+        assert!(
+            old.body
+                .contains("## Cancel\n\nCancels.\n\n#### Assumptions"),
+            "{}",
+            old.body
+        );
+        assert!(old.body.contains("`src/cancel.rs`"), "{}", old.body);
+        assert_eq!(old.code_refs[0].path, "src/orders.rs");
+        assert_eq!(part.sections[1].body, "B.");
+    }
+
+    #[test]
+    fn b6_a_later_session_keeps_the_pages_it_does_not_rewrite() {
+        let now = Utc::now();
+        let page = |id: &str, body: &str| -> DocSection {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "title": id, "summary": "S.", "body": body, "group": "How it works"
+            }))
+            .unwrap()
+        };
+        let part = |pages: Vec<PageUpdate>| PartUpdate {
+            project: "p".into(),
+            overview: "The project.".into(),
+            pages,
+            glossary: vec![],
+            inventory: serde_json::from_value(serde_json::json!([
+                {"id": "x", "name": "x", "sources": ["src/"], "owner": "a"}
+            ]))
+            .unwrap(),
+        };
+        let first = BookUpdate {
+            session: "s1".into(),
+            parts: vec![part(vec![
+                PageUpdate::Write(page("a", "a v1")),
+                PageUpdate::Write(page("b", "b v1")),
+            ])],
+        };
+        let book = merge(None, "p", &first, now);
+        assert_eq!(book.parts[0].sections[0].group, "How it works");
+        let second = BookUpdate {
+            session: "s2".into(),
+            parts: vec![part(vec![
+                PageUpdate::Keep {
+                    id: "a".into(),
+                    group: "Reference".into(),
+                },
+                PageUpdate::Write(page("b", "b v2")),
+                PageUpdate::Keep {
+                    id: "gone".into(),
+                    group: "Reference".into(),
+                },
+            ])],
+        };
+        let book = merge(Some(book), "p", &second, now);
+        let bodies: Vec<&str> = book.parts[0]
+            .sections
+            .iter()
+            .map(|s| s.body.as_str())
+            .collect();
+        assert_eq!(bodies, ["a v1", "b v2"], "a is kept, b is rewritten");
+        assert_eq!(book.parts[0].sections[0].group, "Reference");
+        assert_eq!(book.parts[0].inventory.len(), 1);
+        assert_eq!(book.sessions, ["s1", "s2"]);
+    }
+
+    /// Rule B11: the part across projects comes last, names no project, renders its own label, and
+    /// its links to another part's pages point into that part's folder.
+    #[test]
+    fn b1_the_part_across_projects() {
+        let ws = tempfile::tempdir().unwrap();
+        let page = |id: &str, body: &str, refs: serde_json::Value| -> DocSection {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "title": id, "summary": "S.", "body": body, "group": "How it works",
+                "code_refs": refs
+            }))
+            .unwrap()
+        };
+        let part = |project: &str, pages: Vec<DocSection>| PartUpdate {
+            project: project.into(),
+            overview: format!("{project} overview."),
+            pages: pages.into_iter().map(PageUpdate::Write).collect(),
+            ..Default::default()
+        };
+        let update = BookUpdate {
+            session: "s1".into(),
+            parts: vec![
+                part(
+                    CROSS_PART,
+                    vec![page(
+                        "flow",
+                        "The client calls [orders](orders.md) and [flow](flow.md).",
+                        serde_json::json!([{"project": "a", "path": "src/api.rs", "note": "The route."}]),
+                    )],
+                ),
+                part(
+                    "a",
+                    vec![page(
+                        "orders",
+                        "Text.",
+                        serde_json::json!([{"path": "src/orders.rs", "note": "The handler."}]),
+                    )],
+                ),
+            ],
+        };
+        let book = apply(ws.path(), "a_b", &update, Utc::now()).unwrap();
+        let keys: Vec<&str> = book.parts.iter().map(|p| p.project.as_str()).collect();
+        assert_eq!(keys, ["a", CROSS_PART]);
+        assert_eq!(book.projects, ["a"]);
+        assert_eq!(book.title, "Documentation for a");
+        let root = book_dir(ws.path(), "a_b");
+        let flow = std::fs::read_to_string(root.join("_cross/flow.md")).unwrap();
+        assert!(flow.contains("Part: across projects"), "{flow}");
+        assert!(flow.contains("[orders](../a/orders.md)"), "{flow}");
+        assert!(
+            flow.contains("[flow](flow.md)"),
+            "a link in the same part stays: {flow}"
+        );
+        assert!(flow.contains("`a/src/api.rs`"), "{flow}");
+        let orders = std::fs::read_to_string(root.join("a/orders.md")).unwrap();
+        assert!(orders.contains("| `src/orders.rs` |"), "{orders}");
+        let index = std::fs::read_to_string(root.join("index.md")).unwrap();
+        assert!(index.contains("## Across projects"), "{index}");
+        let back: Book =
+            serde_json::from_str(&std::fs::read_to_string(root.join("book.json")).unwrap())
+                .unwrap();
+        assert_eq!(back.parts[0].sections[0].code_refs[0].project, None);
+        assert_eq!(
+            back.parts[1].sections[0].code_refs[0].project.as_deref(),
+            Some("a")
+        );
+    }
+
+    /// Rule B6: a session-wide survey can keep a page in another part than the one that held it.
+    #[test]
+    fn b6_a_kept_page_moves_to_the_part_the_survey_gives_it() {
+        let now = Utc::now();
+        let page: DocSection = serde_json::from_value(serde_json::json!({
+            "id": "flow", "title": "Flow", "summary": "S.", "body": "Old flow.", "group": "How it works"
+        }))
+        .unwrap();
+        let first = BookUpdate {
+            session: "s1".into(),
+            parts: vec![PartUpdate {
+                project: "a".into(),
+                overview: "a.".into(),
+                pages: vec![PageUpdate::Write(page)],
+                ..Default::default()
+            }],
+        };
+        let book = merge(None, "a_b", &first, now);
+        let other: DocSection = serde_json::from_value(serde_json::json!({
+            "id": "orders", "title": "Orders", "summary": "S.", "body": "Orders.", "group": "How it works"
+        }))
+        .unwrap();
+        let second = BookUpdate {
+            session: "s2".into(),
+            parts: vec![
+                PartUpdate {
+                    project: "a".into(),
+                    overview: "a.".into(),
+                    pages: vec![PageUpdate::Write(other)],
+                    ..Default::default()
+                },
+                PartUpdate {
+                    project: CROSS_PART.into(),
+                    overview: "Across.".into(),
+                    pages: vec![PageUpdate::Keep {
+                        id: "flow".into(),
+                        group: "Flows".into(),
+                    }],
+                    ..Default::default()
+                },
+            ],
+        };
+        let book = merge(Some(book), "a_b", &second, now);
+        let pages: Vec<(&str, &str, &str)> = book
+            .parts
+            .iter()
+            .flat_map(|p| {
+                p.sections
+                    .iter()
+                    .map(move |s| (p.project.as_str(), s.id.as_str(), s.body.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            pages,
+            [
+                ("a", "orders", "Orders."),
+                (CROSS_PART, "flow", "Old flow.")
+            ]
         );
     }
 
@@ -1614,11 +1638,15 @@ mod tests {
     #[test]
     fn concurrent_updates_keep_every_part() {
         let ws = tempfile::tempdir().unwrap();
-        let part: DocumentationSubmit = serde_json::from_value(serde_json::json!({
-            "status": "ok", "summary": "s",
-            "sections": [{"id": "a", "title": "A", "purpose": "p", "assumptions": ["x"]}]
-        }))
-        .unwrap();
+        let part = PartUpdate {
+            overview: "o".into(),
+            pages: page_submit("B.")
+                .sections
+                .into_iter()
+                .map(PageUpdate::Write)
+                .collect(),
+            ..Default::default()
+        };
         let handles: Vec<_> = (0..8)
             .map(|i| {
                 let root = ws.path().to_path_buf();
@@ -1626,8 +1654,10 @@ mod tests {
                 std::thread::spawn(move || {
                     let update = BookUpdate {
                         session: format!("s{i}"),
-                        parts: vec![(format!("p{i}"), part)],
-                        ..Default::default()
+                        parts: vec![PartUpdate {
+                            project: format!("p{i}"),
+                            ..part
+                        }],
                     };
                     apply(&root, "shared", &update, Utc::now()).unwrap();
                 })

@@ -63,7 +63,10 @@ about the project itself are in the `.ostra/` folder of the project. These facts
 commands, its skills, and its lessons. Thus two workspaces that import the same folder share these facts.
 
 One task can include many projects. For this reason, the session state is in the workspace and not in one
-project. Reports for one project go to `sessions/<session-id>/<project-key>/`. Artifacts for more than one
+project. A project folder does not have to be inside the workspace folder. Thus, the planner names the folders of
+each run (Rule WD1). A run can work in several projects, for example an API in the backend and the screen in the
+frontend that calls it. Only the native executor works in several projects. A harness run works in its main
+project only (Rule WD3). Reports for one project go to `sessions/<session-id>/<project-key>/`. Artifacts for more than one
 project, for example the spec and the plan, go to `sessions/<session-id>/`.
 
 ## Creating a workspace
@@ -194,6 +197,15 @@ In the console, all pages under `/w/<workspace-id>/` belong to one workspace. Th
 - The sessions table.
 
 The workspace menu in the title bar changes the workspace and opens the pages of the workspace:
+
+- Overview.
+- Cost.
+- Settings.
+- Memory.
+- Skills.
+- Documentation.
+- Agents: all agents, which include the custom agents of the workspace. See [Agents](agents.md#the-agent-screen).
+- Workflows: the Workflow builder. See [Workflows](workflows.md).
 
 ![The workspace menu with the current workspace's pages, other workspaces, and New workspace](../images/console/workspace-switcher.png)
 
@@ -621,7 +633,7 @@ registered workspace, because the command line does not know which workspace hol
 | `workspace.db` and its `.gitignore` | [`crates/ostra-store/src/workspace/mod.rs`](../../crates/ostra-store/src/workspace/mod.rs) |
 | All workspace paths | [`crates/ostra-core/src/paths.rs`](../../crates/ostra-core/src/paths.rs) |
 | `WorkspaceSettings`, `seeded`, `validate_workspace` | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
-| Execution slots | `acquire_slot` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
+| Execution slots | `acquire_slot` in [`crates/ostra-engine/src/runner/driver.rs`](../../crates/ostra-engine/src/runner/driver.rs) |
 | Workspace artifacts: paths, tags, listing | [`crates/ostra-core/src/artifacts.rs`](../../crates/ostra-core/src/artifacts.rs) |
 | Workspace artifacts: upload, save, hide, delete | [`crates/ostra-server/src/artifacts.rs`](../../crates/ostra-server/src/artifacts.rs) |
 | The design brief | [HANDOVER section 6](../../HANDOVER.md#6-workspaces-and-projects) |

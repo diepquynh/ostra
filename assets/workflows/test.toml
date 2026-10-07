@@ -1,0 +1,12 @@
+# Ostra's default `test` workflow. A workspace runs its own copy in .ostra/workflows/test.toml
+# when it has one, and this file otherwise. Each stage waits for the one before it.
+description = "Write tests for the code in scope, in the closing stages."
+base = "test"
+
+[[stage]]
+id = "closing"
+uses = "ostra:closing"
+
+[[stage]]
+id = "docs"
+uses = "ostra:book"

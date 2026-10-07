@@ -79,7 +79,11 @@ The form has three toggles below the text:
 
 - **Tests** and **Docs** answer the closing gate before it opens. To get the question at the end, keep them off.
   When **Docs** is on, a picker chooses the documentation book that the session writes into. The default is the
-  book with the name of the projects of the session. Ostra creates this book on the first run.
+  book with the name of the projects of the session. Ostra creates this book on the first run. A note under the
+  form tells you how to steer the book. The request names the readers, the topics to explain in depth, the
+  sources to use, and what to leave out. Tag or upload a design note, a spec, or an architecture document, and the
+  writers use it as a source. Ostra writes no system architecture of its own. Its **Docs instructions in
+  Settings** button opens the `documentation` field of Settings > Instructions, which every docs run reads.
 - **YOLO** lets a judge model answer the gates for you. It never answers a budget gate, and it never waives a
   security finding. Keep it off for now.
 

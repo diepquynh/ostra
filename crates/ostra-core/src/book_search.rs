@@ -1,12 +1,11 @@
-//! Rule B8: retrieval over the workspace's documentation books. Each section is cut into small
-//! passages (its purpose, boundaries, assumptions, flow, each diagram, each table, concerns, and
-//! code references, long lists in windows), each passage is ranked with BM25 over three weighted
-//! fields, and a unit (a section, sub-section, glossary term, or architecture aspect) is ranked by its
-//! best passages. A hit carries only the passages that matched, never the whole section.
+//! Rule B8: retrieval over the workspace's documentation books. Each section page is cut at its `##`
+//! headings into units, and each unit into small passages (its paragraphs, each diagram and code
+//! block, lists and tables in windows, and code references). Each passage is ranked with BM25 over
+//! three weighted fields, and a unit (a section, a `##` part of one, a glossary term, or an
+//! architecture aspect) is ranked by its best passages. A hit carries only the passages that
+//! matched, never the whole section.
 
-use crate::book::{
-    self, Book, Boundaries, BusinessStep, CodeRef, Concern, Diagram, DocTable, LinkMode,
-};
+use crate::book::{self, Book, CodeRef};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -36,22 +35,19 @@ pub enum UnitKind {
     Section,
     Subsection,
     Glossary,
-    Architecture,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassageKind {
     Overview,
-    Purpose,
-    Boundaries,
-    Assumptions,
-    BusinessFlow,
-    Diagram,
+    Summary,
+    Text,
+    List,
     Table,
-    Concerns,
+    Diagram,
+    Code,
     CodeRefs,
     Glossary,
-    Architecture,
 }
 
 /// A part of a book a hit points at.
@@ -77,7 +73,7 @@ pub struct Unit {
 pub struct Passage {
     pub unit: usize,
     pub kind: PassageKind,
-    /// What the passage is, for example `Assumptions` or `Diagram: Slot hand-off`.
+    /// What the passage is, for example `Retries: list` or `Diagram: Slot hand-off`.
     pub label: String,
     /// The passage as a reader sees it.
     pub text: String,
@@ -277,6 +273,8 @@ impl Index {
             let u = &self.units[h.unit];
             let place = if u.project.is_empty() {
                 u.book.clone()
+            } else if u.project == book::CROSS_PART {
+                format!("{}, across projects", u.book)
             } else {
                 format!("{}, project `{}`", u.book, u.project)
             };
@@ -316,9 +314,9 @@ fn focus<'l>(
     lines: &[&'l str],
     terms: &std::collections::HashSet<String>,
 ) -> Vec<&'l str> {
-    let listy = !matches!(
+    let listy = matches!(
         kind,
-        PassageKind::Overview | PassageKind::Purpose | PassageKind::Diagram | PassageKind::Glossary
+        PassageKind::List | PassageKind::Table | PassageKind::CodeRefs
     );
     if !listy || lines.len() < 2 {
         return lines.to_vec();
@@ -376,7 +374,7 @@ impl Builder {
                 project: part.project.clone(),
                 id: format!("{}/overview", part.project),
                 kind: UnitKind::Overview,
-                title: format!("{} overview", part.project),
+                title: format!("{} overview", book::part_label(&part.project)),
                 file: "index.md".into(),
                 code_paths: vec![],
                 title_tf: HashMap::new(),
@@ -391,55 +389,7 @@ impl Builder {
                 );
             }
             for s in &part.sections {
-                let file = PathBuf::from(&part.project).join(format!("{}.md", s.id));
-                let u = self.unit(Unit {
-                    book: b.id.clone(),
-                    project: part.project.clone(),
-                    id: format!("{}/{}", part.project, s.id),
-                    kind: UnitKind::Section,
-                    title: s.title.trim().to_string(),
-                    file: file.clone(),
-                    code_paths: s.code_refs.iter().map(|r| r.path.clone()).collect(),
-                    title_tf: HashMap::new(),
-                });
-                self.body(
-                    u,
-                    &Body {
-                        purpose: &s.purpose,
-                        boundaries: &s.boundaries,
-                        assumptions: &s.assumptions,
-                        business_flow: &s.business_flow,
-                        diagrams: &s.diagrams,
-                        tables: &s.tables,
-                        concerns: &s.concerns,
-                        code_refs: &s.code_refs,
-                    },
-                );
-                for sub in &s.subsections {
-                    let u = self.unit(Unit {
-                        book: b.id.clone(),
-                        project: part.project.clone(),
-                        id: format!("{}/{}/{}", part.project, s.id, sub.id),
-                        kind: UnitKind::Subsection,
-                        title: format!("{} > {}", s.title.trim(), sub.title.trim()),
-                        file: file.clone(),
-                        code_paths: sub.code_refs.iter().map(|r| r.path.clone()).collect(),
-                        title_tf: HashMap::new(),
-                    });
-                    self.body(
-                        u,
-                        &Body {
-                            purpose: &sub.purpose,
-                            boundaries: &sub.boundaries,
-                            assumptions: &sub.assumptions,
-                            business_flow: &sub.business_flow,
-                            diagrams: &sub.diagrams,
-                            tables: &sub.tables,
-                            concerns: &sub.concerns,
-                            code_refs: &sub.code_refs,
-                        },
-                    );
-                }
+                self.section(&b.id, &part.project, s);
             }
         }
         for g in &b.glossary {
@@ -460,198 +410,212 @@ impl Builder {
             };
             self.passage(u, PassageKind::Glossary, "Definition".into(), text, &code);
         }
-        if let Some(a) = &b.architecture {
-            let arch = |aspect: &str, title: &str| Unit {
-                book: b.id.clone(),
-                project: String::new(),
-                id: format!("architecture/{aspect}"),
-                kind: UnitKind::Architecture,
-                title: format!("System architecture > {title}"),
-                file: "architecture.md".into(),
-                code_paths: vec![],
-                title_tf: HashMap::new(),
-            };
-            let u = self.unit(arch("overview", "Overview"));
-            for para in a.overview.split("\n\n") {
-                self.passage(
-                    u,
-                    PassageKind::Architecture,
-                    "Overview".into(),
-                    para.trim().into(),
-                    "",
-                );
-            }
-            self.diagram(u, &a.diagram);
-            let u = self.unit(arch("components", "Components"));
-            for c in &a.components {
-                let project = if c.project.is_empty() {
-                    "external".into()
-                } else {
-                    format!("project `{}`", c.project)
-                };
-                let mut text = format!("{} ({project}): {}", c.name, c.role.trim());
-                if !c.owns.is_empty() {
-                    text.push_str(&format!("\nOwns: {}", c.owns.join("; ")));
+    }
+
+    /// A section page: the section unit holds the summary, the text above the first `##` heading,
+    /// and the code references. Each `##` heading starts a unit of its own.
+    fn section(&mut self, book: &str, project: &str, s: &book::DocSection) {
+        let file = PathBuf::from(project).join(format!("{}.md", s.id));
+        let section_id = format!("{project}/{}", s.id);
+        let title = s.title.trim().to_string();
+        let mut parts: Vec<(Option<String>, Vec<&str>)> = vec![(None, vec![])];
+        let mut fence: Option<String> = None;
+        for line in s.body.lines() {
+            let t = line.trim_start();
+            let marker: String = t.chars().take_while(|c| *c == '`' || *c == '~').collect();
+            if let Some(m) = &fence {
+                if t.starts_with(m.as_str()) && t[m.len()..].trim().is_empty() {
+                    fence = None;
                 }
+            } else if marker.len() >= 3 {
+                fence = Some(marker);
+            } else if let Some(h) = line.strip_prefix("## ") {
+                parts.push((Some(h.trim().to_string()), vec![]));
+                continue;
+            }
+            parts.last_mut().unwrap().1.push(line);
+        }
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for (heading, lines) in parts {
+            let text = lines.join("\n");
+            let mut code_paths = paths_in(&text);
+            let (id, kind, unit_title) = match &heading {
+                None => {
+                    let mut refs: Vec<String> = s
+                        .code_refs
+                        .iter()
+                        .map(|r| match &r.project {
+                            Some(p) => format!("{p}/{}", r.path),
+                            None => r.path.clone(),
+                        })
+                        .collect();
+                    refs.append(&mut code_paths);
+                    code_paths = refs;
+                    (section_id.clone(), UnitKind::Section, title.clone())
+                }
+                Some(h) => {
+                    let base = slug(h);
+                    let n = seen.entry(base.clone()).or_default();
+                    *n += 1;
+                    let anchor = if *n == 1 { base } else { format!("{base}-{n}") };
+                    (
+                        format!("{section_id}/{anchor}"),
+                        UnitKind::Subsection,
+                        format!("{title} > {h}"),
+                    )
+                }
+            };
+            let u = self.unit(Unit {
+                book: book.to_string(),
+                project: project.to_string(),
+                id,
+                kind,
+                title: unit_title,
+                file: file.clone(),
+                code_paths,
+                title_tf: HashMap::new(),
+            });
+            if heading.is_none() {
                 self.passage(
                     u,
-                    PassageKind::Architecture,
-                    format!("Component: {}", c.name),
-                    text,
-                    &c.project,
-                );
-            }
-            let u = self.unit(arch("communication", "Communication"));
-            for chunk in a.links.chunks(WINDOW) {
-                let text = chunk
-                    .iter()
-                    .map(|l| {
-                        let mode = match l.mode {
-                            LinkMode::Sync => "sync",
-                            LinkMode::Async => "async",
-                        };
-                        format!(
-                            "- {} to {} over {} ({mode}): {}",
-                            l.from, l.to, l.protocol, l.payload
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                self.passage(u, PassageKind::Architecture, "Links".into(), text, "");
-            }
-            let u = self.unit(arch("failure", "Failure and recovery"));
-            for f in &a.failure_recovery {
-                let text = format!(
-                    "{}\nDetection: {}\nRecovery: {}",
-                    f.failure, f.detection, f.recovery
-                );
-                self.passage(
-                    u,
-                    PassageKind::Architecture,
-                    "Failure case".into(),
-                    text,
+                    PassageKind::Summary,
+                    "Summary".into(),
+                    s.summary.trim().into(),
                     "",
                 );
             }
-            let u = self.unit(arch("scalability", "Scalability"));
-            for chunk in a.scalability.chunks(WINDOW) {
-                let text = chunk
-                    .iter()
-                    .map(|s| {
-                        format!(
-                            "- {} scales by {}; limit: {}",
-                            s.component, s.scales_by, s.limit
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                self.passage(u, PassageKind::Architecture, "Scaling".into(), text, "");
+            self.markdown(u, &text);
+            if heading.is_none() {
+                self.code_refs(u, &s.code_refs);
             }
         }
     }
 
-    fn body(&mut self, u: usize, b: &Body) {
-        for para in b.purpose.split("\n\n") {
-            self.passage(
-                u,
-                PassageKind::Purpose,
-                "Purpose".into(),
-                para.trim().into(),
-                "",
-            );
+    /// Markdown cut into passages: each paragraph, each list or table in windows of
+    /// [`WINDOW`], and each code block. A `###` or deeper heading names the passages under it.
+    fn markdown(&mut self, u: usize, text: &str) {
+        let mut label = String::new();
+        let mut block: Vec<&str> = vec![];
+        let mut fence: Option<(String, String)> = None;
+        for line in text.lines() {
+            let t = line.trim_start();
+            if let Some((marker, lang)) = &fence {
+                if t.starts_with(marker.as_str()) && t[marker.len()..].trim().is_empty() {
+                    let body = std::mem::take(&mut block).join("\n");
+                    if lang.starts_with("mermaid") {
+                        let name = if label.is_empty() {
+                            "Diagram".to_string()
+                        } else {
+                            format!("Diagram: {label}")
+                        };
+                        self.passage(
+                            u,
+                            PassageKind::Diagram,
+                            name,
+                            format!("```mermaid\n{}\n```", body.trim()),
+                            "",
+                        );
+                    } else {
+                        self.passage(
+                            u,
+                            PassageKind::Code,
+                            named(&label, "code"),
+                            body.clone(),
+                            &body,
+                        );
+                    }
+                    fence = None;
+                } else {
+                    block.push(line);
+                }
+                continue;
+            }
+            let marker: String = t.chars().take_while(|c| *c == '`' || *c == '~').collect();
+            if marker.len() >= 3 {
+                self.block(u, &label, &mut block);
+                let lang = t[marker.len()..].trim().to_lowercase();
+                fence = Some((marker, lang));
+                continue;
+            }
+            if t.starts_with('#') {
+                self.block(u, &label, &mut block);
+                label = t.trim_start_matches('#').trim().to_string();
+                continue;
+            }
+            if t.is_empty() {
+                self.block(u, &label, &mut block);
+                continue;
+            }
+            let is_table = t.starts_with('|');
+            if block
+                .first()
+                .is_some_and(|f| f.trim_start().starts_with('|') != is_table)
+            {
+                self.block(u, &label, &mut block);
+            }
+            block.push(line);
         }
-        let owns = b
-            .boundaries
-            .owns
-            .iter()
-            .map(|o| format!("- Owns: {}", o.trim()));
-        let not = b
-            .boundaries
-            .does_not_own
-            .iter()
-            .map(|o| format!("- Does not own: {}", o.trim()));
-        let lines: Vec<String> = owns.chain(not).collect();
-        for chunk in lines.chunks(WINDOW) {
-            self.passage(
-                u,
-                PassageKind::Boundaries,
-                "Boundaries".into(),
-                chunk.join("\n"),
-                "",
-            );
+        self.block(u, &label, &mut block);
+    }
+
+    fn block(&mut self, u: usize, label: &str, block: &mut Vec<&str>) {
+        if block.is_empty() {
+            return;
         }
-        let lines: Vec<String> = b
-            .assumptions
-            .iter()
-            .map(|a| format!("- {}", a.trim()))
-            .collect();
-        for chunk in lines.chunks(WINDOW) {
-            self.passage(
-                u,
-                PassageKind::Assumptions,
-                "Assumptions".into(),
-                chunk.join("\n"),
-                "",
-            );
-        }
-        let lines: Vec<String> = b
-            .business_flow
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                format!(
-                    "{}. {}: {} Then: {}",
-                    i + 1,
-                    s.actor.trim(),
-                    s.action.trim(),
-                    s.outcome.trim()
-                )
-            })
-            .collect();
-        for chunk in lines.chunks(WINDOW) {
-            self.passage(
-                u,
-                PassageKind::BusinessFlow,
-                "Business flow".into(),
-                chunk.join("\n"),
-                "",
-            );
-        }
-        for d in b.diagrams {
-            self.diagram(u, d);
-        }
-        for t in b.tables {
-            let head = t.columns.join(" | ");
-            for chunk in t.rows.chunks(WINDOW) {
-                let rows = chunk
-                    .iter()
-                    .map(|r| format!("- {}", r.join(" | ")))
-                    .collect::<Vec<_>>()
-                    .join("\n");
+        let lines = std::mem::take(block);
+        let first = lines[0].trim_start();
+        let cells = |l: &str| -> Vec<String> {
+            l.trim()
+                .trim_matches('|')
+                .split('|')
+                .map(|c| c.trim().to_string())
+                .collect()
+        };
+        if first.starts_with('|') {
+            let cols = cells(first).join(" | ");
+            let rows: Vec<String> = lines
+                .iter()
+                .skip(1)
+                .filter(|l| !l.replace(['|', '-', ':', ' '], "").is_empty())
+                .map(|l| format!("- {}", cells(l).join(" | ")))
+                .collect();
+            for chunk in rows.chunks(WINDOW) {
+                let text = chunk.join("\n");
+                let code = inline_code(&text);
                 self.passage(
                     u,
                     PassageKind::Table,
-                    format!("Table: {} ({head})", t.title.trim()),
-                    rows,
-                    "",
+                    named(label, &format!("table ({cols})")),
+                    text,
+                    &code,
                 );
             }
+        } else if is_item(first) {
+            let mut items: Vec<String> = vec![];
+            for l in &lines {
+                let t = l.trim_start();
+                if (is_item(t) && l.len() - t.len() < 2) || items.is_empty() {
+                    items.push(t.to_string());
+                } else {
+                    let last = items.last_mut().unwrap();
+                    last.push(' ');
+                    last.push_str(t);
+                }
+            }
+            for chunk in items.chunks(WINDOW) {
+                let text = chunk.join("\n");
+                let code = inline_code(&text);
+                self.passage(u, PassageKind::List, named(label, "list"), text, &code);
+            }
+        } else {
+            let text = lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+            let code = inline_code(&text);
+            self.passage(u, PassageKind::Text, named(label, "text"), text, &code);
         }
-        let lines: Vec<String> = b
-            .concerns
-            .iter()
-            .map(|c| format!("- {}: {}", c.component.trim(), c.responsibility.trim()))
-            .collect();
-        for chunk in lines.chunks(WINDOW) {
-            self.passage(
-                u,
-                PassageKind::Concerns,
-                "Separation of concerns".into(),
-                chunk.join("\n"),
-                "",
-            );
-        }
-        for chunk in b.code_refs.chunks(WINDOW) {
+    }
+
+    fn code_refs(&mut self, u: usize, refs: &[CodeRef]) {
+        for chunk in refs.chunks(WINDOW) {
             let text = chunk
                 .iter()
                 .map(code_ref_line)
@@ -702,17 +666,6 @@ impl Builder {
             body_tf,
             len,
         });
-    }
-
-    fn diagram(&mut self, u: usize, d: &Diagram) {
-        let text = format!("```mermaid\n{}\n```", d.source.trim());
-        self.passage(
-            u,
-            PassageKind::Diagram,
-            format!("Diagram: {}", d.title.trim()),
-            text,
-            "",
-        );
     }
 
     fn finish(self) -> Index {
@@ -772,15 +725,74 @@ impl Builder {
     }
 }
 
-struct Body<'a> {
-    purpose: &'a str,
-    boundaries: &'a Boundaries,
-    assumptions: &'a [String],
-    business_flow: &'a [BusinessStep],
-    diagrams: &'a [Diagram],
-    tables: &'a [DocTable],
-    concerns: &'a [Concern],
-    code_refs: &'a [CodeRef],
+fn named(label: &str, what: &str) -> String {
+    if label.is_empty() {
+        let mut c = what.chars();
+        c.next()
+            .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+            .unwrap_or_default()
+    } else {
+        format!("{label}: {what}")
+    }
+}
+
+fn is_item(t: &str) -> bool {
+    t.starts_with("- ")
+        || t.starts_with("* ")
+        || t.split_once(". ")
+            .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The text of every inline code span, which ranks in the code field.
+fn inline_code(text: &str) -> String {
+    text.split('`')
+        .skip(1)
+        .step_by(2)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Inline code spans that name a file: no spaces, and a `/` or a file extension.
+fn paths_in(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = text
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .map(str::trim)
+        .filter(|c| {
+            !c.is_empty()
+                && !c.contains(char::is_whitespace)
+                && !c.contains("::")
+                && (c.contains('/')
+                    || c.rsplit_once('.').is_some_and(|(stem, ext)| {
+                        stem.chars().any(|x| x.is_ascii_alphabetic())
+                            && (1..=5).contains(&ext.len())
+                            && ext.chars().all(|x| x.is_ascii_alphanumeric())
+                    }))
+        })
+        .map(|c| c.trim_start_matches("./").to_string())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// A heading as a lowercase slug of letters, digits, and dashes.
+fn slug(h: &str) -> String {
+    let mut out = String::new();
+    for c in h.trim().to_lowercase().chars() {
+        if c.is_alphanumeric() {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = out.trim_end_matches('-');
+    if out.is_empty() {
+        "part".into()
+    } else {
+        out.to_string()
+    }
 }
 
 fn code_ref_line(r: &CodeRef) -> String {
@@ -954,27 +966,23 @@ mod tests {
     use super::*;
     use crate::book::*;
 
-    fn section(id: &str, title: &str, purpose: &str, refs: &[&str]) -> DocSection {
+    fn section(id: &str, title: &str, summary: &str, refs: &[&str]) -> DocSection {
         DocSection {
             id: id.into(),
             title: title.into(),
-            purpose: purpose.into(),
-            boundaries: Boundaries::default(),
-            assumptions: vec![],
-            business_flow: vec![],
-            diagrams: vec![],
-            tables: vec![],
-            concerns: vec![],
+            summary: summary.into(),
+            body: String::new(),
             code_refs: refs
                 .iter()
                 .map(|p| CodeRef {
+                    project: None,
                     path: (*p).into(),
                     symbol: None,
                     lines: None,
                     note: "Holds it.".into(),
                 })
                 .collect(),
-            subsections: vec![],
+            group: String::new(),
         }
     }
 
@@ -985,13 +993,12 @@ mod tests {
             projects: vec!["app".into()],
             updated_at: chrono::Utc::now(),
             sessions: vec![],
-            architecture: None,
             parts: vec![BookPart {
                 project: "app".into(),
                 overview: "The app.".into(),
                 sections,
                 updated_at: chrono::Utc::now(),
-                areas: vec![],
+                inventory: vec![],
             }],
             glossary: vec![],
         }
@@ -1022,7 +1029,7 @@ mod tests {
             "Caps concurrent executions per workspace.",
             &["src/runner.rs"],
         );
-        slots.assumptions = vec!["The budget is checked before a spawn.".into()];
+        slots.body = "The runner checks the budget before a spawn.".into();
         let b = book_of(vec![
             slots,
             section(
@@ -1042,7 +1049,7 @@ mod tests {
         assert_eq!(hits[0].passages.len(), 1);
         assert_eq!(
             ix.passages[hits[0].passages[0].0].kind,
-            PassageKind::Purpose
+            PassageKind::Summary
         );
         let hits = ix.search("auth.rs", &Filter::default(), 5);
         assert_eq!(ix.units[hits[0].unit].id, "app/auth");
@@ -1051,17 +1058,39 @@ mod tests {
     #[test]
     fn diagram_syntax_does_not_match() {
         let mut s = section("flow", "Flow", "Moves orders.", &[]);
-        s.diagrams = vec![Diagram {
-            title: "Order hand-off".into(),
-            kind: DiagramKind::Sequence,
-            source: "sequenceDiagram\n  participant A as Cart\n  A->>B: submit order".into(),
-        }];
+        s.body = "### Order hand-off\n\n```mermaid\nsequenceDiagram\n  participant A as Cart\n  A->>B: submit order\n```".into();
         let ix = Index::build(&[book_of(vec![s])]);
         assert!(ix.search("participant", &Filter::default(), 5).is_empty());
         let hits = ix.search("cart submit", &Filter::default(), 5);
         assert_eq!(
             ix.passages[hits[0].passages[0].0].kind,
             PassageKind::Diagram
+        );
+    }
+
+    #[test]
+    fn level_two_headings_are_units_and_deeper_headings_label_passages() {
+        let mut s = section("orders", "Orders", "Takes orders.", &["src/orders.rs"]);
+        s.body = "Intro with `src/intro.rs`.\n\n## Refunds\n\n### Rules\n\n- A refund needs `RefundPolicy` approval.\n- Refunds go to `src/refund.rs`.\n\n```rust\n## not a heading\n```\n\n## Refunds\n\nMore.".into();
+        let ix = Index::build(&[book_of(vec![s])]);
+        let ids: Vec<&str> = ix.units.iter().map(|u| u.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "app/overview",
+                "app/orders",
+                "app/orders/refunds",
+                "app/orders/refunds-2"
+            ]
+        );
+        assert_eq!(ix.units[1].code_paths, ["src/orders.rs", "src/intro.rs"]);
+        assert_eq!(ix.units[2].code_paths, ["src/refund.rs"]);
+        let hits = ix.search("refund policy approval", &Filter::default(), 5);
+        assert_eq!(ix.units[hits[0].unit].id, "app/orders/refunds");
+        let p = &ix.passages[hits[0].passages[0].0];
+        assert_eq!(
+            (p.kind, p.label.as_str()),
+            (PassageKind::List, "Rules: list")
         );
     }
 

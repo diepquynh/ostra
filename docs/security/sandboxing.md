@@ -14,8 +14,8 @@ The sandbox gives these guarantees:
 - **No program stays behind to run later.** Shell startup files, login and autostart entries, `.git/config`, and
   git hooks are read-only. Thus an agent cannot add a program that runs the next time you open a terminal or run
   git.
-- **Writes stay in the workspace.** The repo, the session, a private `/tmp`, and the tool caches of the session
-  are writable. The rest of the machine is read-only, and this includes your own `~/.cargo` and `~/.npm`.
+- **Writes stay in the workspace and its projects.** The workspace root and the folder of each project that the run
+  works in are writable. The session, a private `/tmp`, and the tool caches of the session are also writable. The rest of the machine is read-only, and this includes your own `~/.cargo` and `~/.npm`.
 - **Network access is limited to hosts you allow.** A sandboxed command reaches the outside only through its own
   proxy. The proxy lets through package registries, source hosts, model APIs, and the hosts you list. On Linux,
   the command has its own network, and local services, the LAN, and the cloud metadata address are out of reach.
@@ -250,7 +250,9 @@ without a rule for each one.
 
 ### Writable
 
-- The workspace root, the repo root, the session root, and the session dir of the execution.
+- The workspace root, each work dir of the execution, the session root, and the session dir of the execution. The
+  work dirs are the project folders that the planner named for the run (Rule WD1). A project folder can be outside
+  the workspace root, so each work dir is a separate writable root.
 - On bubblewrap, each dir between a writable root and a rule inside it, bound writable onto itself. These dirs
   are `.git`, the repo dir that holds it, and each dir above that up to the root. A mount point cannot be
   renamed. Thus no process can move a protected path away from its rule (see [git](#git-stays-usable-and-closed)).
@@ -271,7 +273,7 @@ without a rule for each one.
   of them can leave a program behind for the user.
 - **Git's executable config**: `.git/config`, `.git/hooks/`, `.git/info/`, and the same three paths in each
   submodule gitdir under `.git/modules/`.
-- **Ostra's own state**: `.ostra/workspace.toml` and the workspace db, the project memory db (with its `-wal`,
+- **Ostra's own state**: `.ostra/workspace.toml` and the workspace db, the memory db of each work dir (with its `-wal`,
   `-shm`, and `-journal` files), the `.state` dir of the session, and each path that the execution lists as
   protected.
 - **Workspace artifacts**: `.ostra/artifacts/` is read-only, because agents read workspace artifacts and never
@@ -540,7 +542,7 @@ and filters. The profile keeps git usable and closed:
   you ask for keeps them. Thus a filter such as git-crypt still applies to what you commit. The search reads at
   most 256 repositories.
 
-The covered repos are all dirs under the workspace root and the repo root that hold a `.git` dir or file, at any
+The covered repos are all dirs under the workspace root and each work dir that hold a `.git` dir or file, at any
 depth. Ostra finds them when the execution starts ([`git_repos`](../../crates/ostra-sandbox/src/git.rs)). The
 walk goes breadth first. It does not enter symlinks, `node_modules`, or dirs tagged as caches with a
 `CACHEDIR.TAG` (Cargo tags `target/`), because those dirs hold build output, not the user's repos. The walk stops

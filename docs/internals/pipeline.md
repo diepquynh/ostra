@@ -9,9 +9,12 @@ follows one request through every stage. For each stage, it tells what the stage
 
 Two facts apply to every section below.
 
-- **Code runs the pipeline, not a model.** The planner in
-  [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) decides which stage comes next,
-  when a loop stops, and how many agents run at the same time. The planner is a pure function from the
+- **Code runs the pipeline, not a model.** The planner decides which stage comes next, when a loop stops, and
+  how many agents run at the same time. The engine's planner in
+  [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) walks the workflow. The rules of
+  each built-in stage on this page are in the standard plugin's pipeline, one folder for each stage in
+  [`crates/ostra-default-plugin/src/stages/`](../../crates/ostra-default-plugin/src/stages/)
+  ([Plugins](plugins.md#the-pipeline)). The planner is a pure function from the
   session's state to a list of next steps. Models do the work inside a stage and answer a small set of named
   questions. These questions are the judges, which [Gates and judges](gates-and-judges.md) describes. No agent
   can decide to skip the review.
@@ -37,7 +40,7 @@ Intake → Classify* → Explore ×N (parallel) → Sufficiency* → Track*
 → Implementation review (gate) ⟲ feedback → Feedback* → revision phases
 → Format (once per project)
 → Closing gate (tests? docs?) → EPA ×N (parallel) → Write-test (one phase at a time, reviewed)
-→ Documentation ×N (parallel) → System architecture (2+ projects) → Book write
+→ Book stage: Scan → Survey → Page writers ×N (parallel) → Fact-check and synthesis rounds ⟲ → Book write
 → Completion report*
 
 * judge call     ⟲ a FAIL goes back to the author with the findings
@@ -55,13 +58,31 @@ the route:
 | `IMPLEMENT` | Research, then the light or the full track, the phases, the implementation review, and the closing stages. |
 | `VERIFY` | One implementer pass per project. The pass runs the project's test command and reports the result. |
 | `TEST` | Directly to the test stage: EPA, write-test, review. No closing gate, because the request asked for tests. The stage verifies at each level that has a test type in the project (unit, integration, end to end). It also runs again the existing tests that cover the code. |
-| `DOCS` | Directly to the docs stage: one documentation writer per project, then the system architecture when the stage documents two or more projects, then the book write. No closing gate, because the request asked for documentation. No project file changes. |
+| `DOCS` | Directly to the docs stage: the docs pipeline for each project, then the book write. No closing gate, because the request asked for documentation. No project file changes. |
 | `PROMPT` | Prompt-generation. A review runs only when a changed file is code and not an instruction file. |
 | `QUICK_CHANGE` | One implementer pass per project on the native executor, with no research, spec, plan, or review. |
 
-The route table is the `match category` block at the top of `Planner::run`. When the judge is not sure which of
-two categories applies, its prompt tells it to pick the one that runs more of the pipeline. It picks that one
+The route of each category is its built-in workflow: the chain of built-in stages that it runs (`builtin_chain` in
+[`crates/ostra-core/src/workflow.rs`](../../crates/ostra-core/src/workflow.rs)). When the judge is not sure which
+of two categories applies, its prompt tells it to pick the one that runs more of the pipeline. It picks that one
 because a skipped stage that the request needed gives a wrong result, but an unneeded stage costs one round.
+
+### Your own stages: workflows
+
+A workspace can change the route with workflow files in `.ostra/workflows/`. A workflow extends a built-in
+workflow. It adds stages between the stages of Ostra. Each added stage runs a custom agent or the stage logic of a plugin. For
+example, a workflow can add a security audit after the build and before the closing stages. A workflow can also
+leave out these parts:
+
+- The implementation review.
+- The closing stages.
+- The book stage.
+- The Track judge. A fixed track replaces it.
+
+Built-in stages keep their order and their rules. Thus, each gate on this page still applies. The session records
+its workflow when it starts. Thus, a change to a file never changes a session that runs. A custom stage that fails or
+needs a decision opens a `stage_review` gate ([Gates and judges](gates-and-judges.md#stage-review)).
+[Workflows](workflows.md) describes the file format, the rules, and how the planner goes through the stages.
 
 On the session board, the lanes follow the same path. In this session, the stages from research through build
 are done, and the session waits for the user in review:
@@ -131,7 +152,7 @@ restarts the running work, and you cannot withdraw it:
 ![The Add context box with Send now and Queue for the next step](../images/console/add-context.png)
 
 When a task fails, the engine retries it automatically one time (`ERROR_RETRIES = 1` in
-[`state.rs`](../../crates/ostra-engine/src/state.rs)). Then it opens an execution-failed gate. If every task
+[`data.rs`](../../crates/ostra-default-plugin/src/data.rs) of the standard plugin). Then it opens an execution-failed gate. If every task
 fails or is abandoned, the session fails with the message "there is no research document to write a spec from".
 The reason is Rule D1, which forbids a spec without research.
 
@@ -150,7 +171,7 @@ needed item, it also gives one more research task.
 The judge often gives the same task to several related items. For example, six gaps about the law of one country
 become one "research these statutes" task. So the engine keeps one task for each project and task text. It skips
 a copy of a task that is still queued or in progress. One round adds at most three tasks
-(`MAX_SUFFICIENCY_RESEARCH` in [`judge.rs`](../../crates/ostra-engine/src/judge.rs)), the first three that the
+(`MAX_SUFFICIENCY_RESEARCH` in [`judge.rs`](../../crates/ostra-default-plugin/src/judge.rs)), the first three that the
 judge names. Those tasks spawn, and the cycle repeats.
 
 The engine allows three sufficiency rounds (`SUFFICIENCY_ROUNDS`). After the third round, it continues to the
@@ -224,10 +245,15 @@ the phases.
 
 ## Spec: what should change
 
-One `generate-spec` agent runs for the whole session, in the primary project. It receives the full request,
+One `generate-spec` agent runs for the whole session. It works in every project in scope, and its working folder is the primary project (Rule WD1). It receives the full request,
 every research document (oldest first, with superseded documents included), and the projects in scope. It also
 gets the `Changed since research:` line (Rule D2a). This line lists the cited files whose content changed, or that
 are gone, after the newest document that names them, or `none`. For every file that the line does not list, the prompt tells the agent to take current behavior from the research documents. The agent does not read the code again.
+
+The spec groups its requirements into deliverables. Each deliverable holds at least one complete feature of the
+request, and the spec never splits one feature across two deliverables (Rules S2, S4). A feature is one
+behavior that a user or a caller can use. For example, if the request asks for 4 API endpoints, each endpoint
+works completely when its deliverable is done: input, validation, stored data, response, and error paths.
 
 The agent writes the spec file and submits its summary, counts, external evidence rows, and open questions.
 
@@ -356,6 +382,21 @@ name, such as `step 2.3` or `...-phase-2.md`. The agent reads and changes only t
 only the steps and fields that change. At every level, an item that an update names takes the fields that the
 update sends and keeps its other fields. So a revision never sends a whole phase again to change one step.
 
+Each phase leaves at least one feature working, and no phase is one layer (Rule P14). A deliverable gets one
+phase by default. The plan splits a deliverable only between its features. So the phase for an endpoint holds
+the migration, the entity, the service, and the route that the endpoint needs. The plan does not give the
+entities, the migrations, and the controllers a phase each. A layer phase builds code that does nothing yet.
+Its implementer, its reviewer, and the next phase then read the same files again, and its build proves
+nothing about the request. The plan also does not copy the spec into its steps (Rule P15). A step names the
+files, the symbols, and the existing patterns, and the requirement text appears once, in the phase's
+requirements list.
+
+The Document tool checks Rule P14 on each plan write. A phase completes a requirement when no other phase in the
+same project delivers it. A phase that completes no requirement is an error, and a requirement that two phases
+in one project deliver is a warning. A phase in another project does not count, because Rule WD3 can split one
+feature into one phase per project. The check is `working_features` in
+[`check.rs`](../../crates/ostra-core/src/doc/check.rs).
+
 The plan is a master plan plus one file per phase. Each phase has an ID, a project, a deliverable, a complexity,
 a test policy (`Required`, or `Skip` with a rationale), and the phases that it depends on. Each step names the
 skills that it needs from the repository's inventory. Ostra fills the Required Skills of a phase from the union
@@ -462,8 +503,43 @@ After the user approves the plan, its Phase Index becomes the build queue. The s
 - A phase is ready when every phase that it depends on is finished and passed review (Rules D6, M3).
 - If Ostra cannot read the dependency list of a phase, the phase depends on every earlier phase (Rule M5).
 - Each project runs one implement pipeline at a time (Rule M2), because two implementers in the same working tree
-  overwrite the changes of each other.
+  overwrite the changes of each other. A phase in several projects holds each of them (Rule WD2).
 - Ready phases in different projects run in parallel.
+
+### Phases in several projects
+
+A phase can name several projects, because one deliverable can need a change in each of them. An example is an
+API in the backend and the screen that calls it in the frontend. The plan writes the project cell of such a phase
+as a comma-separated list, with the main project first: `api, web`. The fold keeps the main project in
+`PhaseInfo.project` and the others in `PhaseInfo.also` (Rule WD2). If a key is not a project of the session or a
+project that the plan creates, the phase is blocked.
+
+Every run of the phase works in each project that it names: the implementer, the reviewers, the test analysis,
+write-test, and their fix passes (Rule WD1). The main project is the working folder of the run, and the spawn names
+the folder of each other project. Each project that the phase names gets its own format step and closing gate. The
+test and docs stages of each of these projects count the phase. The phase gets one test analysis, from its main
+project, because one analysis covers the whole change.
+
+Only the native executor works in several projects (Rule WD3). So the plan run gets `Stage limits:`, one line for
+each later stage of the workflow, for example:
+
+```text
+build: implementer (harness:codex) one project
+review: code-reviewer (native) several projects
+test: execution-path-analyzer (native) several projects, write-test (native) several projects, code-reviewer (native) several projects
+```
+
+If a phase run uses an agent that works in one project, the plan run records that agent in its params. Then the
+submit check refuses a phase that names several projects, with this correction first: "Split phase N into one
+phase per project and link them with Depends on: implementer runs on harness:codex and works in one project." The
+fold blocks such a phase if a plan passed without the check. If a harness run still gets several projects, the
+runner keeps the main project only and shows "Harness run: works in `api` only, `web` left out (Rule WD3)" on
+the run.
+
+A phase creates only its main project, because the run that creates a project starts in the session dir (Rule
+O2). So the submit check also refuses a phase that names a new project after its main project, with this
+correction: "Put new project web first in the project cell of phase 2, or give it its own phase: a phase creates
+only its main project."
 
 When a phase ends blocked, Ostra removes from the queue every phase that depends on it, directly or through other
 phases. Independent phases continue (Rule D9). `removed_phases` calculates the removal again on every planner
@@ -528,7 +604,8 @@ state:
 
 ### The implement and review loop
 
-Each phase is a loop, `WorkLoop` in [`state.rs`](../../crates/ostra-engine/src/state.rs):
+Each phase is a loop, `WorkLoop` in
+[`stages/build/data.rs`](../../crates/ostra-default-plugin/src/stages/build/data.rs):
 
 1. The `implementer` runs with `Phase file:`, which points at its phase, or with `No plan:` and a reason (Hard
    rule 13). It edits the code and submits its changed files and report path.
@@ -539,7 +616,7 @@ Each phase is a loop, `WorkLoop` in [`state.rs`](../../crates/ostra-engine/src/s
      instruction to remove the problem. This loop has no cap, and no gate can waive it (Hard rule 21). Also, the
      project's documentation does not run when a BLOCKER is open.
    - **Auto-fixable**: the engine applies these findings itself
-     ([`autofix.rs`](../../crates/ostra-engine/src/autofix.rs)), with no agent run. A finding is auto-fixable
+     ([`stages/build/autofix.rs`](../../crates/ostra-default-plugin/src/stages/build/autofix.rs)), with no agent run. A finding is auto-fixable
      when the project marks its rule ID auto-fixable and its fix text is exactly
      ``Change `x` to `y` on line N`` or ``Add `text` above line N: `anchor` ``.
    - **HIGH and MEDIUM** go to the fix agent exactly as written, with the path of the review ledger. For each
@@ -567,7 +644,9 @@ the diff:
 ### Staging
 
 When the review of a phase passes, the engine runs `git -C <project> add` on the files that the implementer
-reported as changed. So the review of the next phase sees only the changes of the next phase, because reviews
+reported as changed. For a phase in several projects, the engine adds each file in the repository of the project
+that holds it (Rule WD2). A relative path is in the main project. An absolute path is in the deepest project folder
+that contains it. So the review of the next phase sees only the changes of the next phase, because reviews
 look only at unstaged work.
 
 ### When an agent is stuck or needs help
@@ -669,7 +748,7 @@ it picks `requirement_change`, because a spec that does not agree with the code 
 
 A revision does not continue the conversation of an earlier agent. The runner writes `ostra-session-context.md`
 in the session folder from the event log (Rule F2,
-[`crates/ostra-engine/src/context.rs`](../../crates/ostra-engine/src/context.rs)). It writes the file before a
+[`crates/ostra-default-plugin/src/context.rs`](../../crates/ostra-default-plugin/src/context.rs)). It writes the file before a
 revision spawns and before the review gate opens. The file lists these items:
 
 - the request with every amendment,
@@ -850,9 +929,14 @@ OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 \
 
 The docs stage writes a documentation book. It does not write code comments or files inside a project. Comments
 already explain the code line by line. A reader needs other facts: how a feature works end to end, what it assumes, where its boundaries are, and how the workspace's projects communicate. The book gives these facts to
-a person who reads it in the console or as exported HTML. It also gives them to an agent that reads its Markdown.
+a person who reads it in the console or as exported HTML. It also gives them to an agent that searches it.
 
-Both writer prompts (`documentation` and `system-architecture`) hold a copy of Ostra's writing standard. The
+The book is a guide, not a copy of the code. The writer chooses the topics that a reader cannot get quickly from
+the code, and the user's instructions steer that choice. An earlier design gave each section the same eight
+fields and split a large project among area writers that covered every unit of work. That design copied the code
+into the book, repeated each fact in many places, and filled the search with passages that said the same thing.
+
+The `documentation` prompt holds a copy of Ostra's writing standard. The
 standard is Simplified Technical English (STE), the controlled English of the ASD-STE100 specification, adapted
 for software. A writer uses one topic in each sentence, the active voice, and one meaning for each word. A description has at most 25 words, and an instruction has at most 20. It writes no metaphors, because an agent follows a
 figure of speech literally. It writes an assumption that a change can break as a caution: the command first, then
@@ -863,131 +947,314 @@ The standard is the same one that `CLAUDE.md` sets for this repository (HANDOVER
 ### Two ways in
 
 - **After a build.** If you ask for docs (the New task toggle, the request itself, or the closing gate), the
-  stage runs after the test stage. If you declined tests, it runs directly after format. Each writer reads the
-  implementer report of every passed phase and documents the code as the change left it.
+  book stage runs after the closing stage. Each writer reads the implementer report of every passed phase and
+  documents the code as the change left it.
 - **A `DOCS` request.** Ostra classifies a request such as "Write the architecture docs for these services" or
   "document the billing flow" as `DOCS`. Like a `TEST` request, the fold adds one done inline phase per project,
   with the closing choice already set to docs only. So no implementer runs and no gate opens. The runner writes
   `ostra-docs-request.md` into the session folder of each project, with the request and no changed files. It
   gives this file to the writer as its implementer report.
 
-  The writer documents what the request names. If the request names nothing, the writer documents the whole
-  project from its entry points. A request to change a README or a docs page inside a project changes project
+  The writer documents what the request names. If the request names nothing, the writer writes the guide that a
+  new engineer needs for the whole project. A request to change a README or a docs page inside a project changes project
   files. So that request is `IMPLEMENT`, not `DOCS`.
 
 Documentation stays opt-in. A workspace whose projects have no relation to each other gets no book until you ask
 for one. Each set of projects that you document gets its own book.
 
-### Splitting a large project among writers
+### The book stage
 
-One writer cannot document a large repository in one submit. The part that it returns must fit in one reply, so
-it covers only some dozens of units of work and leaves out the rest. On Ostra's own source, the part of one writer
-answered 127 of 221 questions about the code. With the same code split into one writer per crate, the parts
-answered 220. So before the first writer starts, the planner emits `PlanDocs`, and the runner measures the
-project (Rule B9, `docs_areas.rs`):
+The docs run in their own workflow node, the built-in stage `ostra:book`. The default `implement`, `test`, and
+`docs` workflows end with a node `docs` that uses it, after the `closing` node. The stage reads the choice of the
+closing gate itself, because a built-in stage takes no `when` conditions (Rule WB5). When the choice of every
+project is known, it runs one docs pipeline for the documented projects: the projects that the closing gate chose
+docs for, with a passed phase and no open BLOCKER (Hard rule 21). Then the engine writes the book. The stage is
+done when the pipeline is settled and the book is written.
 
-1. It lists the files that git tracks. If the project is not a git checkout, it lists every file. It skips lockfiles, images, archives, generated folders (`target`, `node_modules`, `dist`, `build`), dot folders, and files over 1 MB. None of them is source that a writer documents.
-2. It gives each file to the first module-map row whose glob matches it, and adds up the bytes per area. If a
-   project has no module map, the runner splits it by its top-level folders. The files that no glob matches form
-   one more area.
-3. It groups the areas in module-map order, so that adjacent areas share a writer. A group grows until it holds
-   about 384 KB of source (`AREA_TARGET_BYTES`). An area larger than that gets a writer of its own. If there are
-   more than 20 groups (`MAX_DOCS_AREAS`), the target grows until 20 groups remain. A project of 384 KB or less,
-   or with source in one area only, keeps one writer.
-4. It records `DocsPlanned` with three lists of areas: all areas, the areas in which the book's current part was written, and the areas with a file that this session changed.
+The book stage waits for the whole closing stage. So the docs of a project start after the tests of every project
+end. Other nodes can read the choice as `closing.docs` and the book as `docs.book`, after the node IDs of the
+default workflows
+([Workflows](workflows.md#data-between-nodes)). A workflow can bind the agents of the stage with
+`agents = { documentation = "...", fact-check = "..." }` (Rule WF8).
 
-The target is small because a writer covers only what fits in one reply. In a Sonnet run on Ostra with a 512 KB
-target and a cap of 12 writers, the book answered 219 of 221 questions. But the writer that got six small crates
-in 858 KB wrote 7 sections for all of them. On a repository larger than 384 KB times 20, about 7.5 MB, the cap
-sets the share of each writer, not the target.
+A workflow without an `ostra:book` node keeps the earlier place: the closing stage runs the docs pipeline and
+the book write itself, after the tests of every documented project end. A session from a log without a recorded
+workflow keeps one docs pipeline for each project, and the docs of one project can run at the same time as the
+tests of a different project. This path is deprecated, and the workflow
+carries a notice that tells you to add the node ([Workflows](workflows.md#a-workflow-without-the-book-stage)).
 
-The event carries all three lists because the fold cannot read the disk. From the event, the fold decides which
-areas to rewrite:
+The code of the stage is in the standard plugin's
+[`stages/book/`](../../crates/ostra-default-plugin/src/stages/book/): the planner in `planner.rs`, the state and
+the docs track in `data.rs` and `track.rs`, how runs and gates change it in `runs.rs` and `gates.rs`, the checks
+in `checks.rs`, and the scan in `scan.rs`. The book format and its storage stay in
+[`crates/ostra-core/src/book.rs`](../../crates/ostra-core/src/book.rs), because the engine, the console, and the
+book search all read them.
 
-- A `DOCS` request rewrites every area.
-- After a build, only the areas that hold a changed file are rewritten. The other areas keep their sections from
-  the book.
-- If the book has no part for the project, or its part was written in other areas, every area is rewritten. The
-  reason is that Ostra cannot tell which old section belongs to which new area.
+### The docs pipeline
 
-Each area writer gets `Area:`, `Area paths:`, and `Other areas:` lines. It documents only the units of work whose
-code is in its area. When its code calls into another area, it names that area in the boundaries of a section. It
-starts every section ID with the ID of its area. The engine joins the submits of the areas into one part, in area
-order. The overview of each area becomes a paragraph with the name of the area.
+The docs stage is a pipeline of runs, not one agent (Rule B10). One writer cannot write a thorough book of a large
+project, because its whole result must fit in one reply. A measured run shows the limit: one Sonnet 5.5 writer at
+high effort wrote 23 pages of about 1,000 words each, and the book answered 107 of the 221 eval questions. Many
+writers fix the length, but writers that work at the same time cannot see each other's pages. A run with 16
+parallel topic writers answered 211 questions, but it wrote 64 narrow pages, repeated the same rules on up to 5
+pages, and linked to pages that no longer existed. So the stage writes in parallel and then reconciles the drafts
+in rounds until the book meets a definition of done:
 
-If an earlier area already used a section ID, the engine appends the ID of the area to it. The book records which
-sections each area wrote (`BookPart.areas`). This record lets a later session rewrite one area and keep the rest.
+0. **Scan.** Before the survey, the engine reads the modules and the named constants of each documented project from disk
+   (`OstraStep::ScanDocs`, a `Step::Pipeline` step) and records them in `DocsScanned`, because the fold cannot read the file system. The
+   modules come from the module map, or else from the source folders, with a folder of 3 or more source
+   subfolders, such as `crates/`, split into one module per subfolder. The constants are the upper-case names
+   that Rust, TypeScript, JavaScript, Go, Java, Kotlin, and Python code defines outside test files, at most 1500.
+   The runner writes both as `reference.md` in the drafts folder, and every later run reads it. The survey
+   waits until every documented project is scanned.
+1. **Survey.** One `documentation` run with `Docs mode: survey` makes one brief pass over everything that is
+   available: the code of every documented project, the project memory lessons, the workspace artifacts, the files that the user attached or
+   uploaded, and the existing book. It returns the project overview, an inventory, and a page plan. The inventory
+   lists everything that the book must cover, each item with exactly one owning page, or with an `out_of_scope`
+   reason. Each mechanism that two or more pages use, such as the slot limiter, gets its own item. An item also
+   lists its `settings` (the keys, environment variables, and CLI flags that a user sets) and its `names` (1 to
+   4 code names that belong to it alone). The plan has 1 to 30 broad pages (`MAX_DOCS_PAGES` in
+   [`stages/book/mod.rs`](../../crates/ostra-default-plugin/src/stages/book/mod.rs)) in groups such as `How it works` and `Security`,
+   like the pages of this documentation.
+2. **First drafts.** One run with `Docs mode: page` writes each planned page. A writer gets its page, the whole
+   plan, and the inventory items that its page owns.
+3. **Rounds.** Each round runs three steps:
+   - A `fact-check` run with target type `page` checks each page that changed: every draft in round 1, then the
+     pages that the last round revised.
+   - One run with `Docs mode: synthesis` reads every draft, the inventory, the fact-check findings, and the
+     engine's checks. It judges each check of the definition of done, and it lists edits for each page.
+   - Each page that the edits, a failed fact-check, or an engine check names gets a revision run. The writer
+     reads its draft and applies each item on its `Revise:` line.
 
-Area writers count against the same cap as project writers: at most four documentation agents run at the same
-time in a session. A failed area gets its own failure gate. An abandoned area keeps its sections from the book.
-Ostra writes the part if at least one area was written or kept.
+```mermaid
+flowchart LR
+  survey[Survey] --> p1[Draft page 1]
+  survey --> p2[Draft page 2]
+  p1 --> check[Fact-check changed pages]
+  p2 --> check
+  check --> syn[Synthesis pass]
+  syn -->|done| book[Write the book]
+  syn -->|edits| rev[Revise named pages]
+  rev --> check
+```
 
-### What a writer returns
+Before each run after the survey, the runner writes the drafts into `ostra-docs-drafts/_session/` in the session
+root: one `<page id>.md` per draft, `index.md` with the page plan, and `inventory.md` with every item and its
+owner. The fact-checks and the synthesis pass read the drafts there.
 
-One `documentation` agent runs per project, or per area of a large project. At most four run at the same time in
-a session (Rule B7), and each also takes an execution slot. The agent is read-only: it returns the part of the book
-for the project in `submit_documentation` and writes no file (Rule B1). The part is an overview, a glossary, and a
-list of sections, one per unit of work, such as `Order cancellation`. A section holds at most one level of
-sub-sections. Every section and sub-section has the same fields, which the book shows in this order:
+#### One pipeline for every documented project
+
+The stage runs one pipeline for the whole session, not one for each project, because a feature can span
+projects. For example, a route in `api` and the screen in `web` that calls it are one flow for a reader. A writer
+of one project's part cannot see the other part, so before this change the flow had no page. Its two halves were
+on two pages that did not link to each other.
+
+- **Key and folders.** The runs of the pipeline carry the key `_session` (`book::SESSION_DOCS`) in place of a
+  project key: `docs-survey _session`, `docs _session/<page>`, and one `docs_rounds` gate for the session. Each run
+  works in every documented project (Rule WD1). Its session dir is the session root, and its drafts folder is
+  `ostra-docs-drafts/_session/`.
+- **Book parts.** Each run gets `Book parts:`, a list of each documented project. The book also has the part
+  across projects, `_cross` (`book::CROSS_PART`), which the line does not list because every book has it (Rule
+  B11). The survey gives each page a `part`. It puts each
+  flow, contract, and setup that two or more projects take part in, such as an end-to-end test, on a page in
+  `_cross`. It writes one overview for each part with a page in `part_overviews`, and the introduction of the
+  whole book in `overview`.
+- **Tagged paths.** The reference sheet writes each module glob and each file as `@<project>/<path>`, and the
+  survey writes the code paths of its sources the same way. An item's source that names a project covers only
+  the modules of that project, so a source in `api/src` does not cover the `src` module of `web`.
+- **Code references.** A page writer gets `Page part:`. A code reference names its `project` when its file is not
+  in the page's own project, and a page in `_cross` names it on every reference.
+- **The submit check.** `check_with_params` in
+  [`stages/book/parts.rs`](../../crates/ostra-default-plugin/src/stages/book/parts.rs) reads `Book parts:` from the
+  run's params. It refuses a page without a valid part, a part with pages and no overview, and a code reference
+  that names an unknown project, or that names none on a page in `_cross`.
+- **The book write.** The fold splits the planned pages into one part update for each part with a page
+  (`session_parts`). Each part gets its overview and the inventory items that its pages own.
+
+A log that recorded no workflow, or that ran a docs run, a survey, or a scan for one project's own pipeline,
+keeps one pipeline for each project (`docs_per_project` in
+[`stages/book/fold.rs`](../../crates/ostra-default-plugin/src/stages/book/fold.rs)). A scan records
+`session_wide` in `DocsScanned`, so the fold can tell the two paths apart.
+
+#### The definition of done
+
+The synthesis pass judges nine checks, which copy what this documentation does:
+
+| Check | Done when |
+| --- | --- |
+| Coverage | Every inventory item is covered by its owning page, or is out of scope with a reason. Every module of the reference sheet has an item, and each named constant is on a page or named as internal. |
+| One owner | Each shared mechanism has one owner page that explains it. Every other page that uses it states what it needs in one sentence and links to the owner in the same `##` part. |
+| Agreement | No two pages disagree about a name, a number, a count, a status name, a command, or a behavior. |
+| Depth | Each page answers the page questions that its sources answer, with the reason for each rule that a source states. A page with code references shows a code excerpt. A security or spend page also states what it does not guarantee. |
+| User view | Each `##` part that explains a behavior that a user can set has a `### For the user` block: a table with the setting, its default and unit, where it is stored, when a change takes effect, what shows the state, and how to stop or change the behavior. |
+| Facts | No HIGH or MEDIUM fact-check finding is still open. A LOW finding does not block done. |
+| Links | Every link to another page names a page of the plan. |
+| Writing | Every page follows the writing standard. |
+| Self-contained parts | Each `##` part answers the questions that a reader asks about its sub-topic in full, because the book search returns each part alone. |
+
+The pipeline does not trust the pass alone. It runs its own checks on the drafts (`mechanical_issues` in
+[`stages/book/checks.rs`](../../crates/ostra-default-plugin/src/stages/book/checks.rs)): a link
+to `<page id>.md` that names no page, the words "would", "should", and "might", "e.g.", "i.e.", and "etc.", a
+semicolon or an em dash in prose, an inventory item without an owning page, and a module of the reference sheet
+that no inventory item covers. An item covers a module when one of its sources lies inside the module, or the
+module lies inside one of its sources. Three more checks enforce the shape of a page:
+
+- **The user block.** The owner page of an item must name each of the item's `settings` inside a
+  `For the user` block. A dotted key also matches by its last segment, because a page that shows a `[limits]`
+  table writes `max_parallel_executions` without the table name.
+- **One explanation.** A page that is not the owner, and that names an item's `names` or `settings` in a `##`
+  part, must link to the owner page in that part. If the page names the item in 3 or more paragraphs, the check
+  asks the writer to cut the text to one sentence and a link. A page in the `Reference` group is a catalog that
+  lists values, so it needs only the link. Split facts were the main defect of the parallel
+  writers: in one eval book, the event append, the slot rules, and the budget guard each had full copies on 2 to
+  5 pages. A name that more than half of the pages use is shared vocabulary, and the check ignores it.
+- **A code excerpt.** A page with `code_refs` must hold a fenced code block that is not a diagram. In one eval
+  book, the code question scored lowest of the eight page questions, because most pages listed files and showed
+  no code.
+
+A failed check on a page sends that page a revision, the same as a synthesis edit. The synthesis pass also gets each named constant that no page mentions,
+and it either sends the constant to the page that owns its file or names it as internal.
+
+The inventory grows during the loop. A synthesis pass can add an item, with its owning page or an
+`out_of_scope` reason, and the owning page gets a revision that covers it. A pass that sets `done` ends the loop
+only when no inventory item or module lacks an owner. Otherwise the next round runs another synthesis pass,
+with no fact-checks, because no page changed.
+
+Only HIGH and MEDIUM fact-check findings block done. A LOW finding reaches a writer only when its page needs an
+edit for another reason. In one eval run, rounds 4 to 6 of 6 fixed only LOW findings and cost $26.70 of $148.48,
+so the rule bounds the loop to the findings that matter. On a `page` target, a rule stated without the reason
+that a comment, a test, or a rule ID gives is a MEDIUM finding. A re-check of a revised page diffs it against its
+previous draft, which the runner writes as `<page id>.prev.md`, and checks only the changed lines and the prior
+findings. When the synthesis pass
+finishes, the fold fixes the pages to revise in this round: the pages that its edits name, each page with a
+failed fact-check, and each page that an engine check names. The loop ends when a pass sets `done` and no page
+needs a revision, or when a round revised nothing.
+
+After each 3 rounds without done (`DOCS_ROUNDS`), a `docs_rounds` gate asks whether to run another round or to
+accept the book as it is. YOLO always runs another round, so the session budget is the bound, as in the review
+loop. All runs of the stage fan out at once, across every step (Rule B7). The workspace's
+`limits.max_parallel_executions` bounds how many run at the same time, through the slot limiter. Each submit names its `step` (`survey`, `page`, or
+`synthesis`). A run that answers another step fails with the instruction to submit the right step, because the
+fold must not read a page as a survey.
+
+After a build, the survey sets `rewrite: false` for each page that the changed files do not reach, and that page
+keeps its text from the book. The book also stores the inventory, so the next survey can update it.
+
+#### What a page holds
+
+A page has these fields:
 
 | Field | What it holds |
 | --- | --- |
-| `purpose` | What the unit does, for whom, and when. |
-| `boundaries` | What it owns, and what it leaves to which other section or project, so that a change to one unit does not break another. |
-| `assumptions` | What the code takes as given without a check. Required (Rule B2), because if an assumption breaks, the code breaks and no test fails. |
-| `business_flow` | The steps in domain terms: actor, action, outcome. |
-| `diagrams` | Mermaid sequence diagrams and flowcharts, one per flow or step. |
-| `tables` | Reference facts: fields, routes, config keys, states, error codes. |
-| `concerns` | The separation of concerns: each component and its one responsibility. |
-| `code_refs` | Last: project-relative paths, symbols, and lines, with what the reader finds there. |
+| `id` | A lowercase slug, unique in the survey's plan. A later run keeps the ID, because other pages and agents link to it. |
+| `group` | The group of the book's contents, such as `How it works` or `Security`. The console's sidebar shows the pages by group. |
+| `title` | The topic in a few words, such as `Order cancellation` or `Add a route`. |
+| `summary` | One or two sentences about what the reader learns on the page. The book index shows it. |
+| `body` | The page in Markdown. The writer chooses the structure: paragraphs, lists, tables, and `mermaid` diagrams. |
+| `code_refs` | Optional. Paths relative to the root of their project, symbols, and lines, with what the reader finds there. A reference names its `project` when its file is not in the page's own project. The page shows them last. |
 
-`validate_submit` checks the shape before the engine accepts the submit. The model gets each problem with its fix
-in the tool reply. `validate_submit` refuses these items:
+The survey chooses the pages. Each page is broad: it covers an area that a reader looks for as a whole, such as
+one `Executors` page for every executor, with one `##` part per sub-topic. The inventory lists the reference
+facts too, such as each family of settings, limits, error messages, and UI rules, because a reader looks them up.
 
-- a section with no assumptions,
-- a duplicate or malformed section ID,
+Each page answers eight questions where the sources answer them:
+
+| Question | What the page states |
+| --- | --- |
+| The problem | What goes wrong or is missing without this part. The page starts with it. |
+| The mechanism | How it works, step by step, with the component that does each step. |
+| The reasons | Why each rule exists, from the code, its rule comments, its tests, or the history, never from a guess. |
+| The cases | What each failure, timeout, cancellation, retry, concurrent request, restart, missing dependency, or run-time setting change does, as a list. |
+| The groups | The classes that the code treats differently, with their members. |
+| The user's view | Settings with defaults, units, storage, and when a change takes effect, where the state shows, and how to stop or change it. |
+| The limits | Each cap, timeout, size, and default as a number with its unit and its constant or setting. |
+| The code | Markdown links to the files, and 1 or 2 excerpts of at most 15 lines where they show a behavior. |
+
+The prompt quotes a passage of this documentation, about the execution slots, as the depth to copy. It asks for
+1,500 to 3,000 words on most pages, because a page that lists facts without the reasons and the cases is not
+finished.
+
+#### The user steers the part
+
+The writer follows the user's instructions (Rule B2). It reads them in this order:
+
+1. The docs-stage notes on the `User notes:` line. The judge keeps them from earlier gate answers (Rule J1).
+2. The request: `ostra-docs-request.md` for a `DOCS` request, or the session request on the `The request:` line.
+3. The `Workspace instructions` section at the end of the task. The brief adds `instructions.all` and
+   `instructions.agents.documentation` from the workspace settings, read again for each execution.
+
+The instructions can set the audience, the topics, the depth, and what to leave out. For example, set
+`instructions.agents.documentation` to "Write for on-call engineers. Cover failure handling and recovery first.
+Leave out the admin UI." The rules in the Constraints of the prompt win over the instructions: grounding in the
+source, the writing standard, the diagram limits, and no file writes.
+
+#### What the submit checks refuse
+
+Two checks run on a `documentation` submit before the engine accepts it. The model gets each problem with its fix
+in the tool reply:
+
+- `validate_submit` in the core checks the book format of each page and of the glossary (`check_pages`).
+- The standard pipeline checks the step of the docs stage (`Pipeline::check_submit`, which the executor calls
+  through `ExecutionHost::check_submit`).
+
+Together they refuse these items:
+
+- a survey with no page or more than 30, a page without a title, a group, or what it covers, a page ID used twice,
+  or an inventory item without an owning page or an `out_of_scope` reason,
+- a page step that returns other than one page,
+- a synthesis pass that sets `done` with a failed check or an edit, or that is not done and lists no edit,
+- a duplicate or malformed page ID,
+- a page with no title, no summary, or no body,
+- a level-1 heading in a body, because the title is the only one,
 - a code reference that is absolute or goes outside the project,
-- a table row with the wrong number of cells,
-- a diagram over its size limit (Rule B3).
+- a sequence diagram or a flowchart over its size limit (Rule B3).
 
 The size limits are at most 8 participants and 20 messages in a sequence diagram, and 15 nodes in a flowchart.
-The first line of a diagram must match the declared kind. These limits keep each diagram about one piece of work,
-not one chart of everything. The prompt tells the writer to split a long flow into one diagram per step. A run
-that ends without a readable submit fails, because there is nothing to put in the book.
+Other Mermaid kinds, such as `stateDiagram-v2` and `erDiagram`, have no limit. The limits keep each diagram about
+one piece of work, not one chart of everything. A run that ends without a readable submit fails, because there is
+nothing to put in the book.
 
-### The system architecture
+#### Books from before free pages
 
-When the parts written in a session cover two or more projects, one `system-architecture` agent runs after the
-last writer (Rule B4). Before it starts, the runner writes the parts from the fold into `ostra-docs-parts.json` in
-the session root. The agent verifies each cross-project call in source and in deployment files. It returns these
-items:
+A book that an earlier version wrote still loads (Rule B9). Its sections have typed fields: purpose, boundaries,
+assumptions, business flow, diagrams, tables, concerns, and sub-sections. When Ostra reads `book.json`, each such
+section becomes a page. The purpose becomes the summary, each field becomes a `###` heading in the body, and each
+sub-section becomes a `##` part with its fields under `####` headings. A session log with a `DocsPlanned` event
+from the area split still folds: the fold ignores the event. A log whose whole-part writer already started
+keeps that writer and runs no pipeline. The next docs run
+for the project writes its part in the new shape.
 
-- one flowchart of the components,
-- the components, with what each one owns,
-- the links, with their protocol, `sync` or `async` mode, and payload,
-- how each failure is detected and recovered,
-- how each component scales, and where its scaling stops.
+### A book of two or more projects
 
-A book of one project has no architecture section.
+A book of two or more projects is its parts and the glossary, and no agent writes a system architecture for it
+(Rule B4). A single writer cannot check a cross-project architecture against every part, and an architecture
+that a user wrote is a better source than one that an agent guessed from the code. If you want the book to cover
+how the projects work together, attach or tag your architecture document in the request. Then each survey lists
+it as a user source, and the pages that it reaches use it. A session log from before this rule can hold an
+architecture run. The fold ignores it.
 
 ### Writing the book
 
-The engine writes the book, not an agent (Rule B5). The planner emits `WriteBook` when both of these conditions
-are true:
-
-- The writer of every documented project is settled.
-- The architecture, if there is one, is done or abandoned.
+The engine writes the book, not an agent (Rule B5). The planner emits `WriteBook` when the docs pipeline of the
+session is settled. The runner asks the pipeline for the update of the session (`Pipeline::book_update`). The
+update holds one `PartUpdate` for each part that has a planned page: the part's overview, the inventory items that
+its pages own, and every planned page of the part in order. The first part also holds the glossary and the items
+out of scope. Each page is `PageUpdate::Write` with the page that
+the session wrote, or `PageUpdate::Keep` with the ID of a page that the book keeps.
 
 The runner merges the parts of the session into the book and writes these files:
 
 ```
 <workspace>/.ostra/docs/<book>/
   book.json            the whole book, which the console renders and exports
-  index.md             every part, with a link and a first sentence per section
+  index.md             every part, with a link and the first sentence of the summary per page
   glossary.md
-  architecture.md      only for a book of two or more projects
-  <project>/<section>.md
+  <part>/<page>.md      the title, the summary, the body, and the code references
 ```
+
+Each part is a folder: a project key, or `_cross` for the part across projects. A page in one part can link to a
+page in another part as `<page id>.md`. The engine writes that link as `../<part>/<page id>.md`, so the link works
+in the Markdown files. `index.md` lists the part across projects last, under the heading `Across projects`.
 
 The runner records `BookWritten`. Only then does the session complete. Ostra records a failed write with its
 error on the board, and the session continues. The `workspace-docs` guard and a read-only sandbox mount block
@@ -998,18 +1265,18 @@ A book has the name of its projects, sorted and joined with `_` (`api_web`). So 
 the same projects updates the same book (Rule B6). The New task form can also pick an existing book. An update
 makes these changes:
 
-- The new part of a project replaces its old part.
-- A new architecture replaces the old one.
+- The new part of a project, or of the part across projects, replaces its old part.
 - Glossary entries merge by term, and the newer definition stays.
-- The part of another project stays as it was.
+- A part that the session does not plan a page for stays as it was.
 
-A part is replaced as a whole. So each writer gets the current `book.json` as `Existing book:` and copies the
-sections that its change did not reach. The engine holds one lock from the read of `book.json` to the write. So if
+A part is replaced as a whole. So the survey gets the current `book.json` as `Existing book:` and keeps the
+pages that its change did not reach (`rewrite: false`). A kept page comes from its own part, or else from the part
+that held it before, so the survey can move a page from a project's part to the part across projects. The engine holds one lock from the read of `book.json` to the write. So if
 two sessions finish on the same book at the same time, both keep their parts.
 
-Ostra documents nothing in a project when a BLOCKER finding is open in that project (Hard rule 21). If the writer
-of a project was abandoned, the book leaves the project out. The book has the name of the parts that were
-written.
+Ostra documents nothing in a project when a BLOCKER finding is open in that project (Hard rule 21). If the survey
+of the session was abandoned, the session writes no book. The book has the name of the documented projects.
+`Book.projects` lists the projects and leaves out the part across projects.
 
 `GET /api/workspaces/{ws}/docs` serves the list of books, newest first. `GET /api/workspaces/{ws}/docs/{book}`
 serves one `book.json`. A `DELETE` on the second route removes the folder of a book.
@@ -1021,20 +1288,19 @@ own tab (`/w/<ws>/b/<book>`). The reader makes pages from `book.json` in the bro
 (`web/src/features/docs/bookModel.ts`). So it always shows the stored book, never Markdown that an agent wrote.
 The pages come in reading order:
 
-- an overview with the introduction of each project,
+- an overview with the introduction of each part,
 - the glossary,
-- the system architecture, when the book has one,
-- the sections of each project.
+- the pages of each part, with the part across projects named `Across projects`.
 
-A section page shows purpose, boundaries, assumptions, the business flow as a numbered table, the diagrams, the
-tables, and separation of concerns. Each sub-section follows with the same parts. The code references close the
-page, because a reader needs the behavior before the files. The sidebar lists the sections, with their
-sub-sections under them. The right-hand column lists the headings of the page. Search covers every page, and
-Previous and Next follow the reading order.
+A page shows its title, its summary, and the body that the writer wrote. The code references close the page,
+because a reader needs the behavior before the files. The sidebar lists the pages, with the `##` headings of each
+page under it. The right-hand column lists the headings of the page. Search covers every page, and Previous and
+Next follow the reading order.
 
-Text from a book field is escaped before it becomes Markdown. A title or a table cell shows the characters that it
-holds. Prose keeps inline code and emphasis, but it cannot start a heading, a fence, or a rule. So a field cannot
-change the structure of the page.
+Text from a typed field is escaped before it becomes Markdown. A title or a table cell shows the characters that it
+holds. A summary or an overview keeps inline code and emphasis, but it cannot start a heading, a fence, or a rule.
+A body is Markdown as the writer wrote it, but a level-1 heading in it is escaped. So no field can add a second
+title to the page.
 
 The renderer is the same one that the Ostra docs site uses (`@ostra/design/docs`). It allows no raw HTML. It
 allows links only to `http`, `https`, `mailto`, or another page of the book. It runs Mermaid in strict mode with
@@ -1055,12 +1321,15 @@ file opens in the same way from a disk, a mail attachment, or a static host.
 Agents read books through search, and do not open them whole (Rule B8). Every agent that learns code has the
 `docs_search` capability, from explore to the reviewer and the documentation writer itself. When the workspace
 has a book, the repo brief of each spawn lists the books. It tells the agent to search them before it reads code.
-The search cuts each section into passages: its purpose, boundaries, assumptions, flow, each diagram, each table,
-concerns, and code references. It ranks the passages with BM25.
+The search cuts each page at its `##` headings into units. The text above the first `##` heading belongs to the
+page unit, with the summary and the code references. It cuts each unit into passages: each paragraph, each
+diagram, each other code block, and lists and tables in windows of five rows. A `###` or deeper heading labels the
+passages under it. It ranks the passages with BM25.
 
-The search returns the best sections, with only the passages that matched and the Markdown path of the section.
-So a question about one fact does not pull a whole section into the agent's context, when most of the section is
-about other things. [Tools](tools.md#docssearch) covers the ranking.
+The search returns the best units, with only the passages that matched and the Markdown path of the page. So a
+question about one fact does not pull a whole page into the agent's context, when most of the page is about other
+things. A `##` heading that names its own topic, such as `## Refund a paid order`, makes a better result than
+`## Details`, so the prompt tells the writer to name each `##` part for its topic. [Tools](tools.md#docssearch) covers the ranking.
 
 ## The completion report
 
@@ -1089,7 +1358,7 @@ A completion report names the stages that did not run and how to run them. It al
 
 | Limit | Value | Where |
 | --- | --- | --- |
-| Concurrent executions per workspace | `limits.max_parallel_executions` | Slot limiter in `runner.rs` |
+| Concurrent executions per workspace | `limits.max_parallel_executions` | Slot limiter in `runner/driver.rs` |
 | Session spend | `limits.session_budget_usd` | Budget gate in `Planner::push` |
 | Implement pipelines per project | 1 | Rule M2, `Planner::phases` |
 | Sufficiency rounds | 3 | `SUFFICIENCY_ROUNDS` |
@@ -1098,9 +1367,7 @@ A completion report names the stages that did not run and how to run them. It al
 | Review passes per loop | 3, or 10 under YOLO | `REVIEW_CAP`, `YOLO_REVIEW_BUDGET` |
 | Automatic retries after an error | 1 | `ERROR_RETRIES` |
 | Failing builds before build commands are refused | 5 | `DENY_THRESHOLD` in `build.rs` |
-| Documentation writers at once per session | 4 | `plan::MAX_DOCS_WRITERS` |
-| Source one documentation writer covers | 384 KB | `book::AREA_TARGET_BYTES` |
-| Area writers per project | 20 | `book::MAX_DOCS_AREAS` |
+| Pages one docs survey may plan | 30 | `MAX_DOCS_PAGES` in the standard plugin's `stages/book/mod.rs` |
 | Init scouts | 6 | `init::MAX_SCOUTS` |
 | Skills generated by default at init | 8 | `init::MAX_DEFAULT_GENERATE` |
 | Attached files per request | 50 | `MAX_CONTEXT_FILES` |

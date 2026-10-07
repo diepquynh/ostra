@@ -5,7 +5,7 @@ use super::check::{DocIssue, IssueLevel, check, check_written};
 use super::refs::snapshot;
 use super::render::render;
 use super::{Document, DocumentView, PhaseDoc, PlanDoc, ResearchDoc, SpecDoc};
-use crate::agent::AgentName;
+use crate::contract::Contract;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -18,21 +18,34 @@ pub enum DocKind {
 }
 
 impl DocKind {
-    pub fn for_agent(agent: AgentName) -> Option<DocKind> {
-        match agent {
-            AgentName::Explore => Some(DocKind::Research),
-            AgentName::GenerateSpec => Some(DocKind::Spec),
-            AgentName::Plan => Some(DocKind::Plan),
+    pub const ALL: [DocKind; 3] = [DocKind::Research, DocKind::Spec, DocKind::Plan];
+
+    /// Rule CA5: the document a contract's submit names.
+    pub fn for_contract(contract: Contract) -> Option<DocKind> {
+        match contract {
+            Contract::Research => Some(DocKind::Research),
+            Contract::Spec => Some(DocKind::Spec),
+            Contract::Plan => Some(DocKind::Plan),
             _ => None,
         }
     }
 
-    pub fn owner(self) -> AgentName {
+    /// Rule CA6: the capability that grants writing this document.
+    pub fn grant(self) -> crate::agent::Capability {
+        use crate::agent::Capability;
         match self {
-            DocKind::Research => AgentName::Explore,
-            DocKind::Spec => AgentName::GenerateSpec,
-            DocKind::Plan => AgentName::Plan,
+            DocKind::Research => Capability::DocumentResearch,
+            DocKind::Spec => Capability::DocumentSpec,
+            DocKind::Plan => Capability::DocumentPlan,
         }
+    }
+
+    /// The documents these capabilities grant.
+    pub fn granted(caps: &[crate::agent::Capability]) -> Vec<DocKind> {
+        DocKind::ALL
+            .into_iter()
+            .filter(|k| caps.contains(&k.grant()))
+            .collect()
     }
 
     pub fn prefix(self) -> &'static str {

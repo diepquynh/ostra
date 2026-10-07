@@ -130,16 +130,58 @@ pub struct ExecContext {
     /// yet, so it runs from the workspace root and must create that project first.
     #[serde(default)]
     pub creates_project: bool,
-    /// Rule H3: a consult run answers a question and writes no file.
-    #[serde(default)]
-    pub answer_only: bool,
-    /// Rule H3: the run starts with a question from another subagent, so it answers with
-    /// `SubagentReply` and submits nothing before that.
+    /// Rule SM6: the run starts with messages from subagents that wait for its reply, so its
+    /// reminders name `SendMessage` before its submit tool.
     #[serde(default)]
     pub owes_reply: bool,
+    /// Rule CA2: where the agent may write. Absent means its session dir only.
+    #[serde(default)]
+    pub write_scope: Option<crate::agent::WriteScope>,
+    /// Rule CA5: the result contract the run submits.
+    #[serde(default = "stage_contract")]
+    pub contract: crate::contract::Contract,
+    /// Rule CA6: the run's capabilities, which grant tools and the files the guards let it write.
+    #[serde(default)]
+    pub capabilities: Vec<crate::agent::Capability>,
+    /// Rule WD1: the project folders the orchestrator named for this run, the main one first. A
+    /// context from before work dirs has none, and its run works in `repo_root` alone.
+    #[serde(default)]
+    pub work_dirs: Vec<WorkDir>,
+}
+
+/// Rule WD1: one project folder an execution works in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkDir {
+    pub project: String,
+    pub path: PathBuf,
+}
+
+fn stage_contract() -> crate::contract::Contract {
+    crate::contract::Contract::Stage
 }
 
 impl ExecContext {
+    /// Rule CA2: the agent's write scope.
+    pub fn scope(&self) -> crate::agent::WriteScope {
+        self.write_scope.unwrap_or_default()
+    }
+
+    /// Rule WD1: the folders this run works in: `repo_root`, then each other named work dir.
+    pub fn work_roots(&self) -> Vec<&std::path::Path> {
+        let mut roots: Vec<&std::path::Path> = vec![];
+        for p in std::iter::once(&self.repo_root).chain(self.work_dirs.iter().map(|w| &w.path)) {
+            if !p.as_os_str().is_empty() && !roots.contains(&p.as_path()) {
+                roots.push(p);
+            }
+        }
+        roots
+    }
+
+    /// Rule CA6: the run holds this capability.
+    pub fn has(&self, c: crate::agent::Capability) -> bool {
+        self.capabilities.contains(&c)
+    }
+
     /// The sandbox settings the workspace keeps in the registry.
     pub fn sandbox(&self) -> crate::config::WorkspaceSandbox {
         crate::config::WorkspaceSandbox {
@@ -291,11 +333,11 @@ pub enum ExecutionDelta {
     },
 }
 
-/// The message that wakes a waiting run (Rule H2).
+/// Messages handed to a run at a turn boundary, or the message that wakes a waiting run (Rule SM2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wake {
     pub note: String,
-    /// The message is a question the run must answer with `SubagentReply` (Rule H3).
+    /// Rule SM6: a sender waits for this run's reply.
     pub owes_reply: bool,
 }
 
@@ -325,10 +367,38 @@ pub trait ExecutionHost: Send + Sync {
         false
     }
 
-    /// Rule H2: a harness run that asked another subagent waits here, with its execution slot
-    /// freed, until Ostra has the message that wakes it. `None` means no message will come.
+    /// Rule SM3: a harness run that paused itself waits here, with its execution slot freed,
+    /// until Ostra has the message that wakes it. `None` means no message will come.
     async fn wait_for_wake(&self) -> Option<Wake> {
         None
+    }
+
+    /// Rule SM2: the messages queued for this run, handed over now and recorded as delivered.
+    /// Executors call it only at a turn boundary, so a message never lands inside a request.
+    fn take_messages(&self) -> Option<Wake> {
+        None
+    }
+
+    /// Rule SM2: messages are queued for this run, without handing them over.
+    fn has_messages(&self) -> bool {
+        false
+    }
+
+    /// Rule SM6: why the run may not submit yet, as the correction for the model.
+    fn submit_blocked(&self) -> Option<String> {
+        None
+    }
+
+    /// The checks the run's pipeline adds to its contract's submit, after the shape check, such
+    /// as the docs stage's checks of a `documentation` submit (Rule B10). Each issue states the
+    /// correction first.
+    fn check_submit(&self, _contract: crate::Contract, _input: &serde_json::Value) -> Vec<String> {
+        vec![]
+    }
+
+    /// Rule PL8: plugin `plugin`'s checkpoints in this run's session.
+    fn checkpoints(&self, _plugin: &str) -> Arc<dyn crate::plugin::Checkpoints> {
+        Arc::new(crate::plugin::NoCheckpoints)
     }
 }
 

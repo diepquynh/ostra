@@ -8,7 +8,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { chromium } from "@playwright/test";
 import { mintUrl } from "../lib/api";
-import { CHROME, ROOT } from "../lib/env";
+import { BROWSER, ROOT } from "../lib/env";
 import { expect, test } from "../lib/guard";
 
 function filesContaining(dir: string, needle: string): string[] {
@@ -33,7 +33,7 @@ test("the sign-in token leaves the URL and is spent wherever the profile kept it
   expect(token).toMatch(/^[0-9a-f]{32,}$/);
 
   const ctx = await chromium.launchPersistentContext(profile, {
-    executablePath: fs.existsSync(CHROME) ? CHROME : undefined,
+    ...BROWSER,
     headless: true,
   });
   const page = ctx.pages()[0] ?? (await ctx.newPage());

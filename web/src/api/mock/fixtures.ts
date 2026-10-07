@@ -1,5 +1,6 @@
 import type {
   ActivityItem,
+  Category,
   DecisionView,
   ExecutionGroupView,
   ExecutionView,
@@ -56,7 +57,6 @@ export const settings: WorkspaceSettings = {
         "code-reviewer": "balanced",
         "execution-path-analyzer": "balanced",
         documentation: "advanced",
-        "system-architecture": "advanced",
         "prompt-generation": "advanced",
         initializer: "balanced",
         judge: "advanced",
@@ -89,6 +89,7 @@ export const settings: WorkspaceSettings = {
   sandbox_readable: [],
   sandbox_loopback: "open",
   sandbox_blocked_ports: [],
+  plugins: [],
   mcp_servers: [
     {
       name: "github",
@@ -204,7 +205,40 @@ export const workspaceDetail: WorkspaceDetail = {
   },
   global_sandbox: { network: "allowlist", allowed_hosts: ["mirror.corp.example"] },
   global_tool_enforcement: "disabled",
+  workflows: [
+    ...(["research", "spec", "plan", "implement", "verify", "test", "docs", "prompt", "quick-change"] as const).map(
+      (name) => ({
+        name,
+        description: `Ostra's built-in ${name} pipeline.`,
+        base: name.toUpperCase().replace("-", "_") as Category,
+        default_for: [],
+        builtin: true,
+        stages: [],
+        notices: [],
+      }),
+    ),
+    {
+      name: "implement-with-release-gate",
+      description: "The implement pipeline with a release check after tests.",
+      base: "IMPLEMENT",
+      default_for: [],
+      builtin: false,
+      stages: [],
+      notices: [],
+    },
+  ],
+  missing_workflows: [],
 };
+workspaceDetail.workflows.push({
+  name: "gate:release-check",
+  description: "Research, then the release checks, built in code by the gate plugin.",
+  base: "RESEARCH",
+  default_for: [],
+  builtin: false,
+  plugin: "gate",
+  stages: [],
+  notices: [],
+});
 
 export const phases: PhaseInfo[] = [
   {

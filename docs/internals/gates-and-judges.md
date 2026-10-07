@@ -25,8 +25,14 @@ answers:
 - An open-questions answer that leaves a question blank.
 - A rejection of a spec or plan with no feedback ("Say what to change.").
 
-A valid answer becomes a `GateAnswered` event. The fold in [`state.rs`](../../crates/ostra-engine/src/state.rs)
-(`on_gate_answered`) changes it into new state, and the planner acts on that state. An answer with content, for
+A valid answer becomes a `GateAnswered` event. The engine's fold in
+[`state.rs`](../../crates/ostra-engine/src/state.rs) records the answer on the gate and gives it to the pipeline
+(`Pipeline::gate_answered`). The standard pipeline's `on_gate_answered`
+([`fold/gates.rs`](../../crates/ostra-default-plugin/src/fold/gates.rs)) gives the answer to the stage that owns
+the gate (`gates.rs` in the stage's folder under `stages/`), which changes it into new state, for each
+gate kind but one, and the planner acts on that state. The budget gate never goes to the pipeline: the engine
+folds it itself, because the session budget belongs to the engine (see
+[Spend and limits](spend-and-limits.md)). An answer with content, for
 example the answer to a question or any text, goes to a judge first. The judge decides where the answer goes
 (Rule J1, [below](#every-answer-goes-through-a-judge-first)).
 
@@ -65,6 +71,7 @@ the LOW findings. It also accepts an optional change request:
 | `execution_failed` | An execution failed after its automatic retry, or you stopped it | `retry` or `abandon` |
 | `skill_approval` | The init flow proposed skills. This occurs in an init session or in the build of a project that the session created | For each skill: generate, regenerate, reuse, or drop |
 | `budget_reached` | The session spent its budget | `raise` (with the added dollars as text) or `stop` |
+| `stage_review` | A custom stage of a workflow failed and its `on_fail` asks, or the stage needs a decision from you (Rule WF5) | After a failure: `retry` (with optional guidance), `continue`, or `stop`. For a question: one of its options, `other` with your answer as text, or `stop` |
 
 ### Open questions
 
@@ -228,6 +235,45 @@ not a positive number, `raise` adds the original budget again. `stop` fails the 
 
 ![The budget gate with the amount spent, the budget, and Raise the budget and Stop the session buttons](../images/console/gate-budget.png)
 
+### Docs rounds
+
+The docs stage reconciles its drafts in synthesis rounds until the book meets its definition of done (Rule B10).
+After each 3 rounds without done, this gate opens before the next revisions. It names the checks that the last
+synthesis pass found failed. The session-wide docs pipeline has one such gate for every documented project. A session from an older log has one gate for each project. Nothing of the pipeline runs while the gate is open.
+
+`continue` runs another round, and the gate opens again only after 3 more rounds. `accept` ends the loop and
+writes the book from the current drafts. Under YOLO the engine answers `continue`, so the session budget is the
+bound, as in the review loop.
+
+### Stage review
+
+A custom stage of a [workflow](workflows.md) opens this gate in these cases:
+
+- Its agent submits `needs_user` with a question and options.
+- Its agent submits `fail`, and the `on_fail` of the stage is `gate`.
+- Its agent submits `fail`, the `on_fail` of the stage is `retry`, and the stage used all its rounds.
+
+The stage logic of a [plugin](plugins.md) opens the gate in the same way when it decides `ask` or `fail`. The card
+shows these items:
+
+- The stage and the scope (`phase:<n>` or `project:<key>`).
+- The round and its limit.
+- The summary and the findings.
+- For a question, its options, with the recommended option first.
+
+After a failure, `validate_answer` accepts `retry`, `continue`, or `stop`. After a question, it accepts one of the
+options, `other` with text that is not empty, or `stop`. The fold (`stage_gate_answered` in
+[`workflow.rs`](../../crates/ostra-engine/src/workflow.rs)) applies the answer:
+
+- `stop` stops the session. The error names the stage.
+- `continue` records the failure, and the stages after it run.
+- `retry` runs the stage again with its last findings. Your guidance goes to the stage as a user note.
+
+The fold keeps each answer to a question as a user note, and the stage runs again with it. Each new round
+continues the conversation of the agent (Rule H5). For a plugin stage, the plugin decides again.
+
+These answers go to the stage directly, not through the Route answer judge, because only that stage reads them.
+
 ## YOLO: the engine answers
 
 YOLO means that the orchestrator makes all decisions. YOLO can be the workspace default (`yolo.default`). The
@@ -235,12 +281,19 @@ user can also turn it on or off for a session at any time. The change applies fr
 
 With YOLO on, the planner emits a `YoloAnswer` step for every open gate, with three exceptions:
 
-- Permission asks.
 - The budget gate.
 - The failure gate of an execution that you stopped.
+- The gate of a custom stage that failed in each round that it can run.
 
-`judge_input::yolo_leaves_open` lists these exceptions. For each gate, `judge_input::yolo_plan` in
-[`judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) returns one of three things:
+`judge_input::yolo_leaves_open` lists these exceptions. These gates stay open for you.
+
+The planner also emits no `YoloAnswer` step for a permission ask, because the runner answers it first. Under
+YOLO, the policy changes each ask into an allow, and the runner records an `AllowOnce` answer. When you turn on
+YOLO, the runner also allows each permission ask that waits.
+
+For each gate, `judge_input::yolo_plan` in
+[`judge_input/yolo.rs`](../../crates/ostra-default-plugin/src/judge_input/yolo.rs) returns one of three things.
+The engine asks it through `Pipeline::yolo_plan`:
 
 - A fixed answer with a stated reason.
 - A call to the YOLO-answer judge, with a JSON schema for the answer of that gate.
@@ -260,6 +313,7 @@ With YOLO on, the planner emits a `YoloAnswer` step for every open gate, with th
 | `skill_approval` | Fixed: the default dispositions of the proposal. |
 | `permission` | The execution answers it: the session acts as `bypass`, so the ask never waits. This includes `ProjectCreate`, which asks in every mode without YOLO. |
 | `budget_reached` | None. The gate stays open for the user. |
+| `stage_review` | A question takes its first option, which the agent lists as recommended. If the question has no options, the answer is `other` with "Decide as you recommend and go on." A failure gets `retry` when the stage has rounds left. After the last round, the gate stays open for you, because only you can accept a check that fails again and again. |
 
 The engine does not trust the answer of the judge without checks. `yolo_answer_from_judge` changes it into a
 gate answer and enforces the conditions that must stay true:
@@ -317,8 +371,13 @@ Judges are the only places where a model makes an orchestration decision. Each j
 
 - A short prompt in [`assets/judges/`](../../assets/judges/).
 - An output struct with a JSON schema in
-  [`crates/ostra-engine/src/judge.rs`](../../crates/ostra-engine/src/judge.rs).
-- An input builder in `judge_input.rs` that decides exactly what the judge sees.
+  [`crates/ostra-default-plugin/src/judge.rs`](../../crates/ostra-default-plugin/src/judge.rs).
+- An input builder in the `judge_input.rs` of the stage that asks the judge, with an arm in the dispatcher in
+  [`judge_input/inputs.rs`](../../crates/ostra-default-plugin/src/judge_input/inputs.rs), that decides
+  exactly what the judge sees.
+
+The judges belong to the standard pipeline. The engine makes the judge call (`Step::Judge`, `Services::judge`)
+and asks the pipeline for the input and the schema (`Pipeline::judge_input`, `Pipeline::judge_schema`).
 
 Judges run on the `judge` route, which resolves to the `advanced` tier by default. The engine stores each
 decision as an event with its input summary and reason. The board shows it as "Ostra chose X because Y".
@@ -423,7 +482,7 @@ as a `User notes:` line:
 
 - `implement` notes go to the implementer and to fix passes.
 - `tests` notes go to the path analyzer and to the test writer.
-- `docs` notes go to the documentation writers and to the system architecture agent.
+- `docs` notes go to the documentation writers.
 
 The engine cannot keep a note for the plan agent, because the plan agent takes requirements only from the spec
 (Rule D4). The engine delivers an answer that the plan needs, so the answer goes into the spec. A delivered answer
@@ -601,9 +660,9 @@ change breaks.
 
 | To see | Read |
 | --- | --- |
-| Where each gate opens | `Planner` methods in [`plan.rs`](../../crates/ostra-engine/src/plan.rs): `spec_flow`, `plan_flow`, `loop_steps`, `closing_stages`, `exec_failed_gate`, `push` for the budget |
-| What an answer does | `on_gate_answered` in [`state.rs`](../../crates/ostra-engine/src/state.rs) |
-| What a judge decision does | `on_decision` in `state.rs` |
-| YOLO answers per gate | `yolo_plan` and `yolo_answer_from_judge` in [`judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) |
-| Answer validation | `validate_answer` in [`runner.rs`](../../crates/ostra-engine/src/runner.rs) |
+| Where each gate opens | The `planner.rs` of each stage in the standard pipeline's [`stages/`](../../crates/ostra-default-plugin/src/stages/): `spec_flow`, `plan_flow`, `loop_steps`, `closing_stages`, and `docs_stage` for `docs_rounds`. The engine's [`plan.rs`](../../crates/ostra-engine/src/plan.rs): `exec_failed_gate`, and `push` for the budget |
+| What an answer does | `on_gate_answered` in [`fold/gates.rs`](../../crates/ostra-default-plugin/src/fold/gates.rs), which calls the stage's `gates.rs` |
+| What a judge decision does | `on_decision` in [`fold/decisions.rs`](../../crates/ostra-default-plugin/src/fold/decisions.rs), which calls the stage's `judges.rs` |
+| YOLO answers per gate | `yolo_plan` and `yolo_answer_from_judge` in [`judge_input/yolo.rs`](../../crates/ostra-default-plugin/src/judge_input/yolo.rs) |
+| Answer validation | `validate_answer` in [`runner/control.rs`](../../crates/ostra-engine/src/runner/control.rs), which asks the pipeline first for a gate of a built-in stage |
 | Fixtures | `yolo_answers_gates_and_extends_review_budget`, `t2_yolo_answers_the_closing_gate`, `d9_blocked_phase_removes_dependents`, and `approval_without_pass_is_ignored_by_the_fold` in [`tests/conformance/main.rs`](../../tests/conformance/main.rs) |

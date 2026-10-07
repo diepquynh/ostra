@@ -4,7 +4,7 @@
 use super::refs;
 use super::store::{DocKind, load, phase_path};
 use super::{Document, PhaseDoc, PlanDoc, ResearchDoc, SpecDoc};
-use crate::agent::AgentName;
+use crate::contract::Contract;
 use crate::pipeline::Question;
 use crate::submit::{GenerateSpecSubmit, PlanSubmit};
 use serde::{Deserialize, Serialize};
@@ -542,6 +542,64 @@ fn plan(d: &PlanDoc, out: &mut Issues) {
             format!("Break the phase cycle {cycle}, because Ostra schedules phases as a graph."),
         );
     }
+    working_features(d, out);
+}
+
+/// Rule P14: each phase leaves at least one requirement working, so a phase is a feature and never a
+/// layer. A phase in another repo does not count against it, because P8a splits one feature by repo.
+fn working_features(d: &PlanDoc, out: &mut Issues) {
+    let mut by_req: BTreeMap<&str, Vec<&super::Phase>> = BTreeMap::new();
+    for p in &d.phases {
+        let reqs: BTreeSet<&str> = p
+            .steps
+            .iter()
+            .flat_map(|s| s.delivers.iter().map(String::as_str))
+            .collect();
+        for r in reqs {
+            by_req.entry(r).or_default().push(p);
+        }
+    }
+    for p in &d.phases {
+        let mine: Vec<&str> = by_req
+            .iter()
+            .filter(|(_, ps)| ps.iter().any(|q| q.id == p.id))
+            .map(|(r, _)| *r)
+            .collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let shared_with = |r: &str| -> Vec<u32> {
+            by_req[r]
+                .iter()
+                .filter(|q| q.id != p.id && q.repo == p.repo)
+                .map(|q| q.id)
+                .collect()
+        };
+        if mine.iter().all(|r| !shared_with(r).is_empty()) {
+            let others: BTreeSet<u32> = mine.iter().flat_map(|r| shared_with(r)).collect();
+            out.error(
+                Some(format!("phase {}", p.id)),
+                format!(
+                    "Merge phase {} with phase {}: it completes none of {}, so its code works only after another phase (P14). A phase delivers at least one working feature, never one layer.",
+                    p.id,
+                    others.iter().map(u32::to_string).collect::<Vec<_>>().join(", "),
+                    mine.join(", ")
+                ),
+            );
+        }
+    }
+    for (r, ps) in &by_req {
+        let repo = ps[0].repo.as_str();
+        if ps.len() > 1 && ps.iter().all(|q| q.repo == repo) {
+            out.warn(
+                Some((*r).to_string()),
+                format!(
+                    "Deliver `{r}` in one phase: phases {} each build part of it (P14).",
+                    ps.iter().map(|q| q.id.to_string()).collect::<Vec<_>>().join(", ")
+                ),
+            );
+        }
+    }
 }
 
 fn phase_file(d: &PhaseDoc, out: &mut Issues) {
@@ -664,11 +722,11 @@ fn blocking(doc: &Document) -> Result<(), String> {
 
 /// For agents that write a document: the submitted path has a document with no errors, and the
 /// submit's counts agree with it. Reads files, so it runs at the tool boundary, never in the fold.
-pub fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String> {
-    if agent == AgentName::Initializer {
+pub fn check_submit(contract: Contract, input: &serde_json::Value) -> Result<(), String> {
+    if contract == Contract::Setup {
         return check_inventory_submit(input);
     }
-    let Some(kind) = DocKind::for_agent(agent) else {
+    let Some(kind) = DocKind::for_contract(contract) else {
         return Ok(());
     };
     let field = match kind {
@@ -738,7 +796,7 @@ pub fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), S
                         && sp.complexity == p.complexity.as_str()
                         && sp.test_policy == p.test_policy.as_str()
                         && deps == have
-                        && Path::new(&sp.file) == file;
+                        && (sp.file.trim().is_empty() || Path::new(&sp.file) == file);
                     if !same {
                         wrong.push(format!(
                             "Phase {} in `phases` disagrees with the plan. Send id {}, deliverable {}, project {}, complexity {}, test_policy {}, depends_on {:?}, file {}.",

@@ -2,11 +2,11 @@
 //! Ultracode hook library, named in its function's comment.
 
 use crate::bash::{self, Parsed, SimpleCommand, TargetSpec};
-use ostra_core::AgentName;
 use ostra_core::exec::ExecContext;
 use ostra_core::ignore_files::{IgnoreFiles, Under};
 use ostra_core::paths;
 use ostra_core::policy::RuleRef;
+use ostra_core::{Capability, WriteScope};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -51,12 +51,17 @@ fn canon(p: &Path) -> PathBuf {
 /// Canonical roots of one execution, computed once.
 #[derive(Debug, Clone)]
 pub struct Roots {
+    /// The main work dir: the run's working folder and the root of its project setup.
     pub repo: PathBuf,
+    /// Rule WD1: every work dir of the run, `repo` first.
+    pub repos: Vec<PathBuf>,
     pub session_dir: PathBuf,
     pub session_root: PathBuf,
     pub state_dir: PathBuf,
     pub sessions_root: PathBuf,
     pub memory_db: PathBuf,
+    /// Rule WD1: the memory database of each work dir, which only the Memory tool writes.
+    pub memory_dbs: Vec<PathBuf>,
     pub protected: Vec<PathBuf>,
     /// Files protected together with their `-wal`, `-shm`, and `-journal` siblings.
     pub protected_db_files: Vec<PathBuf>,
@@ -90,6 +95,11 @@ impl Roots {
         let mut protected: Vec<PathBuf> = ctx.protected_paths.iter().map(|p| canon(p)).collect();
         if !ws.as_os_str().is_empty() {
             protected.push(canon(&paths::workspace_toml(ws)));
+            // Rules CA1, WF1, and WB7: an agent that wrote these would define the agents, stages,
+            // and transforms that run after it.
+            protected.push(canon(&paths::workspace_agents_dir(ws)));
+            protected.push(canon(&paths::workspace_workflows_dir(ws)));
+            protected.push(canon(&paths::workspace_transforms_dir(ws)));
         }
         let mut protected_db_files = vec![];
         if !ws.as_os_str().is_empty() {
@@ -97,6 +107,7 @@ impl Roots {
         }
         Roots {
             repo: canon(&ctx.repo_root),
+            repos: ctx.work_roots().into_iter().map(canon).collect(),
             session_dir: canon(&ctx.session_dir),
             state_dir: paths::session_state_dir(&session_root),
             session_root,
@@ -106,6 +117,11 @@ impl Roots {
                 canon(&paths::sessions_root(ws))
             },
             memory_db: canon(&ctx.memory_db),
+            memory_dbs: ctx
+                .work_roots()
+                .into_iter()
+                .map(|r| canon(&paths::project_memory_db(r)))
+                .collect(),
             protected,
             protected_db_files,
             temps,
@@ -168,7 +184,7 @@ impl Roots {
 
     /// OS temp scratch. A project that itself lives under temp is project source, not scratch.
     pub fn in_temp(&self, p: &Path) -> bool {
-        self.temps.iter().any(|t| inside(t, p)) && !inside(&self.repo, p)
+        self.temps.iter().any(|t| inside(t, p)) && !self.in_repo(p)
     }
 
     /// Rule G2: the ignore files as this execution's searches see them, Ostra's own state and the
@@ -183,8 +199,27 @@ impl Roots {
         )
     }
 
+    /// Rule WD1: inside one of the run's work dirs.
     pub fn in_repo(&self, p: &Path) -> bool {
-        inside(&self.repo, p)
+        self.repos.iter().any(|r| inside(r, p))
+    }
+
+    /// Rule WD1: the work dir that holds `p`, the deepest when work dirs nest, else the main one.
+    pub fn repo_of(&self, p: &Path) -> &Path {
+        self.repos
+            .iter()
+            .filter(|r| inside(r, p))
+            .max_by_key(|r| r.components().count())
+            .unwrap_or(&self.repo)
+    }
+
+    /// Rule WD1: the work dirs, quoted and joined for a refusal.
+    pub fn repo_list(&self) -> String {
+        self.repos
+            .iter()
+            .map(|r| format!("\"{}\"", disp(r)))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     fn db_file_match(file: &Path, p: &Path) -> bool {
@@ -241,7 +276,9 @@ impl Roots {
     }
 
     pub fn is_memory_db(&self, p: &Path) -> bool {
-        Self::db_file_match(&self.memory_db, p)
+        std::iter::once(&self.memory_db)
+            .chain(self.memory_dbs.iter())
+            .any(|f| Self::db_file_match(f, p))
     }
 
     /// Engine state: this session's state dir, any session's `.state`, and the memory store.
@@ -268,7 +305,8 @@ fn disp(p: &Path) -> String {
 
 struct Owned {
     pattern: Regex,
-    owners: &'static [AgentName],
+    /// Rule CA6: the capability that grants writing it.
+    grant: Capability,
     stakes: &'static str,
 }
 
@@ -289,45 +327,49 @@ static AGENT_OWNED: LazyLock<Vec<Owned>> = LazyLock::new(|| {
     vec![
         Owned {
             pattern: Regex::new(r"^ostra-review-ledger(-[\w.-]+)?\.md$").unwrap(),
-            owners: &[
-                AgentName::CodeReviewer,
-                AgentName::Implementer,
-                AgentName::WriteTest,
-            ],
+            grant: Capability::ReviewLedger,
             stakes: "the engine counts its iterations to cap the review loop",
         },
         Owned {
             pattern: Regex::new(r"^ostra-security-block\.json$").unwrap(),
-            owners: &[AgentName::CodeReviewer],
+            grant: Capability::SecurityBlock,
             stakes: "it records unwaivable BLOCKER findings",
         },
         Owned {
             pattern: Regex::new(r"^ostra-implementer-progress(-[\w.-]+)?\.md$").unwrap(),
-            owners: &[AgentName::Implementer],
+            grant: Capability::ProgressLog,
             stakes: "re-runs read it to learn which steps already succeeded",
         },
     ]
 });
 
-static ARTIFACTS: LazyLock<Vec<(Regex, AgentName, &'static str)>> = LazyLock::new(|| {
+/// Rule CA6: each typed document, the capability that grants writing it, and why it is guarded.
+static ARTIFACTS: LazyLock<Vec<(Regex, Capability, &'static str)>> = LazyLock::new(|| {
     vec![
         (
             Regex::new(r"^ostra-spec-.*\.(md|json)$").unwrap(),
-            AgentName::GenerateSpec,
-            "the spec is the requirements contract and only generate-spec rewrites it (Rules D3 and D10)",
+            Capability::DocumentSpec,
+            "the spec is the requirements contract, written only by the agent that writes the spec (Rules D3 and D10)",
         ),
         (
             Regex::new(r"^ostra-plan-.*\.(md|json)$").unwrap(),
-            AgentName::Plan,
-            "the plan and its phase files are written only by the plan agent (Rule D10)",
+            Capability::DocumentPlan,
+            "the plan and its phase files are written only by the agent that writes the plan (Rule D10)",
         ),
         (
             Regex::new(r"^ostra-research-.*\.(md|json)$").unwrap(),
-            AgentName::Explore,
-            "research documents are written only by explore",
+            Capability::DocumentResearch,
+            "research documents are written only by the agents that research",
         ),
     ]
 });
+
+fn grant_name(c: Capability) -> String {
+    serde_json::to_value(c)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default()
+}
 
 /// One pattern matching every protected state name, for scanning inline interpreter code.
 pub static STATE_NAME: LazyLock<Regex> = LazyLock::new(|| {
@@ -336,14 +378,6 @@ pub static STATE_NAME: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
-
-fn owner_names(owners: &[AgentName]) -> String {
-    owners
-        .iter()
-        .map(|a| a.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
 
 // ---------------------------------------------------------------------------------------------
 // Test paths (scope-policy.js isTestPath)
@@ -571,13 +605,13 @@ pub fn check_write(
         }
     }
     for owned in AGENT_OWNED.iter() {
-        if owned.pattern.is_match(&base) && !owned.owners.contains(&agent) {
+        if owned.pattern.is_match(&base) && !ctx.has(owned.grant) {
             return Some(deny(
                 STATE_OWNERSHIP,
                 format!(
-                    "Leave \"{base}\" to {}: it is owned by them, not {agent}. {}, so only the role that did the work may \
-                     write it. Put what you need to say in your own report instead.",
-                    owner_names(owned.owners),
+                    "Leave \"{base}\" to the agents that hold `{}`, which {agent} does not. {}, so only the agent that did \
+                     the work may write it. Put what you need to say in your own report instead.",
+                    grant_name(owned.grant),
                     capitalize(owned.stakes)
                 ),
             ));
@@ -590,12 +624,13 @@ pub fn check_write(
             .is_some_and(|n| n.to_string_lossy().starts_with("factcheck-snapshot-"))
     });
     if !in_snapshot {
-        for (pattern, owner, why) in ARTIFACTS.iter() {
-            if pattern.is_match(&base) && agent != *owner {
+        for (pattern, grant, why) in ARTIFACTS.iter() {
+            if pattern.is_match(&base) && !ctx.has(*grant) {
                 return Some(deny(
                     ARTIFACT_OWNERSHIP,
                     format!(
-                        "Leave \"{base}\" to {owner}: {why}. Say what should change in your report instead."
+                        "Leave \"{base}\" to an agent that holds `{}`: {why}. Say what should change in your report instead.",
+                        grant_name(*grant)
                     ),
                 ));
             }
@@ -624,7 +659,7 @@ pub fn check_write(
         && base.starts_with("ostra-")
         && !AGENT_OWNED
             .iter()
-            .any(|o| o.pattern.is_match(&base) && o.owners.contains(&agent))
+            .any(|o| o.pattern.is_match(&base) && ctx.has(o.grant))
     {
         if target != declared.as_path() {
             // Rule G1: without tool enforcement any `ostra-*` name is allowed.
@@ -651,36 +686,17 @@ pub fn check_write(
 /// Rule O2: only the implementer of a phase the approved plan puts in a project that does not
 /// exist yet creates a project, only that one, and only with a well-formed call, so the user is
 /// never asked about one that cannot run. (Ostra; no Ultracode source.)
-pub const ANSWER_ONLY: &str = "answer-only";
-
-/// Rule H3: a consult run answers from its conversation and changes nothing.
-pub fn answer_only_denial() -> Denial {
-    deny(
-        ANSWER_ONLY,
-        "Answer with SubagentReply and change no file: this run only answers another subagent's question. Name the change in your answer instead.".into(),
-    )
-}
-
-pub const REPLY_FIRST: &str = "reply-first";
-
-/// Rule H3: a run that was given a question answers it before it submits.
-pub fn reply_first_denial() -> Denial {
-    deny(
-        REPLY_FIRST,
-        "Call SubagentReply with your answer instead: another subagent asked you a question and waits for it, so this run submits nothing until you reply.".into(),
-    )
-}
-
 pub fn check_manage(ctx: &ExecContext, tool: &str, input: &serde_json::Value) -> Option<Denial> {
     use ostra_core::manage::{PROJECT_CREATE, ProjectCreateInput};
     if tool != PROJECT_CREATE {
         return None;
     }
-    if !ctx.agent.manages_projects() || !ctx.creates_project || ctx.session_id.is_none() {
+    // Rule CA6: the capability grants the tools; the phase decides whether it may create.
+    if !ctx.has(Capability::ManageProjects) || !ctx.creates_project || ctx.session_id.is_none() {
         return Some(deny(
             MANAGE_TOOLS,
             format!(
-                "Work in the projects already in scope: {} does not create a project here, because only the implementer of a phase the approved plan puts in a new project creates it.",
+                "Work in the projects already in scope: {} does not create a project here, because only a run that holds `manage_projects` in a phase the approved plan puts in a new project creates it.",
                 ctx.agent
             ),
         ));
@@ -729,12 +745,13 @@ pub fn check_document(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    for (pattern, owner, why) in ARTIFACTS.iter() {
-        if pattern.is_match(&base) && ctx.agent != *owner {
+    for (pattern, grant, why) in ARTIFACTS.iter() {
+        if pattern.is_match(&base) && !ctx.has(*grant) {
             return Some(deny(
                 ARTIFACT_OWNERSHIP,
                 format!(
-                    "Leave \"{base}\" to {owner}: {why}. Say what should change in your report instead."
+                    "Leave \"{base}\" to an agent that holds `{}`: {why}. Say what should change in your report instead.",
+                    grant_name(*grant)
                 ),
             ));
         }
@@ -763,17 +780,17 @@ fn capitalize(s: &str) -> String {
 fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Option<Denial> {
     let agent = ctx.agent;
     let in_session = roots.in_session(target);
-    if agent == AgentName::Implementer
+    // Rule CA6: test files need the `test_files` grant.
+    if !ctx.has(Capability::TestFiles)
         && !in_session
-        && let Ok(rel) = target.strip_prefix(&roots.repo)
+        && let Ok(rel) = target.strip_prefix(roots.repo_of(target))
         && is_test_path(&rel.to_string_lossy())
     {
         return Some(deny(
             NO_TESTS,
             format!(
-                "Leave test files to write-test: \"{raw}\" is a test file or directory path, and the implementer never \
-                 writes or fixes tests (implementer Constraint 6). Tests run only after the user asks for them at the \
-                 closing gate."
+                "Leave test files to the test stage: \"{raw}\" is a test file or directory path, and {agent} does not hold \
+                 `test_files` (implementer Constraint 6). Tests run only after the user asks for them at the closing gate."
             ),
         ));
     }
@@ -781,11 +798,13 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
     if !roots.strict {
         return None;
     }
-    if agent == AgentName::QuickAnswer {
+    // Rule CA2: the scope comes from the agent's definition, built-in or custom.
+    let scope = ctx.scope();
+    if scope == WriteScope::ReadOnly {
         return Some(deny(
             WRITE_SCOPE,
             format!(
-                "Put your answer in your submit call instead of writing \"{raw}\": quick-answer is read-only."
+                "Put your answer in your submit call instead of writing \"{raw}\": {agent} is read-only."
             ),
         ));
     }
@@ -793,25 +812,28 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
         return None;
     }
     if !roots.in_repo(target) {
-        if agent.is_session_only() && roots.in_temp(target) {
+        if scope == WriteScope::Session && roots.in_temp(target) {
             return None;
         }
+        // Rule WD1: a run writes in each work dir the orchestrator named, and nowhere else.
         return Some(deny(
             WRITE_SCOPE,
             format!(
-                "Write only inside the repo root \"{}\" or your session dir \"{}\": \"{raw}\" is outside both.",
-                disp(&roots.repo),
+                "Write only inside a work dir ({}) or your session dir \"{}\": \"{raw}\" is outside all of them. \
+                 Name a needed project in your report.",
+                roots.repo_list(),
                 disp(&roots.session_dir)
             ),
         ));
     }
+    // Rule WD1: project setup writes only in the main work dir, the project it sets up.
     // The target is resolved through symlinks, so the dirs it is compared with are too: a skills
     // dir may be a link to `skills/` or `.claude/skills/` elsewhere in the project.
     let skills = canon(&paths::project_skills_dir(&roots.repo));
     let legacy_skills = canon(&roots.repo.join(paths::LEGACY_SKILLS_DIR));
     // HANDOVER rule I2: the initializer writes skills only to `.agents/skills/`.
-    if agent == AgentName::Initializer && inside(&legacy_skills, target) && !inside(&skills, target)
-    {
+    let setup = scope == WriteScope::Setup;
+    if setup && inside(&legacy_skills, target) && !inside(&skills, target) {
         return Some(deny(
             WRITE_SCOPE,
             format!(
@@ -821,10 +843,8 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
             ),
         ));
     }
-    let extra: Option<Vec<PathBuf>> = match agent {
-        AgentName::Initializer => Some(vec![canon(&paths::project_runtime(&roots.repo)), skills]),
-        _ => None,
-    };
+    let extra: Option<Vec<PathBuf>> =
+        setup.then(|| vec![canon(&paths::project_runtime(&roots.repo)), skills]);
     if let Some(roots_allowed) = extra {
         if roots_allowed.iter().any(|r| inside(r, target)) {
             return None;
@@ -842,7 +862,7 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
             ),
         ));
     }
-    if agent.is_session_only() {
+    if scope == WriteScope::Session {
         return Some(deny(
             WRITE_SCOPE,
             format!(

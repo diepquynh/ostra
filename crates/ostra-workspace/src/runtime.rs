@@ -100,6 +100,7 @@ impl WorkspaceRt {
         let db = WorkspaceDb::open(&paths::workspace_db(root))?;
         db.set_workspace_id(&id)?;
         let services = host.clone().services(&id, root);
+        ostra_default_plugin::install();
         let engine = Engine::new(root.to_path_buf(), id.clone(), db.clone(), services);
         let rt = WorkspaceRt {
             id,
@@ -138,11 +139,150 @@ impl WorkspaceRt {
     }
 
     pub fn environment(&self) -> Environment {
-        self.host.environment()
+        let mut env = self.host.environment();
+        env.agents = crate::settings::agent_routes(&self.host.agents(&self.root).0);
+        env
+    }
+
+    /// Rule CA1: problems in the workspace's custom agent definitions, as settings issues.
+    fn agent_issues(&self) -> Vec<ValidationIssue> {
+        self.host
+            .agents(&self.root)
+            .1
+            .into_iter()
+            .map(|i| ValidationIssue {
+                path: "agents".into(),
+                message: format!("{}: {}", i.source, i.message),
+            })
+            .collect()
+    }
+
+    /// Rule WF1: every workflow file resolves and names only agents and plugin stages the
+    /// workspace has, and no category has two default workflows.
+    fn workflow_issues(&self) -> Vec<ValidationIssue> {
+        let (set, unreadable) = self.workflow_set();
+        let issue = |path: String, message: String| ValidationIssue { path, message };
+        let mut out: Vec<ValidationIssue> = unreadable
+            .into_iter()
+            .map(|(name, m)| issue(format!("workflows.{name}"), m))
+            .collect();
+        // Rule WB7: every composite function file parses and checks.
+        let (functions, unreadable) = ostra_core::workflow::WorkflowSet::load_functions(&self.root);
+        out.extend(
+            unreadable
+                .into_iter()
+                .map(|(name, m)| issue(format!("transforms.{name}"), m)),
+        );
+        for (name, f) in &functions {
+            let problems = ostra_core::transform::check_function(name, f, &functions);
+            if !problems.is_empty() {
+                out.push(issue(format!("transforms.{name}"), problems.join(" ")));
+            }
+        }
+        let agents = self.host.agents(&self.root).0;
+        let plugin_stages = self.host.plugin_stages(&self.root);
+        for name in set.files.keys() {
+            let checked = set.resolve(name).and_then(|wf| {
+                ostra_engine::workflow::check_runnable(&wf, &agents, &plugin_stages)
+            });
+            if let Err(m) = checked {
+                out.push(issue(format!("workflows.{name}"), m));
+            }
+        }
+        // Rule PL6: a plugin's workflow that cannot run is the plugin's problem to report.
+        for name in set.plugin_files.keys() {
+            let checked = set.resolve(name).and_then(|wf| {
+                ostra_engine::workflow::check_runnable(&wf, &agents, &plugin_stages)
+            });
+            if let Err(m) = checked {
+                out.push(issue(
+                    "plugins".into(),
+                    format!("Plugin workflow `{name}` cannot run: {m}"),
+                ));
+            }
+        }
+        for c in ostra_core::workflow::BUILTIN_BASES {
+            if let Err(m) = set.default_for(c) {
+                out.push(issue("workflows".into(), m));
+            }
+        }
+        out
+    }
+
+    /// Rule WF1: the workflows a session can run: the workspace's valid ones, and Ostra's defaults
+    /// it has no copy of (Rule WF9).
+    pub fn workflows(&self) -> Vec<ostra_core::workflow::WorkflowInfo> {
+        use ostra_core::workflow::{BUILTIN_BASES, WorkflowInfo, category_name, parse_category};
+        let (set, _) = self.workflow_set();
+        let mut out: Vec<WorkflowInfo> = BUILTIN_BASES
+            .iter()
+            .filter(|c| !set.files.contains_key(&category_name(**c)))
+            .map(|c| {
+                let wf = ostra_default_plugin::workflow(*c);
+                WorkflowInfo {
+                    notices: wf.notices(),
+                    name: wf.name,
+                    description: wf.description,
+                    base: *c,
+                    default_for: vec![],
+                    builtin: true,
+                    plugin: None,
+                    stages: wf.stages,
+                }
+            })
+            .collect();
+        for (name, file) in &set.files {
+            if let Ok(wf) = set.resolve(name) {
+                out.push(WorkflowInfo {
+                    notices: wf.notices(),
+                    name: wf.name,
+                    description: wf.description,
+                    base: wf.base,
+                    default_for: file
+                        .default_for
+                        .iter()
+                        .filter_map(|c| parse_category(c))
+                        .collect(),
+                    builtin: false,
+                    plugin: None,
+                    stages: wf.stages,
+                });
+            }
+        }
+        // Rule PL6: the workflows plugins build, which a session names in full.
+        for name in set.plugin_files.keys() {
+            if let Ok(wf) = set.resolve(name) {
+                out.push(WorkflowInfo {
+                    notices: wf.notices(),
+                    plugin: name.split_once(':').map(|(p, _)| p.to_string()),
+                    name: wf.name,
+                    description: wf.description,
+                    base: wf.base,
+                    default_for: vec![],
+                    builtin: false,
+                    stages: wf.stages,
+                });
+            }
+        }
+        out
+    }
+
+    /// Rules WF1, WB7, PL6, and PL7: the workspace's workflows and transform functions, with those
+    /// of the plugins that run for it.
+    pub fn workflow_set(&self) -> (ostra_core::workflow::WorkflowSet, Vec<(String, String)>) {
+        let (mut set, issues) = ostra_core::workflow::WorkflowSet::load(&self.root);
+        ostra_default_plugin::add_workflows(&mut set);
+        for (name, m) in self.host.plugin_manifests(&self.root) {
+            set.add_plugin(&name, &m);
+        }
+        (set, issues)
     }
 
     pub fn validate(&self, settings: &WorkspaceSettings) -> Vec<ValidationIssue> {
         let mut issues = validate_settings(&self.host.global(), &self.environment(), settings);
+        issues.extend(self.agent_issues());
+        issues.extend(self.workflow_issues());
+        issues.extend(self.host.plugin_issues(&self.root, settings));
         // Rule W3: a tag in an instruction names an artifact every agent can read.
         let texts = settings
             .instructions
@@ -168,7 +308,7 @@ impl WorkspaceRt {
     /// validating the rest, because an unrelated problem must not block a fix. Returns how many.
     pub fn apply_fixes(&self) -> Result<usize, ConfigError> {
         let mut settings = self.settings();
-        let fixes = crate::settings::settings_fixes(&settings);
+        let fixes = crate::settings::settings_fixes(&settings, &self.environment().agents);
         for f in &fixes {
             if let Some(key) = f.path.strip_prefix("routing.model.byAgent.") {
                 settings
@@ -393,7 +533,10 @@ impl WorkspaceRt {
     pub fn detail(&self) -> WorkspaceDetail {
         let settings = self.settings();
         let global = self.host.global();
-        let validation = validate_settings(&global, &self.environment(), &settings);
+        let mut validation = validate_settings(&global, &self.environment(), &settings);
+        validation.extend(self.agent_issues());
+        validation.extend(self.workflow_issues());
+        validation.extend(self.host.plugin_issues(&self.root, &settings));
         WorkspaceDetail {
             id: self.id.clone(),
             root: self.root.clone(),
@@ -401,10 +544,14 @@ impl WorkspaceRt {
             harnesses: self.host.harnesses(),
             providers: self.host.providers(),
             validation,
-            fixes: crate::settings::settings_fixes(&settings),
-            agents: agent_infos(&global, &settings),
+            fixes: crate::settings::settings_fixes(&settings, &self.environment().agents),
+            agents: agent_infos(&global, &settings, &self.host.agents(&self.root).0),
             stacks: ostra_agents::stack_names(),
             global_permissions: global.permissions.clone(),
+            workflows: self.workflows(),
+            missing_workflows: ostra_core::workflow::WorkflowSet::load(&self.root)
+                .0
+                .missing_defaults(),
             pending_commands: crate::trust::pending(self.host.registry(), &self.root, &settings),
             sandbox: ostra_sandbox::status(&global.sandbox.for_workspace(&settings.sandbox())),
             global_sandbox: ostra_core::api::GlobalSandbox {
@@ -437,7 +584,8 @@ mod tests {
 
     #[test]
     fn an_unscoped_session_may_use_every_project_it_started_with() {
-        let mut st = ostra_engine::SessionState::new("s_1".into());
+        let mut st =
+            ostra_engine::SessionState::new(ostra_default_plugin::pipeline().into(), "s_1".into());
         assert!(
             may_use(&st, "app"),
             "a session with no log is assumed to use anything"

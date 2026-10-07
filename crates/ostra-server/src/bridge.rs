@@ -211,7 +211,9 @@ impl Executor for Wrapped {
                 .sandboxed(ostra_sandbox::runs_sandboxed(&ctx.sandbox())),
             env: ToolEnv::new(ToolEnvConfig {
                 agent: spec.agent,
+                doc_kinds: ostra_core::doc::DocKind::granted(&spec.capabilities),
                 repo_root: ctx.repo_root.clone(),
+                work_dirs: ctx.work_dirs.clone(),
                 workspace_root: ctx.workspace_root.clone(),
                 session_dir: ctx.session_dir.clone(),
                 report_file: ctx.report_file.clone(),
@@ -284,7 +286,7 @@ fn served_by_mcp(tool: &str) -> bool {
 static MCP_TOOLS: LazyLock<Vec<(String, &'static str, Capability)>> = LazyLock::new(|| {
     let mut v: Vec<(String, &'static str, Capability)> = vec![
         ("report".into(), "Report", Capability::Report),
-        ("document".into(), "Document", Capability::Document),
+        ("document".into(), "Document", Capability::DocumentResearch),
         ("memory".into(), "Memory", Capability::Memory),
         (
             "memory_recall".into(),
@@ -474,7 +476,9 @@ impl BridgeServices for ServerBridge {
             .collect();
         ostra_tools::definitions(&caps)
             .into_iter()
-            .chain(ostra_tools::document_tool_definition(r.env.config().agent))
+            .chain(ostra_tools::document_tool_definition(
+                &r.env.config().doc_kinds,
+            ))
             .filter_map(|d| {
                 MCP_TOOLS
                     .iter()
@@ -622,6 +626,7 @@ mod tests {
         host: Arc<Host>,
     ) -> Arc<Running> {
         let ctx = ExecContext {
+            work_dirs: Vec::new(),
             execution_id: "x_1".into(),
             session_id: None,
             agent: AgentName::Implementer,
@@ -651,14 +656,18 @@ mod tests {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
-            answer_only: false,
             owes_reply: false,
+            write_scope: None,
+            contract: ostra_core::Contract::Implementation,
+            capabilities: vec![Capability::ManageProjects],
         };
         Arc::new(Running {
             policy: ExecutionPolicy::new(ctx.clone(), Default::default()),
             env: ToolEnv::new(ToolEnvConfig {
                 agent: ctx.agent,
+                doc_kinds: vec![],
                 repo_root: ctx.repo_root.clone(),
+                work_dirs: ctx.work_dirs.clone(),
                 workspace_root: ctx.workspace_root.clone(),
                 session_dir: ctx.session_dir.clone(),
                 report_file: None,
@@ -783,7 +792,9 @@ mod tests {
             policy: ExecutionPolicy::new(ctx.clone(), Default::default()),
             env: ToolEnv::new(ToolEnvConfig {
                 agent: ctx.agent,
+                doc_kinds: vec![],
                 repo_root: ctx.repo_root.clone(),
+                work_dirs: ctx.work_dirs.clone(),
                 workspace_root: ctx.workspace_root.clone(),
                 session_dir: ctx.session_dir.clone(),
                 report_file: None,

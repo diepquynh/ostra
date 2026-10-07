@@ -10,6 +10,7 @@ import type { SandboxStatus } from "./SandboxStatus";
 import type { SettingsFix } from "./SettingsFix";
 import type { ToolEnforcement } from "./ToolEnforcement";
 import type { ValidationIssue } from "./ValidationIssue";
+import type { WorkflowInfo } from "./WorkflowInfo";
 import type { WorkspaceId } from "./WorkspaceId";
 import type { WorkspaceSettings } from "./WorkspaceSettings";
 
@@ -52,4 +53,14 @@ global_sandbox: GlobalSandbox,
 /**
  * `tool_enforcement` from the global config, which the workspace's own value replaces.
  */
-global_tool_enforcement: ToolEnforcement, };
+global_tool_enforcement: ToolEnforcement, 
+/**
+ * Rule WF1: the workflows a session can run: the built-in pipelines and the workspace's own
+ * valid files.
+ */
+workflows: Array<WorkflowInfo>, 
+/**
+ * Rule WF9: Ostra's default workflows the workspace has no copy of. Sessions run Ostra's own
+ * for them, and Settings offers to add them.
+ */
+missing_workflows: Array<string>, };

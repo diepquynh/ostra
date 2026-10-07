@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 globset.workspace = true
+regex.workspace = true
 ostra-core.workspace = true
 ostra-sandbox.workspace = true
 ostra-store.workspace = true
@@ -22,8 +23,4 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-pretty_assertions.workspace = true
-
-[[test]]
-name = "conformance"
-path = "../../tests/conformance/main.rs"
+toml.workspace = true

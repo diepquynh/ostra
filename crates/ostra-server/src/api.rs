@@ -370,6 +370,28 @@ pub fn router(app: Arc<App>) -> axum::Router {
             post(init_project),
         )
         .route("/api/workspaces/{ws}/skills", get(skills_list))
+        .route("/api/workspaces/{ws}/builder", get(builder_palette))
+        .route(
+            "/api/workspaces/{ws}/workflows/defaults",
+            post(workflows_restore),
+        )
+        .route(
+            "/api/workspaces/{ws}/workflows/{name}",
+            get(workflow_get).put(workflow_save).delete(workflow_delete),
+        )
+        .route(
+            "/api/workspaces/{ws}/workflows/{name}/check",
+            post(workflow_check),
+        )
+        .route(
+            "/api/workspaces/{ws}/agents/{name}",
+            get(agent_get).put(agent_save).delete(agent_delete),
+        )
+        .route("/api/workspaces/{ws}/plugins", get(plugins_list))
+        .route(
+            "/api/workspaces/{ws}/transforms/{name}",
+            get(function_get).put(function_save).delete(function_delete),
+        )
         .route("/api/workspaces/{ws}/mcp", get(mcp_status))
         .route("/api/workspaces/{ws}/mcp/{name}/refresh", post(mcp_refresh))
         .route("/api/workspaces/{ws}/mcp/{name}/login", post(mcp_login))
@@ -1668,15 +1690,7 @@ async fn diff(
     let root = st
         .project_path(&q.project)
         .ok_or_else(|| ApiErr::not_found("No such project in this session."))?;
-    let mut files: std::collections::BTreeSet<String> = Default::default();
-    for p in st
-        .phases
-        .values()
-        .filter(|p| p.info.project == q.project && q.phase.is_none_or(|n| n == p.info.id))
-    {
-        files.extend(p.impl_loop.changed.iter().cloned());
-        files.extend(p.test_loop.changed.iter().cloned());
-    }
+    let files = st.pipeline.changed_files(&st, &q.project, q.phase);
     let mut out = vec![];
     for f in files.into_iter().take(200) {
         // Resolved, because an agent can leave a symlink in the project that points outside it.
@@ -1869,6 +1883,154 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+fn builder_err(e: ostra_workspace::builder::BuilderError) -> ApiErr {
+    use ostra_workspace::builder::BuilderError;
+    match e {
+        BuilderError::NotFound(m) => ApiErr::not_found(m),
+        BuilderError::Invalid(issues) => ApiErr::invalid_request(
+            issues
+                .into_iter()
+                .map(|message| ValidationIssue {
+                    path: "file".into(),
+                    message,
+                })
+                .collect(),
+            "save",
+        ),
+        BuilderError::Conflict(m) => ApiErr::new(StatusCode::CONFLICT, m),
+        BuilderError::Io(m) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m),
+    }
+}
+
+/// Rule WB1: the kinds of node the Workflow builder can place.
+async fn builder_palette(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Res<ostra_core::api::BuilderPalette> {
+    Ok(Json(ws(&app, &id)?.builder_palette()))
+}
+
+async fn workflow_get(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+) -> Res<ostra_core::api::WorkflowDoc> {
+    ws(&app, &id)?
+        .workflow_doc(&name)
+        .map(Json)
+        .map_err(builder_err)
+}
+
+async fn workflow_save(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+    Json(file): Json<ostra_core::workflow::WorkflowFile>,
+) -> Res<ostra_core::api::WorkflowDoc> {
+    let w = ws(&app, &id)?;
+    let doc = w.save_workflow(&name, file).map_err(builder_err)?;
+    crate::git::workspace_updated(&app, &w);
+    Ok(Json(doc))
+}
+
+/// Rule WF9: add Ostra's default workflows the workspace has no copy of.
+async fn workflows_restore(State(app): AppState, Path(id): Path<String>) -> Res<WorkspaceDetail> {
+    let w = ws(&app, &id)?;
+    w.restore_default_workflows().map_err(builder_err)?;
+    crate::git::workspace_updated(&app, &w);
+    Ok(Json(w.detail()))
+}
+
+/// Rules WB1 and WB6: what a save would be refused for, without saving.
+async fn workflow_check(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+    Json(file): Json<ostra_core::workflow::WorkflowFile>,
+) -> Res<Vec<String>> {
+    Ok(Json(ws(&app, &id)?.check_workflow(&name, &file)))
+}
+
+async fn workflow_delete(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<StatusCode, ApiErr> {
+    let w = ws(&app, &id)?;
+    w.delete_workflow(&name).map_err(builder_err)?;
+    crate::git::workspace_updated(&app, &w);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Rule AG1: one agent with its definition, rendered prompt, and the nodes that use it.
+async fn agent_get(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+) -> Res<ostra_core::api::AgentDetail> {
+    ws(&app, &id)?
+        .agent_detail(&name)
+        .map(Json)
+        .map_err(builder_err)
+}
+
+async fn agent_save(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+    Json(doc): Json<ostra_core::api::AgentDoc>,
+) -> Res<ostra_core::api::AgentDetail> {
+    let w = ws(&app, &id)?;
+    let detail = w.save_agent(&name, doc).map_err(builder_err)?;
+    crate::git::workspace_updated(&app, &w);
+    Ok(Json(detail))
+}
+
+async fn agent_delete(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<StatusCode, ApiErr> {
+    let w = ws(&app, &id)?;
+    w.delete_agent(&name).map_err(builder_err)?;
+    crate::git::workspace_updated(&app, &w);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Rule WB7: one composite transform function.
+async fn function_get(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+) -> Res<ostra_core::api::FunctionDoc> {
+    ws(&app, &id)?
+        .function_doc(&name)
+        .map(Json)
+        .map_err(builder_err)
+}
+
+async fn function_save(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+    Json(file): Json<ostra_core::transform::FunctionFile>,
+) -> Res<ostra_core::api::FunctionDoc> {
+    let w = ws(&app, &id)?;
+    let doc = w.save_function(&name, file).map_err(builder_err)?;
+    crate::git::workspace_updated(&app, &w);
+    Ok(Json(doc))
+}
+
+async fn function_delete(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<StatusCode, ApiErr> {
+    let w = ws(&app, &id)?;
+    w.delete_function(&name).map_err(builder_err)?;
+    crate::git::workspace_updated(&app, &w);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Rule AG3: the workspace's plugins and what each is doing.
+async fn plugins_list(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Res<Vec<ostra_core::api::PluginInfo>> {
+    let w = ws(&app, &id)?;
+    Ok(Json(w.plugins()))
 }
 
 async fn skills_list(State(app): AppState, Path(id): Path<String>) -> Res<Vec<ProjectSkills>> {

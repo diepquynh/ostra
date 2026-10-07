@@ -19,4 +19,9 @@ uploads: Array<string>,
  * Rule B6: an existing documentation book for the session's docs. Absent names the book
  * after the documented projects.
  */
-docs_book?: string, };
+docs_book?: string, 
+/**
+ * Rule WF1: a workflow by name. Absent runs the workspace's workflow for the category the
+ * Classify judge picks.
+ */
+workflow?: string, };

@@ -524,6 +524,7 @@ mod tests {
         let env = env_in(dir);
         let root = ostra_core::paths::canonical(dir).unwrap();
         let ctx = ostra_core::exec::ExecContext {
+            work_dirs: Vec::new(),
             execution_id: "x_sb".into(),
             session_id: None,
             agent: ostra_core::AgentName::Implementer,
@@ -550,8 +551,10 @@ mod tests {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
-            answer_only: false,
             owes_reply: false,
+            write_scope: None,
+            contract: ostra_core::Contract::Stage,
+            capabilities: vec![],
         };
         let profile = ostra_sandbox::Profile::for_execution(
             &ctx,

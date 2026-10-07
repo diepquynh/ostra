@@ -33,11 +33,13 @@ use ostra_core::model::{Effort, Tier};
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, PolicyDecision, RuleRef, ToolCall};
 use ostra_core::submit::AdvisorSubmit;
-use ostra_engine::factory::AgentsFactory;
-use ostra_engine::init::{AdviceInputs, advisor_request, failed_step_label};
+use ostra_default_plugin::data::InitTrack;
+use ostra_default_plugin::factory::AgentsFactory;
+use ostra_default_plugin::init::{AdviceInputs, advisor_request, failed_step_label};
+use ostra_default_plugin::inputs::OstraInputs;
 use ostra_engine::plan::{SpawnInputs, SpawnRequest};
 use ostra_engine::services::{BuiltSpawn, SpawnEnv, SpawnFactory};
-use ostra_engine::state::{InitTrack, SessionState, stage_of};
+use ostra_engine::state::stage_of;
 use ostra_exec_native::NativeExecutor;
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -171,7 +173,7 @@ impl Vars {
     }
 }
 
-/// The runner's check after a created project's init (`init_problem` in `runner.rs`).
+/// The check after a created project's init (`init_problem` in `stages/init/hooks.rs`).
 fn init_check(repo: &Path) -> Option<String> {
     if !paths::project_inventory(repo).exists() {
         return Some("the initializer did not write .ostra/INVENTORY.md".into());
@@ -237,6 +239,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
             uploads: vec![],
             pinned: vec![],
             docs_book: None,
+            workflow: None,
         },
         SessionEvent::ProjectCreated {
             project: project.clone(),
@@ -251,7 +254,8 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
             event,
         })
         .collect();
-    let state = SessionState::fold(SessionId::from("s_eval"), &stored);
+    ostra_default_plugin::install();
+    let state = ostra_default_plugin::fold_session(SessionId::from("s_eval"), &stored);
     let focus = InitTrack::created_focus(&project);
 
     let settings = WorkspaceSettings::seeded("eval");
@@ -266,6 +270,8 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
         inventory: inventory.as_deref(),
         repo_root: &repo,
         project_docs: &docs,
+        work_dirs: &[],
+        agents: &ostra_agents::AgentCatalog::builtin(),
     };
 
     // The failed step's own spawn block, as the engine rendered it for that run.
@@ -283,14 +289,19 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
         item: case.item.clone(),
     };
     let step = SpawnRequest {
+        also: Vec::new(),
         agent: AgentName::Initializer,
         stage: stage_of(&purpose),
         purpose: purpose.clone(),
         project: spec.key.clone(),
         session_dir: session.clone(),
         inputs: SpawnInputs {
-            init,
-            init_item: case.item.clone(),
+            extra: OstraInputs {
+                init,
+                init_item: case.item.clone(),
+                ..Default::default()
+            }
+            .into_value(),
             ..Default::default()
         },
         resumes: None,
@@ -316,12 +327,13 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
         let r = step_result
             .as_ref()
             .unwrap_or_else(|| panic!("{}: no problem and no result", case.id));
-        ostra_engine::state::stuck_problem(
+        ostra_default_plugin::fold::stuck_problem(
             r["summary"].as_str().unwrap_or_default(),
             r["stuck"]["need"].as_str().unwrap_or_default(),
         )
     };
     let request = advisor_request(AdviceInputs {
+        advisor: AgentName::Advisor,
         project: spec.key.clone(),
         session_dir: session.clone(),
         execution: ExecutionId::from("x_failed"),
@@ -470,6 +482,7 @@ async fn run_one(
     let sc = setup(file, case, &dir);
     let def = ostra_agents::agent_def(AgentName::Advisor);
     let ctx = ExecContext {
+        work_dirs: Vec::new(),
         execution_id: ExecutionId::new(),
         session_id: Some(SessionId::from("s_eval")),
         agent: AgentName::Advisor,
@@ -501,8 +514,10 @@ async fn run_one(
         sandbox_loopback: Default::default(),
         sandbox_blocked_ports: vec![],
         creates_project: false,
-        answer_only: false,
         owes_reply: false,
+        write_scope: Some(def.write_scope),
+        contract: def.returns,
+        capabilities: def.capabilities.clone(),
     };
     let spec = ExecutionSpec {
         id: ctx.execution_id.clone(),
@@ -516,7 +531,7 @@ async fn run_one(
         system_prompt: sc.advisor.system_prompt.clone(),
         first_message: sc.advisor.first_message.clone(),
         capabilities: def.capabilities.clone(),
-        submit_schema: ostra_core::submit::submit_schema(AgentName::Advisor),
+        submit_schema: def.submit_schema(),
         timeout_secs: def.timeout_secs,
         ctx,
         resume: None,

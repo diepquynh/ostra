@@ -16,6 +16,7 @@ import type {
 } from "../types";
 import * as f from "./fixtures";
 import { MOCK_BOOK, summaryOf } from "./fixtures.books";
+import * as fb from "./fixtures.builder";
 import * as fx from "./fixtures.execution";
 import { mockCreateWorkspace, mockValidateCreate, mockValidateImport } from "./fixtures.projects";
 import { eventsFor, gateSessions } from "./fixtures.session";
@@ -539,6 +540,73 @@ export const mockApi: Api = {
     return delay(undefined);
   },
   skills: () => delay(mockSkills()),
+  builderPalette: () => delay(fb.palette),
+  workflow: (_ws, name) =>
+    attempt(() => {
+      const file = fb.workflowFiles[name];
+      if (!file) throw new HttpError(404, `The workspace has no workflow \`${name}\`.`);
+      return fb.workflowDoc(name, file);
+    }),
+  saveWorkflow: (_ws, name, file) => {
+    fb.workflowFiles[name] = file;
+    return delay(fb.workflowDoc(name, file));
+  },
+  deleteWorkflow: (_ws, name) => {
+    delete fb.workflowFiles[name];
+    return delay(undefined);
+  },
+  restoreWorkflows: () => delay(f.workspaceDetail),
+  checkWorkflow: (_ws, _name, file) =>
+    delay(
+      (file.stage ?? []).flatMap((s) =>
+        Object.entries(s.inputs ?? {})
+          .filter(
+            ([, r]) =>
+              r !== "" && !(file.stage ?? []).some((o) => r.split(".")[0] === o.id) && !/^(session|scope)\./.test(r),
+          )
+          .map(
+            ([k, r]) =>
+              `Node \`${s.id}\` reads \`${r}\` in input \`${k}\`, but there is no node \`${r.split(".")[0]}\`.`,
+          ),
+      ),
+    ),
+  transformFunction: (_ws, name) =>
+    attempt(() => {
+      const file = fb.functions[name];
+      if (!file) throw new HttpError(404, `The workspace has no transform function \`${name}\`.`);
+      return fb.functionDoc(name, file);
+    }),
+  saveTransformFunction: (_ws, name, file) => {
+    fb.functions[name] = file;
+    return delay(fb.functionDoc(name, file));
+  },
+  deleteTransformFunction: (_ws, name) => {
+    delete fb.functions[name];
+    return delay(undefined);
+  },
+  agent: (_ws, name) =>
+    attempt(() => {
+      const info = f.workspaceDetail.agents.find((a) => a.name === name);
+      if (!info) throw new HttpError(404, `The workspace has no agent \`${name}\`.`);
+      return fb.agentDetail(info);
+    }),
+  saveAgent: (_ws, _name, doc) =>
+    attempt(() => {
+      const info = f.workspaceDetail.agents.find((a) => a.name === doc.name);
+      const next = {
+        ...(info ?? f.workspaceDetail.agents[f.workspaceDetail.agents.length - 1]),
+        name: doc.name,
+        description: doc.description,
+        source: { kind: "workspace" as const, file: `.ostra/agents/${doc.name}.md` },
+      };
+      if (!info) f.workspaceDetail.agents.push(next);
+      return { ...fb.agentDetail(next), doc };
+    }),
+  deleteAgent: (_ws, name) => {
+    f.workspaceDetail.agents = f.workspaceDetail.agents.filter((a) => a.name !== name);
+    return delay(undefined);
+  },
+  plugins: () => delay(fb.plugins),
   books: () => delay(books.map(summaryOf)),
   book: (_ws, id) =>
     attempt(() => {

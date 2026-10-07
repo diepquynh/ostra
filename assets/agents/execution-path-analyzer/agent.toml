@@ -3,6 +3,10 @@ default_tier = "balanced"
 timeout_seconds = 1200
 capabilities = ["read", "shell", "write", "search_text", "glob", "report", "code", "docs_search"]
 
+returns = "path-analysis"
+write_scope = "session"
+brief = ["commands", "testing", "modules"]
+
 [effort]
 native = "high"
 claude = "high"

@@ -5,7 +5,7 @@
 
 use ostra_core::pipeline::QuestionAnswer;
 use ostra_core::slug::is_project_key;
-use ostra_core::{AgentName, InitializerMode};
+use ostra_core::{AgentName, Contract, InitializerMode};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 
 /// Behavior every spawn struct shares.
 pub trait SpawnParams {
-    fn agent(&self) -> AgentName;
+    /// Rule CA5: the contract whose spawn this is, whichever agent fills it.
+    fn contract(&self) -> Contract;
     fn mode(&self) -> Option<InitializerMode> {
         None
     }
@@ -34,6 +35,10 @@ pub struct Common {
     pub repo_root: PathBuf,
     pub session_dir: PathBuf,
     pub repo_key: String,
+    /// Rule WD1: every project the run works in, key and folder, the main one first. Empty, or
+    /// one entry, for a run in one project, which renders no `Work dirs:` line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub work_dirs: Vec<(String, PathBuf)>,
 }
 
 /// Hard rule 13: phase-bound agents declare either their phase file or why there is none.
@@ -49,6 +54,8 @@ pub enum WorkSource {
 pub enum TargetType {
     Spec,
     Plan,
+    /// Rule B10: a draft page of a documentation book.
+    Page,
 }
 
 impl TargetType {
@@ -56,6 +63,7 @@ impl TargetType {
         match self {
             TargetType::Spec => "spec",
             TargetType::Plan => "plan",
+            TargetType::Page => "page",
         }
     }
 }
@@ -179,6 +187,15 @@ impl Block {
         self.path("Repo root", &c.repo_root);
         self.path("Session dir", &c.session_dir);
         self.line("Repo key", &c.repo_key);
+        // Rule WD1: a run in several projects lists each folder it works in.
+        if c.work_dirs.len() > 1 {
+            let v: Vec<String> = c
+                .work_dirs
+                .iter()
+                .map(|(k, p)| format!("{k}: {}", p.display()))
+                .collect();
+            self.list("Work dirs", &v);
+        }
     }
 
     fn work(&mut self, w: &WorkSource) {
@@ -274,6 +291,9 @@ pub struct FactCheckParams {
     pub changed_since_research: Option<Vec<String>>,
     /// Rule D4a, on a plan target: the engine-written code facts file.
     pub code_facts: Option<PathBuf>,
+    /// Rule WD3, on a plan target: one line per later stage, its agent, executor, and how many
+    /// projects one of its runs works in.
+    pub stage_limits: Vec<String>,
 }
 
 /// Rule D4, Hard rule 16: the plan agent gets the spec and no research document. Its other inputs
@@ -288,6 +308,9 @@ pub struct PlanParams {
     pub findings: Option<String>,
     pub phases_to_revise: Vec<u32>,
     pub master_plan: Option<PathBuf>,
+    /// Rule WD3: one line per later stage, its agent, executor, and how many projects one of its
+    /// runs works in, so the plan splits phases by them.
+    pub stage_limits: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -340,33 +363,53 @@ pub struct DocumentationParams {
     pub implementer_reports: Vec<PathBuf>,
     /// The book's current `book.json`, when the book exists.
     pub existing_book: Option<PathBuf>,
-    /// Rule B9: the area of a large project this writer covers.
-    pub area: Option<DocsAreaScope>,
+    /// Rule B10: a survey, a page writer, a synthesis pass, or one writer for the whole part.
+    pub mode: DocsMode,
+    /// Rule B10: the reference sheet of the project's modules and named constants.
+    pub reference: Option<PathBuf>,
+    /// Rule B11: the parts of a session-wide book: each documented project, then `_cross`. Empty
+    /// for one project's own pipeline.
+    pub book_parts: Vec<String>,
     pub extra: Extras,
 }
 
-/// Rule B9: what one area writer covers, and the other areas of its project.
+/// Rule B10: what a documentation run does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub enum DocsMode {
+    /// One writer for the whole part, as in a log from before the docs pipeline.
+    #[default]
+    Part,
+    /// Survey what is available and plan the pages.
+    Survey,
+    /// Write or revise one page.
+    Page(Box<DocsPageScope>),
+    /// One synthesis pass over every draft.
+    Synthesis {
+        round: u32,
+        drafts: PathBuf,
+        findings: Vec<String>,
+    },
+}
+
+/// Rule B10: the page one writer writes, the other pages of the plan, and, on a revision, the
+/// draft and what to change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DocsAreaScope {
+pub struct DocsPageScope {
     pub id: String,
     pub title: String,
-    /// Module-map globs, project-relative.
-    pub paths: Vec<String>,
-    /// Also every file no other area's paths match.
-    pub rest: bool,
-    /// Every other area of the project: title and paths.
-    pub others: Vec<(String, Vec<String>)>,
-}
-
-/// Rule B4: the architecture of a book of two or more projects.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ArchitectureParams {
-    pub common: Common,
-    /// The parts this session's writers returned, as JSON the engine wrote.
-    pub book_parts: PathBuf,
-    pub projects: Vec<(String, PathBuf)>,
-    pub existing_book: Option<PathBuf>,
-    pub extra: Extras,
+    /// Rule B11: the part that holds the page, in a session-wide book.
+    pub part: Option<String>,
+    pub group: String,
+    pub covers: String,
+    pub sources: Vec<String>,
+    /// The inventory items the page owns.
+    pub inventory: Vec<String>,
+    /// Every other planned page: ID, title, and what it covers.
+    pub others: Vec<(String, String, String)>,
+    pub drafts: PathBuf,
+    /// The current draft, on a revision.
+    pub draft: Option<PathBuf>,
+    pub instructions: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -398,9 +441,76 @@ pub struct ConsultParams {
     pub question: String,
 }
 
+/// Rule WF4: the spawn of a custom agent's stage. Built from the workflow node and what the stages
+/// before it produced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CustomParams {
+    pub common: Common,
+    pub agent: AgentName,
+    /// The workflow node's id.
+    pub stage: String,
+    /// The complete request as it now stands.
+    pub task: String,
+    /// The node's own instructions from the workflow file.
+    pub instructions: Option<String>,
+    /// 1 on the first run of the stage, then one more per retry.
+    pub round: u32,
+    /// `N` for a phase-scoped stage.
+    pub phase: Option<String>,
+    pub phase_file: Option<PathBuf>,
+    /// The implementer report of a phase stage's phase.
+    pub implementer_report: Option<PathBuf>,
+    /// Rule WB4: the node's inputs from earlier nodes, one `name = <json>` line each.
+    pub inputs: Vec<String>,
+    pub spec_file: Option<PathBuf>,
+    pub master_plan: Option<PathBuf>,
+    pub research_docs: Vec<PathBuf>,
+    /// One line per earlier stage: its id, verdict, summary, and report.
+    pub earlier_stages: Vec<String>,
+    /// What the previous round of this stage found, on a retry.
+    pub prior_findings: Option<String>,
+    pub report_file: Option<PathBuf>,
+    pub user_notes: Vec<String>,
+}
+
+impl SpawnParams for CustomParams {
+    fn contract(&self) -> Contract {
+        Contract::Stage
+    }
+    fn common(&self) -> &Common {
+        &self.common
+    }
+    fn render(&self) -> String {
+        let mut b = Block::new();
+        b.line("Stage", &self.stage);
+        b.line("Task", &self.task);
+        b.line("Round", &self.round.to_string());
+        b.opt("Phase", self.phase.as_deref());
+        b.common(&self.common);
+        b.opt_path("Report file", self.report_file.as_deref());
+        b.opt_path("Phase file", self.phase_file.as_deref());
+        b.opt_path("Implementer report", self.implementer_report.as_deref());
+        b.opt_path("Spec file", self.spec_file.as_deref());
+        b.opt_path("Master plan", self.master_plan.as_deref());
+        b.paths("Research docs", &self.research_docs);
+        b.list("Earlier stages", &self.earlier_stages);
+        b.list("Inputs", &self.inputs);
+        b.opt("Prior findings", self.prior_findings.as_deref());
+        b.list("User notes", &self.user_notes);
+        b.opt("Instructions", self.instructions.as_deref());
+        b.finish()
+    }
+    fn to_json(&self) -> Value {
+        json(self)
+    }
+    fn report_file(&self) -> Option<&Path> {
+        self.report_file.as_deref()
+    }
+}
+
 impl SpawnParams for ConsultParams {
-    fn agent(&self) -> AgentName {
-        self.agent
+    fn contract(&self) -> Contract {
+        Contract::Stage
     }
     fn common(&self) -> &Common {
         &self.common
@@ -418,8 +528,8 @@ impl SpawnParams for ConsultParams {
 }
 
 impl SpawnParams for ExploreParams {
-    fn agent(&self) -> AgentName {
-        AgentName::Explore
+    fn contract(&self) -> Contract {
+        Contract::Research
     }
     fn common(&self) -> &Common {
         &self.common
@@ -437,8 +547,8 @@ impl SpawnParams for ExploreParams {
 }
 
 impl SpawnParams for GenerateSpecParams {
-    fn agent(&self) -> AgentName {
-        AgentName::GenerateSpec
+    fn contract(&self) -> Contract {
+        Contract::Spec
     }
     fn common(&self) -> &Common {
         &self.common
@@ -460,8 +570,8 @@ impl SpawnParams for GenerateSpecParams {
 }
 
 impl SpawnParams for FactCheckParams {
-    fn agent(&self) -> AgentName {
-        AgentName::FactCheck
+    fn contract(&self) -> Contract {
+        Contract::FactCheck
     }
     fn common(&self) -> &Common {
         &self.common
@@ -477,6 +587,7 @@ impl SpawnParams for FactCheckParams {
         b.paths("Research docs", &self.research_docs);
         b.changed(self.changed_since_research.as_deref());
         b.opt_path("Code facts", self.code_facts.as_deref());
+        b.list("Stage limits", &self.stage_limits);
         b.finish()
     }
     fn to_json(&self) -> Value {
@@ -485,8 +596,8 @@ impl SpawnParams for FactCheckParams {
 }
 
 impl SpawnParams for PlanParams {
-    fn agent(&self) -> AgentName {
-        AgentName::Plan
+    fn contract(&self) -> Contract {
+        Contract::Plan
     }
     fn common(&self) -> &Common {
         &self.common
@@ -503,6 +614,7 @@ impl SpawnParams for PlanParams {
             b.line("Phases to revise", &ids.join(", "));
         }
         b.opt_path("Master plan", self.master_plan.as_deref());
+        b.list("Stage limits", &self.stage_limits);
         b.finish()
     }
     fn to_json(&self) -> Value {
@@ -511,8 +623,8 @@ impl SpawnParams for PlanParams {
 }
 
 impl SpawnParams for ImplementerParams {
-    fn agent(&self) -> AgentName {
-        AgentName::Implementer
+    fn contract(&self) -> Contract {
+        Contract::Implementation
     }
     fn common(&self) -> &Common {
         &self.common
@@ -535,8 +647,8 @@ impl SpawnParams for ImplementerParams {
 }
 
 impl SpawnParams for CodeReviewerParams {
-    fn agent(&self) -> AgentName {
-        AgentName::CodeReviewer
+    fn contract(&self) -> Contract {
+        Contract::Review
     }
     fn common(&self) -> &Common {
         &self.common
@@ -565,8 +677,8 @@ impl SpawnParams for CodeReviewerParams {
 }
 
 impl SpawnParams for EpaParams {
-    fn agent(&self) -> AgentName {
-        AgentName::ExecutionPathAnalyzer
+    fn contract(&self) -> Contract {
+        Contract::PathAnalysis
     }
     fn common(&self) -> &Common {
         &self.common
@@ -589,8 +701,8 @@ impl SpawnParams for EpaParams {
 }
 
 impl SpawnParams for WriteTestParams {
-    fn agent(&self) -> AgentName {
-        AgentName::WriteTest
+    fn contract(&self) -> Contract {
+        Contract::Tests
     }
     fn common(&self) -> &Common {
         &self.common
@@ -614,8 +726,8 @@ impl SpawnParams for WriteTestParams {
 }
 
 impl SpawnParams for DocumentationParams {
-    fn agent(&self) -> AgentName {
-        AgentName::Documentation
+    fn contract(&self) -> Contract {
+        Contract::Documentation
     }
     fn common(&self) -> &Common {
         &self.common
@@ -624,30 +736,58 @@ impl SpawnParams for DocumentationParams {
         let mut b = Block::new();
         b.paths("Implementer reports", &self.implementer_reports);
         b.opt_path("Existing book", self.existing_book.as_deref());
-        if let Some(a) = &self.area {
-            b.line("Area", &format!("{} ({})", a.title, a.id));
-            let mut paths = a.paths.join(", ");
-            if a.rest {
-                let every = "every file no other area covers";
-                paths = if paths.is_empty() {
-                    every.into()
-                } else {
-                    format!("{paths}, and {every}")
-                };
+        b.opt_path("Reference", self.reference.as_deref());
+        if !self.book_parts.is_empty() {
+            b.line("Book parts", &self.book_parts.join(", "));
+        }
+        match &self.mode {
+            DocsMode::Part => {}
+            DocsMode::Survey => b.line("Docs mode", "survey"),
+            DocsMode::Page(p) => {
+                b.line("Docs mode", "page");
+                b.line("Page", &format!("{} ({})", p.title, p.id));
+                if let Some(part) = &p.part {
+                    b.line("Page part", part);
+                }
+                b.line("Page group", &p.group);
+                b.line("Page covers", &p.covers);
+                if !p.sources.is_empty() {
+                    b.line("Page sources", &p.sources.join(", "));
+                }
+                if !p.inventory.is_empty() {
+                    b.line("Page inventory", &p.inventory.join("; "));
+                }
+                let others: Vec<String> = p
+                    .others
+                    .iter()
+                    .map(|(id, title, covers)| format!("`{id}` {title}: {covers}"))
+                    .collect();
+                b.line("Other pages", &others.join("; "));
+                b.path("Drafts", &p.drafts);
+                if let Some(d) = &p.draft {
+                    b.path("Draft", d);
+                }
+                if !p.instructions.is_empty() {
+                    let list: Vec<String> =
+                        p.instructions.iter().map(|i| format!("- {i}")).collect();
+                    b.line("Revise", &list.join("\n"));
+                }
             }
-            b.line("Area paths", &paths);
-            let others: Vec<String> = a
-                .others
-                .iter()
-                .map(|(t, p)| {
-                    if p.is_empty() {
-                        format!("{t} (the files no area names)")
-                    } else {
-                        format!("{t} ({})", p.join(", "))
-                    }
-                })
-                .collect();
-            b.line("Other areas", &others.join("; "));
+            DocsMode::Synthesis {
+                round,
+                drafts,
+                findings,
+            } => {
+                b.line("Docs mode", "synthesis");
+                b.line("Round", &round.to_string());
+                b.path("Drafts", drafts);
+                let list: Vec<String> = if findings.is_empty() {
+                    vec!["none".into()]
+                } else {
+                    findings.iter().map(|f| format!("- {f}")).collect()
+                };
+                b.line("Findings", &list.join("\n"));
+            }
         }
         b.common(&self.common);
         b.extras(&self.extra);
@@ -658,30 +798,9 @@ impl SpawnParams for DocumentationParams {
     }
 }
 
-impl SpawnParams for ArchitectureParams {
-    fn agent(&self) -> AgentName {
-        AgentName::SystemArchitecture
-    }
-    fn common(&self) -> &Common {
-        &self.common
-    }
-    fn render(&self) -> String {
-        let mut b = Block::new();
-        b.path("Book parts", &self.book_parts);
-        b.scope(&self.projects);
-        b.opt_path("Existing book", self.existing_book.as_deref());
-        b.common(&self.common);
-        b.extras(&self.extra);
-        b.finish()
-    }
-    fn to_json(&self) -> Value {
-        json(self)
-    }
-}
-
 impl SpawnParams for PromptGenParams {
-    fn agent(&self) -> AgentName {
-        AgentName::PromptGeneration
+    fn contract(&self) -> Contract {
+        Contract::Prompt
     }
     fn common(&self) -> &Common {
         &self.common
@@ -704,8 +823,8 @@ impl SpawnParams for PromptGenParams {
 }
 
 impl SpawnParams for QuickAnswerParams {
-    fn agent(&self) -> AgentName {
-        AgentName::QuickAnswer
+    fn contract(&self) -> Contract {
+        Contract::Answer
     }
     fn common(&self) -> &Common {
         &self.common
@@ -742,8 +861,8 @@ pub struct AdvisorParams {
 }
 
 impl SpawnParams for AdvisorParams {
-    fn agent(&self) -> AgentName {
-        AgentName::Advisor
+    fn contract(&self) -> Contract {
+        Contract::Advice
     }
     fn common(&self) -> &Common {
         &self.common
@@ -846,8 +965,8 @@ fn scout_findings(b: &mut Block, paths: &[PathBuf]) {
 macro_rules! init_impl {
     ($ty:ty, $mode:expr, |$s:ident, $b:ident| $body:block) => {
         impl SpawnParams for $ty {
-            fn agent(&self) -> AgentName {
-                AgentName::Initializer
+            fn contract(&self) -> Contract {
+                Contract::Setup
             }
             fn mode(&self) -> Option<InitializerMode> {
                 Some($mode)
@@ -936,8 +1055,10 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("repo_root", &["Repo root"], Kind::AbsoluteDir),
     ("session_dir", &["Session dir"], Kind::AbsolutePath),
     ("repo_key", &["Repo key"], Kind::RepoKey),
+    ("work_dirs", &["Work dirs"], Kind::Text),
     ("phase", &["Phase"], Kind::Phase),
     ("task", &["Task"], Kind::Text),
+    ("stage", &["Stage"], Kind::Text),
     ("question", &["Question"], Kind::Text),
     (
         "mode",
@@ -970,7 +1091,7 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     (
         "target_type",
         &["Target type"],
-        Kind::Enum(&["spec", "plan"]),
+        Kind::Enum(&["spec", "plan", "page"]),
     ),
     (
         "source_check",
@@ -986,16 +1107,32 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("implementer_reports", &["Implementer reports"], Kind::Text),
     ("epa_report", &["EPA report"], Kind::Path),
     ("existing_book", &["Existing book"], Kind::Path),
-    ("area", &["Area"], Kind::Text),
-    ("area_paths", &["Area paths"], Kind::Text),
-    ("other_areas", &["Other areas"], Kind::Text),
-    ("book_parts", &["Book parts"], Kind::Path),
+    (
+        "docs_mode",
+        &["Docs mode"],
+        Kind::Enum(&["survey", "page", "synthesis"]),
+    ),
+    ("reference", &["Reference"], Kind::Text),
+    ("page", &["Page"], Kind::Text),
+    ("page_part", &["Page part"], Kind::Text),
+    ("page_group", &["Page group"], Kind::Text),
+    ("page_covers", &["Page covers"], Kind::Text),
+    ("page_sources", &["Page sources"], Kind::Text),
+    ("page_inventory", &["Page inventory"], Kind::Text),
+    ("other_pages", &["Other pages"], Kind::Text),
+    ("drafts", &["Drafts"], Kind::Text),
+    ("draft", &["Draft"], Kind::Text),
+    ("revise", &["Revise"], Kind::Text),
+    ("round", &["Round"], Kind::Text),
+    ("findings", &["Findings"], Kind::Text),
+    ("book_parts", &["Book parts"], Kind::Text),
     ("changed_files", &["Changed files"], Kind::Text),
     ("change_rationale", &["Change rationale"], Kind::Text),
     ("target_files", &["Target files", "Target file"], Kind::Text),
     ("research_docs", &["Research docs"], Kind::Text),
     ("projects_in_scope", &["Repos in scope"], Kind::Text),
     ("master_plan", &["Master plan"], Kind::Path),
+    ("stage_limits", &["Stage limits"], Kind::Text),
     ("findings", &["Findings"], Kind::Text),
     ("failed_step", &["Failed step"], Kind::Text),
     ("problem", &["Problem"], Kind::Text),
@@ -1006,14 +1143,14 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
 const COMMON: [&str; 4] = ["workspace_root", "repo_root", "session_dir", "repo_key"];
 
 /// `(required, one_of)` per agent, beyond the common four.
-fn contract(
-    agent: AgentName,
+fn contract_labels(
+    contract: Contract,
     mode: Option<&str>,
 ) -> Result<(Vec<&'static str>, Vec<&'static str>), String> {
     let one_of_work = vec!["phase_file", "no_plan"];
-    Ok(match agent {
-        AgentName::Explore | AgentName::GenerateSpec => (vec!["task"], vec![]),
-        AgentName::FactCheck => (
+    Ok(match contract {
+        Contract::Research | Contract::Spec => (vec!["task"], vec![]),
+        Contract::FactCheck => (
             vec![
                 "target",
                 "target_type",
@@ -1023,23 +1160,23 @@ fn contract(
             ],
             vec![],
         ),
-        AgentName::Plan => (vec!["spec_file"], vec![]),
-        AgentName::Implementer => (vec!["report_file"], one_of_work),
-        AgentName::ExecutionPathAnalyzer => (vec!["implementer_report", "report_file"], vec![]),
-        AgentName::WriteTest => (
+        Contract::Plan => (vec!["spec_file"], vec![]),
+        Contract::Implementation => (vec!["report_file"], one_of_work),
+        Contract::PathAnalysis => (vec!["implementer_report", "report_file"], vec![]),
+        Contract::Tests => (
             vec!["implementer_report", "epa_report", "report_file"],
             one_of_work,
         ),
-        AgentName::CodeReviewer => (
+        Contract::Review => (
             vec!["phase", "changed_files", "change_rationale"],
             one_of_work,
         ),
-        AgentName::PromptGeneration => (vec!["task", "target_files", "report_file"], vec![]),
-        AgentName::Documentation => (vec!["implementer_reports"], vec![]),
-        AgentName::SystemArchitecture => (vec!["book_parts", "projects_in_scope"], vec![]),
-        AgentName::QuickAnswer => (vec!["question"], vec![]),
-        AgentName::Advisor => (vec!["failed_step", "problem", "step_inputs"], vec![]),
-        AgentName::Initializer => {
+        Contract::Prompt => (vec!["task", "target_files", "report_file"], vec![]),
+        Contract::Documentation => (vec!["implementer_reports"], vec![]),
+        Contract::Answer => (vec!["question"], vec![]),
+        Contract::Advice => (vec!["failed_step", "problem", "step_inputs"], vec![]),
+        Contract::Stage | Contract::Plugin(_) => (vec!["stage", "task"], vec![]),
+        Contract::Setup => {
             let extra: Vec<&'static str> = match mode {
                 Some("detect") => vec![],
                 Some("adopt") => vec!["source_harness", "source_runtime_dir", "source_skills_dir"],
@@ -1125,7 +1262,7 @@ fn check(id: &str, kind: Kind, value: &str) -> Result<(), String> {
 /// Parse and validate a `Label: value` block for `agent`. Continuation lines (indented) append to
 /// the label above them. Parsing stops at a `---` rule or a `## ` heading, where the brief starts.
 /// Returns the values by parameter id.
-pub fn parse_block(agent: AgentName, text: &str) -> Result<BTreeMap<String, String>, String> {
+pub fn parse_block(contract: Contract, text: &str) -> Result<BTreeMap<String, String>, String> {
     let index = label_index();
     let mut values: BTreeMap<String, String> = BTreeMap::new();
     let mut current: Option<String> = None;
@@ -1153,7 +1290,7 @@ pub fn parse_block(agent: AgentName, text: &str) -> Result<BTreeMap<String, Stri
             current = Some(id.to_string());
         }
     }
-    let (required, one_of) = contract(agent, values.get("mode").map(String::as_str))?;
+    let (required, one_of) = contract_labels(contract, values.get("mode").map(String::as_str))?;
     let kinds: BTreeMap<&str, Kind> = PARAMS.iter().map(|(id, _, k)| (*id, *k)).collect();
     for id in COMMON.iter().chain(required.iter()) {
         let label = PARAMS

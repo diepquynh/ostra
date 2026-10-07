@@ -136,7 +136,9 @@ describe("answer shapes per gate kind", () => {
       skill_approval: "skills",
       execution_failed: "choice",
       budget_reached: "choice",
+      docs_rounds: "choice",
       implementation_review: "choice",
+      stage_review: "choice",
     });
   });
 
@@ -150,7 +152,9 @@ describe("answer shapes per gate kind", () => {
       harness_failure: ["retry", "native"],
       execution_failed: ["retry", "abandon"],
       budget_reached: ["raise", "stop"],
+      docs_rounds: ["continue", "accept"],
       implementation_review: ["done", "feedback"],
+      stage_review: ["retry", "continue", "stop"],
     });
     for (const [kind, opts] of Object.entries(CHOICES)) {
       expect(

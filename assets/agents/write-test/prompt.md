@@ -14,7 +14,7 @@ orchestrator. You cover exactly the paths and flows the EPA report marks NEW, at
 the regression suites it lists, following the test skills exactly as written.
 
 **Required invocation parameters:** `Implementer report:`, `EPA report:`, `Report file:`, `Workspace root:`, `Repo root:`, `Session dir:`,
-`Repo key:`. Write tests only in `Repo root:`, cover paths from the exact EPA report, and write the declared
+`Repo key:`. Write tests only in the folders listed in `Work dirs:` (or `Repo root:` alone), cover paths from the exact EPA report, and write the declared
 report only under `Session dir:`. Before the first tool call, return `ERROR: missing required parameter
 {label}` for any absent named line. Never infer a missing input path.
 
@@ -42,6 +42,7 @@ you mean. When a literal phrase is available, use it.
 | Term | Definition |
 | --- | --- |
 | **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo, and {{tool_skill}} resolves skill names against `Repo root:`, so a skill loaded for another directory is the wrong one. Every `.ostra/...` and `.agents/skills/...` path and repo-relative source path in this file resolves against it. Run all build/test/format/git commands with it as the working directory (for example `git -C {repo-root} status`). |
+| **work dirs** | The folders listed on the prompt's optional `Work dirs:` line, one `{repo key}: {absolute root}` per project, with the `Repo root:` project first. If the line is absent, `Repo root:` is your only work dir. Work only in the folders listed in `Work dirs:`. Use absolute paths for files outside `Repo root:`, and run the commands of each project from its own root. The brief's `Other work dirs` section gives the commands, skills, and instruction files of each other project. |
 | **repo brief** | A `## Repo brief for write-test` section at the end of your prompt, resolved for you from this repo's profile and inventory: the exact `test` and `testOne` command strings, the test framework, the **Test types** table (which runner applies to which files, and what each requires), the test skills to load (each with its catalog **name** and its `SKILL.md` **path** fallback), and this repo's conventions. It is your routing source. Use it verbatim and do not re-derive it. |
 | **repo profile / INVENTORY** | `{repo-root}/.ostra/project.toml` and `{repo-root}/.ostra/INVENTORY.md`. Your brief already carries what you need from them. Open them **only** for a table the brief does not include (for example the full Review Rule Set text). |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The code-reviewer reads your test report from this exact path. |

@@ -2,7 +2,7 @@
 //! replays and continues.
 
 use crate::agent::{AgentName, InitializerMode};
-use crate::coord::{AskTarget, DeliveryKind};
+use crate::coord::{AskTarget, DeliveryKind, MessageTarget};
 use crate::exec::ExecutionResult;
 use crate::executor::{ExecutorKind, HarnessKind};
 use crate::ids::{DecisionId, ExecutionId, GateId, MessageId};
@@ -196,11 +196,30 @@ pub enum ExecPurpose {
     #[serde(alias = "module_docs")]
     Docs {
         project: String,
-        /// Rule B9: the area of a large project this writer covers.
+        /// Rule B10: the page this writer writes. `None` writes the whole part, as one writer did
+        /// before the docs pipeline.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        area: Option<String>,
+        page: Option<String>,
+        /// Rule B10: 0 for the first draft, else the synthesis round whose edits it applies.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        round: u32,
     },
-    /// Rule B4: the architecture of a book that covers two or more projects.
+    /// Rule B10: the survey of what is available, and the page plan.
+    DocsSurvey {
+        project: String,
+    },
+    /// Rule B10: a fact-check of one draft page in a synthesis round.
+    DocsCheck {
+        project: String,
+        page: String,
+        round: u32,
+    },
+    /// Rule B10: the synthesis pass of one round over every draft.
+    DocsSynthesis {
+        project: String,
+        round: u32,
+    },
+    /// Rule B4: the retired architecture run of an old log. It folds to nothing.
     Architecture,
     PromptGen {
         handoff_for: Option<ExecutionId>,
@@ -231,25 +250,49 @@ pub enum ExecPurpose {
         execution: ExecutionId,
         round: u32,
     },
-    /// Rule H3: subagent `subagent` answers question `ask` in a run that continues its conversation.
+    /// Logs written before messaging: subagent `subagent` answered question `ask` in a run that
+    /// continued its conversation.
     Consult {
         subagent: ExecutionId,
         ask: MessageId,
     },
+    /// Rule SM4: subagent `subagent` continues its conversation, with its own tools, to act on the
+    /// messages sent to it after its run ended, the first of them `first`.
+    Message {
+        subagent: ExecutionId,
+        first: MessageId,
+    },
+    /// Rule SM7: a custom helper agent `SendMessage` started for message `message`.
+    Helper {
+        message: MessageId,
+    },
+    /// Rule WF4: run `round` of workflow node `node`, for `scope`: the session when absent, else
+    /// `phase:<n>` or `project:<key>`.
+    Stage {
+        node: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        round: u32,
+    },
 }
 
 impl ExecPurpose {
-    /// A run that covers every project in the session's scope. It still works in the primary
-    /// project's folder, but belongs to no single project.
+    /// A run that covers every project in the session's scope, so it belongs to no single project
+    /// and the console shows no project tag for it.
     pub fn spans_session(&self) -> bool {
-        matches!(
-            self,
+        match self {
             ExecPurpose::Spec { .. }
-                | ExecPurpose::FactCheck { .. }
-                | ExecPurpose::Plan { .. }
-                | ExecPurpose::Architecture
-                | ExecPurpose::QuickAnswer
-        )
+            | ExecPurpose::FactCheck { .. }
+            | ExecPurpose::Plan { .. }
+            | ExecPurpose::Architecture
+            | ExecPurpose::QuickAnswer => true,
+            // Rule B10: a session-wide docs run documents every documented project.
+            ExecPurpose::Docs { project, .. }
+            | ExecPurpose::DocsSurvey { project }
+            | ExecPurpose::DocsCheck { project, .. }
+            | ExecPurpose::DocsSynthesis { project, .. } => project == crate::book::SESSION_DOCS,
+            _ => false,
+        }
     }
 
     /// The label of one run within its execution group, before a pass number is added.
@@ -285,12 +328,28 @@ impl ExecPurpose {
             ExecPurpose::WriteTest { phase, work: w } => format!("Phase {phase}{}", work(w)),
             ExecPurpose::Docs {
                 project,
-                area: None,
-            } => format!("Docs for {project}"),
+                page: None,
+                ..
+            } => format!("Docs{}", docs_for(project)),
             ExecPurpose::Docs {
                 project,
-                area: Some(a),
-            } => format!("Docs for {project} · {a}"),
+                page: Some(p),
+                round: 0,
+            } => format!("Docs{} · {p}", docs_for(project)),
+            ExecPurpose::Docs {
+                project,
+                page: Some(p),
+                round,
+            } => format!("Docs{} · {p} · revision {round}", docs_for(project)),
+            ExecPurpose::DocsSurvey { project } => format!("Docs survey{}", docs_for(project)),
+            ExecPurpose::DocsCheck {
+                project,
+                page,
+                round,
+            } => format!("Docs check{} · {page} · round {round}", docs_for(project)),
+            ExecPurpose::DocsSynthesis { project, round } => {
+                format!("Docs synthesis{} · round {round}", docs_for(project))
+            }
             ExecPurpose::Architecture => "System architecture".into(),
             ExecPurpose::PromptGen {
                 handoff_for: Some(_),
@@ -302,6 +361,12 @@ impl ExecPurpose {
             ExecPurpose::Advise { project, .. } => format!("Advice for {project}"),
             ExecPurpose::Unblock { phase, .. } => format!("Phase {phase} · unblock"),
             ExecPurpose::Consult { .. } => "Answer".into(),
+            ExecPurpose::Message { .. } => "Messages".into(),
+            ExecPurpose::Helper { .. } => "Helper".into(),
+            ExecPurpose::Stage { node, scope, .. } => match scope {
+                Some(s) => format!("Stage {node} · {}", s.replace(':', " ")),
+                None => format!("Stage {node}"),
+            },
             ExecPurpose::Init { mode, item: i } => match mode {
                 InitializerMode::Detect => "Detect the stack".into(),
                 InitializerMode::Adopt => "Adopt a bootstrap".into(),
@@ -424,11 +489,38 @@ pub enum GatePayload {
         /// Phases that ended blocked, with the reason.
         blocked: Vec<String>,
     },
+    /// Rule WF5: a workflow stage failed or needs the user. For a failure, answer `retry` (with
+    /// guidance as `text`), `continue`, or `stop`. For a question, answer with the chosen option, or
+    /// `other` with the answer as `text`, or `stop`.
+    StageReview {
+        /// The workflow node.
+        stage: String,
+        /// `phase:<n>` or `project:<key>` for a stage that runs per phase or project.
+        scope: Option<String>,
+        /// The agent whose run raised it; none when a plugin's stage logic asks.
+        agent: Option<AgentName>,
+        execution: Option<ExecutionId>,
+        verdict: crate::submit::StageVerdict,
+        summary: String,
+        findings: Vec<crate::submit::CustomFinding>,
+        question: Option<String>,
+        options: Vec<String>,
+        round: u32,
+        max_rounds: u32,
+    },
     /// The session reached its budget. Answer `raise` (with the extra dollars as `text`) or `stop`.
     /// YOLO never answers it, because spending more is the user's decision.
     BudgetReached {
         spent_usd: f64,
         budget_usd: f64,
+    },
+    /// Rule B10: the docs pipeline of a project ran `rounds` synthesis rounds and is not done.
+    /// Answer `continue` for another round, or `accept` to write the book as it is.
+    DocsRounds {
+        project: String,
+        rounds: u32,
+        /// The checks of the definition of done that the last synthesis pass found failed.
+        open: Vec<String>,
     },
 }
 
@@ -457,6 +549,8 @@ impl GatePayload {
             GatePayload::ExecutionFailed { .. } => StageKind::Implement,
             GatePayload::BudgetReached { .. } => StageKind::Intake,
             GatePayload::ImplementationReview { .. } => StageKind::ImplementationReview,
+            GatePayload::StageReview { .. } => StageKind::Custom,
+            GatePayload::DocsRounds { .. } => StageKind::Documentation,
         }
     }
 
@@ -476,6 +570,8 @@ impl GatePayload {
             GatePayload::ExecutionFailed { .. } => "execution_failed",
             GatePayload::BudgetReached { .. } => "budget_reached",
             GatePayload::ImplementationReview { .. } => "implementation_review",
+            GatePayload::StageReview { .. } => "stage_review",
+            GatePayload::DocsRounds { .. } => "docs_rounds",
         }
     }
 
@@ -607,6 +703,47 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         docs_book: Option<String>,
+        /// Rule WF1: the workflow the session asked for. Logs written before workflows have none
+        /// and run the built-in pipeline of their category.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        workflow: Option<crate::workflow::WorkflowChoice>,
+    },
+    /// Rule WF1: the workflow the session runs, resolved from the workspace's files when the
+    /// session needed it, so later edits to those files never change a running session.
+    WorkflowResolved {
+        workflow: crate::workflow::WorkflowDef,
+    },
+    /// Rule PL3: a plugin's stage logic decided the next step of workflow node `node`.
+    StageDecided {
+        node: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        decision: crate::plugin::StageDecision,
+    },
+    /// Rule WB5: node `node`'s conditions did not hold once the nodes it waits for were done, so
+    /// it was skipped. A skipped node counts as done.
+    StageSkipped {
+        node: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+    },
+    /// Rules WB2 and WB3: a transform or prompt node ran in the engine and gave `output`, or
+    /// failed with `error`. The output is recorded because a later Ostra may compute it
+    /// differently, and the fold must stay a function of the log.
+    NodeRan {
+        node: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        round: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(type = "unknown")]
+        output: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        /// A prompt node's model cost.
+        #[serde(default)]
+        cost_usd: f64,
     },
     /// The user extended or changed the request, or added context (Rules D2, D10, C2).
     RequestAmended {
@@ -683,6 +820,30 @@ pub enum SessionEvent {
         report_path: Option<PathBuf>,
         /// Execution this one resumes, if any.
         resumes: Option<ExecutionId>,
+        /// Rule CA5: the result contract the run submits. Logs written before contracts have none,
+        /// and their runs follow the standard agent's contract.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        contract: Option<crate::contract::Contract>,
+        /// Rule WD1: the projects the run works in, `project` first. Logs written before work
+        /// dirs have none, and the run worked in `project` alone.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(as = "Option<Vec<String>>", optional)]
+        projects: Vec<String>,
+    },
+    /// Rule PL5: the plugin that owns a run's contract turned its result into this outcome.
+    ResultHandled {
+        execution: ExecutionId,
+        outcome: crate::submit::CustomSubmit,
+    },
+    /// Rule PL8: plugin `plugin` saved `value` under `key` in this session, or removed the key
+    /// (`value` absent). Its later calls read it, so a program that stopped knows where it was.
+    PluginCheckpoint {
+        plugin: String,
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(type = "unknown")]
+        value: Option<serde_json::Value>,
     },
     /// Rule P2: an execution the pause interrupted runs again under its own id, continuing its
     /// conversation, Activity, and usage.
@@ -709,20 +870,41 @@ pub enum SessionEvent {
     SteerWithdrawn {
         id: ExecutionId,
     },
-    /// Rule H8: a run asked a helper or another subagent, and waits for the answer.
+    /// Rule SM8: run `from` sent a message. With `wait`, the run pauses until a message arrives.
+    MessageSent {
+        id: MessageId,
+        from: ExecutionId,
+        to: MessageTarget,
+        text: String,
+        #[serde(default)]
+        wait: bool,
+    },
+    /// Rule SM3: run `id` paused itself until a message arrives.
+    AgentWaiting {
+        id: ExecutionId,
+    },
+    /// Rule SM8: Ostra handed messages `ids` to run `to` at a turn boundary, with `notice` when
+    /// Ostra had to tell a waiting run that no message will come.
+    MessagesDelivered {
+        to: ExecutionId,
+        ids: Vec<MessageId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notice: Option<String>,
+    },
+    /// Logs written before messaging: a run asked a helper or another subagent, and waited.
     AgentAsked {
         id: MessageId,
         from: ExecutionId,
         target: AskTarget,
         message: String,
     },
-    /// Rule H8: a run answered question `ask`.
+    /// Logs written before messaging: a run answered question `ask`.
     AgentReplied {
         ask: MessageId,
         from: ExecutionId,
         message: String,
     },
-    /// Rule H8: Ostra handed the question or the answer of `ask` to run `to`.
+    /// Logs written before messaging: Ostra handed the question or the answer of `ask` to run `to`.
     MessageDelivered {
         ask: MessageId,
         to: ExecutionId,
@@ -762,17 +944,22 @@ pub enum SessionEvent {
         exit_code: Option<i32>,
         output_tail: String,
     },
-    /// Rule B9: how a project's part of the book is split among writers, measured before the first
-    /// writer starts. `areas` is empty for one writer. `existing` names the areas the book's
-    /// current part records, `None` when the book has no part for the project; `touched` names the
-    /// areas holding a file this session's work changed.
+    /// Rule B10: the project's modules and named constants, read from disk before the survey,
+    /// because the fold cannot read the file system.
+    DocsScanned {
+        project: String,
+        modules: Vec<crate::book::DocsModule>,
+        refs: Vec<crate::book::RefItem>,
+        /// Rule B10: the scan serves the session-wide docs pipeline. Logs written before it scanned
+        /// for one project's own pipeline.
+        #[serde(default, skip_serializing_if = "is_false")]
+        #[ts(optional, as = "Option<bool>")]
+        session_wide: bool,
+    },
+    /// Rule B9: logs from before one writer per project split a large project's part into areas.
+    /// The fold ignores it.
     DocsPlanned {
         project: String,
-        areas: Vec<crate::book::DocsArea>,
-        #[serde(default)]
-        existing: Option<Vec<String>>,
-        #[serde(default)]
-        touched: Vec<String>,
     },
     /// Rule B5: the engine wrote the session's documentation into a workspace book. `error` is set
     /// when the files could not be written, and the session goes on without them.
@@ -825,9 +1012,229 @@ pub struct StoredEvent {
     pub event: SessionEvent,
 }
 
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Rule B10: ` for <project>` after a docs run's name, or nothing for a session-wide run.
+fn docs_for(project: &str) -> String {
+    if project == crate::book::SESSION_DOCS {
+        String::new()
+    } else {
+        format!(" for {project}")
+    }
+}
+
+impl ExecPurpose {
+    /// The compact form of a spawn in a conformance fixture's step list.
+    pub fn summary(&self) -> String {
+        match self {
+            ExecPurpose::Explore { task } => format!("explore#{task}"),
+            ExecPurpose::Advise { project, round, .. } => format!("advise {project} #{round}"),
+            ExecPurpose::Unblock {
+                phase,
+                tests,
+                round,
+                ..
+            } => format!(
+                "unblock phase {phase}{} #{round}",
+                if *tests { " tests" } else { "" }
+            ),
+            ExecPurpose::Consult { .. } => "consult".into(),
+            ExecPurpose::Message { .. } => "messages".into(),
+            ExecPurpose::Helper { .. } => "helper".into(),
+            ExecPurpose::Stage { node, scope, round } => format!(
+                "stage {node}{}#{round}",
+                scope.as_ref().map(|s| format!(" {s} ")).unwrap_or_default()
+            ),
+            ExecPurpose::Spec { round } => format!("spec#{round}"),
+            ExecPurpose::FactCheck { target, pass } => {
+                format!("fact-check-{}#{pass}", target.as_str())
+            }
+            ExecPurpose::Plan { round } => format!("plan#{round}"),
+            ExecPurpose::Implement { phase, work } => {
+                format!("phase {phase} {work:?}").to_lowercase()
+            }
+            ExecPurpose::Review {
+                phase,
+                tests,
+                iteration,
+            } => format!(
+                "review phase {phase}{} #{iteration}",
+                if *tests { " tests" } else { "" }
+            ),
+            ExecPurpose::Epa { phase } => format!("epa phase {phase}"),
+            ExecPurpose::WriteTest { phase, work } => {
+                format!("write-test phase {phase} {work:?}").to_lowercase()
+            }
+            ExecPurpose::Docs {
+                project,
+                page: None,
+                ..
+            } => format!("docs {project}"),
+            ExecPurpose::Docs {
+                project,
+                page: Some(p),
+                round: 0,
+            } => format!("docs {project}/{p}"),
+            ExecPurpose::Docs {
+                project,
+                page: Some(p),
+                round,
+            } => format!("docs-revise {project}/{p} round {round}"),
+            ExecPurpose::DocsSurvey { project } => format!("docs-survey {project}"),
+            ExecPurpose::DocsCheck {
+                project,
+                page,
+                round,
+            } => format!("docs-check {project}/{page} round {round}"),
+            ExecPurpose::DocsSynthesis { project, round } => {
+                format!("docs-synthesis {project} round {round}")
+            }
+            ExecPurpose::Architecture => "architecture".into(),
+            ExecPurpose::Inspect { of } => format!("inspect {of}"),
+            ExecPurpose::PromptGen { handoff_for } => {
+                if handoff_for.is_some() {
+                    "handoff".into()
+                } else {
+                    "prompt".into()
+                }
+            }
+            ExecPurpose::Verify { phase } => format!("verify phase {phase}"),
+            ExecPurpose::QuickAnswer => "quick-answer".into(),
+            ExecPurpose::Init { mode, item } => format!(
+                "init {mode}{}",
+                item.as_ref().map(|i| format!(" {i}")).unwrap_or_default()
+            ),
+        }
+    }
+
+    /// The key of the loop, review loop, or stage a run serves, which a paused run resumes under
+    /// (Rule P2).
+    pub fn resume_key(&self) -> String {
+        match self {
+            ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
+                format!("work:{phase}:false")
+            }
+            ExecPurpose::WriteTest { phase, .. } => format!("work:{phase}:true"),
+            ExecPurpose::Review { phase, tests, .. } => format!("review:{phase}:{tests}"),
+            ExecPurpose::Spec { .. } => "spec".into(),
+            ExecPurpose::Plan { .. } => "plan".into(),
+            ExecPurpose::FactCheck { target, .. } => format!("fact-check:{}", target.as_str()),
+            ExecPurpose::Stage { node, scope, .. } => {
+                format!("stage:{node}:{}", scope.as_deref().unwrap_or_default())
+            }
+            other => serde_json::to_string(other).unwrap_or_default(),
+        }
+    }
+
+    /// The board lane of a run.
+    pub fn stage_kind(&self) -> StageKind {
+        match self {
+            ExecPurpose::Advise { .. } | ExecPurpose::Unblock { .. } => StageKind::Rescue,
+            ExecPurpose::Consult { .. } | ExecPurpose::Message { .. } => StageKind::Handoff,
+            ExecPurpose::Helper { .. } => StageKind::Explore,
+            ExecPurpose::Stage { .. } => StageKind::Custom,
+            ExecPurpose::Explore { .. } => StageKind::Explore,
+            ExecPurpose::Spec { .. } => StageKind::Spec,
+            ExecPurpose::FactCheck {
+                target: FactTarget::Spec,
+                ..
+            } => StageKind::FactCheckSpec,
+            ExecPurpose::FactCheck {
+                target: FactTarget::Plan,
+                ..
+            } => StageKind::FactCheckPlan,
+            ExecPurpose::Plan { .. } => StageKind::Plan,
+            ExecPurpose::Implement { .. } => StageKind::Implement,
+            ExecPurpose::Review { tests: false, .. } => StageKind::Review,
+            ExecPurpose::Review { tests: true, .. } => StageKind::TestReview,
+            ExecPurpose::Epa { .. } => StageKind::Epa,
+            ExecPurpose::WriteTest { .. } => StageKind::WriteTest,
+            ExecPurpose::Docs { .. }
+            | ExecPurpose::DocsSurvey { .. }
+            | ExecPurpose::DocsCheck { .. }
+            | ExecPurpose::DocsSynthesis { .. }
+            | ExecPurpose::Architecture => StageKind::Documentation,
+            ExecPurpose::PromptGen {
+                handoff_for: Some(_),
+            } => StageKind::Handoff,
+            ExecPurpose::PromptGen { handoff_for: None } => StageKind::PromptGen,
+            ExecPurpose::Verify { .. } => StageKind::Verify,
+            ExecPurpose::QuickAnswer | ExecPurpose::Inspect { .. } => StageKind::QuickAnswer,
+            ExecPurpose::Init { mode, .. } => match mode {
+                InitializerMode::Detect | InitializerMode::Adopt => StageKind::Detect,
+                InitializerMode::Scout => StageKind::Scout,
+                InitializerMode::Propose => StageKind::Propose,
+                InitializerMode::GenerateSkill => StageKind::GenerateSkill,
+                InitializerMode::GenerateInventory => StageKind::GenerateInventory,
+            },
+        }
+    }
+
+    /// The initializer mode of an init run.
+    pub fn initializer_mode(&self) -> Option<InitializerMode> {
+        match self {
+            ExecPurpose::Init { mode, .. } => Some(*mode),
+            _ => None,
+        }
+    }
+}
+
+impl GatePayload {
+    /// What a gate of its kind is about, so one open gate per subject is planned.
+    pub fn owner(&self) -> String {
+        match self {
+            GatePayload::OpenQuestions { artifact, .. } => artifact.clone(),
+            GatePayload::FactCheckRecurring { target, .. } => target.as_str().into(),
+            GatePayload::ReviewCap { phase, tests, .. } => format!("{phase}:{tests}"),
+            GatePayload::Stuck { execution, .. }
+            | GatePayload::ExecutionFailed { execution, .. }
+            | GatePayload::HarnessFailure { execution, .. }
+            | GatePayload::Permission { execution, .. } => execution.to_string(),
+            GatePayload::PhaseBlocked { phase, .. } => phase.to_string(),
+            GatePayload::ClosingGate { items } => items
+                .iter()
+                .map(|i| i.project.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            GatePayload::SkillApproval { project, .. } => project.clone(),
+            GatePayload::SpecApproval { .. }
+            | GatePayload::PlanApproval { .. }
+            | GatePayload::BudgetReached { .. } => String::new(),
+            GatePayload::ImplementationReview { round, .. } => round.to_string(),
+            GatePayload::DocsRounds {
+                project, rounds, ..
+            } => format!("{project}:{rounds}"),
+            GatePayload::StageReview { stage, scope, .. } => {
+                format!("{stage}|{}", scope.as_deref().unwrap_or_default())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_wide_docs_runs_span_the_session() {
+        let survey = |project: &str| ExecPurpose::DocsSurvey {
+            project: project.into(),
+        };
+        assert!(survey(crate::book::SESSION_DOCS).spans_session());
+        assert!(!survey("api").spans_session());
+        let page = ExecPurpose::Docs {
+            project: crate::book::SESSION_DOCS.into(),
+            page: Some("flow".into()),
+            round: 0,
+        };
+        assert!(page.spans_session());
+    }
 
     #[test]
     fn run_labels() {

@@ -1,4 +1,5 @@
 import { parseResource } from "../lib/resource";
+import { AgentsScreen } from "./AgentsScreen";
 import { ArtifactScreen } from "./ArtifactScreen";
 import { CostScreen } from "./CostScreen";
 import { DependencyFileScreen } from "./DependencyFileScreen";
@@ -10,12 +11,14 @@ import { ProjectScreen } from "./ProjectScreen";
 import { SessionScreen } from "./SessionScreen";
 import { SettingsScreen } from "./SettingsScreen";
 import { SkillsScreen } from "./SkillsScreen";
+import { WorkflowsScreen } from "./WorkflowsScreen";
 import { WorkspaceScreen } from "./WorkspaceScreen";
 
 export { AddProjectDialog } from "./setup/AddProjectDialog";
 export { NewWorkspaceDialog } from "./setup/NewWorkspaceDialog";
 export { Onboarding } from "./setup/Onboarding";
 export {
+  AgentsScreen,
   ArtifactScreen,
   BookScreen,
   CostScreen,
@@ -28,6 +31,7 @@ export {
   SessionScreen,
   SettingsScreen,
   SkillsScreen,
+  WorkflowsScreen,
   WorkspaceScreen,
 };
 
@@ -45,6 +49,8 @@ export function ScreenFor({ ws, id }: { ws: string; id: string }) {
       if (r.page === "memory") return <MemoryScreen key={id} ws={ws} />;
       if (r.page === "skills") return <SkillsScreen key={id} ws={ws} />;
       if (r.page === "docs") return <DocsScreen key={id} ws={ws} />;
+      if (r.page === "agents") return <AgentsScreen key={id} ws={ws} />;
+      if (r.page === "workflows") return <WorkflowsScreen key={id} ws={ws} />;
       return <WorkspaceScreen key={id} ws={ws} />;
     case "session":
       return <SessionScreen key={id} ws={ws} id={r.id} />;

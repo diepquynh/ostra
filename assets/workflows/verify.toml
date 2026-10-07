@@ -1,0 +1,8 @@
+# Ostra's default `verify` workflow. A workspace runs its own copy in .ostra/workflows/verify.toml
+# when it has one, and this file otherwise. Each stage waits for the one before it.
+description = "Build and review a check of the code, with no spec or plan."
+base = "verify"
+
+[[stage]]
+id = "build"
+uses = "ostra:build"

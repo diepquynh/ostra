@@ -1,6 +1,7 @@
 //! Running harness executions, addressed by execution id. The bridge records what arrives through
 //! hooks and the MCP shim here, and the executor waits on it.
 
+use ostra_core::exec::ExecutionHost;
 use ostra_core::{AgentName, ExecutionId, HarnessKind};
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -23,8 +24,25 @@ pub struct LiveExecution {
     changed: Notify,
     /// A read-only reopened session: no submit is expected, so a Stop is never turned back.
     inspect: AtomicBool,
-    /// Rule H3: the run was given a question and answers it with `subagent_reply` first.
+    /// Rule SM6: the messages the run was handed came from senders that wait for its reply.
     owes_reply: AtomicBool,
+    /// Rule CA3: the submit schema the run was given.
+    submit_schema: Mutex<Option<serde_json::Value>>,
+    /// Rule CA5: the result contract the run submits.
+    contract: Mutex<ostra_core::Contract>,
+    /// The report file an `ok` submit needs written first, when the contract requires one.
+    report_file: Mutex<Option<PathBuf>>,
+    /// The engine's side of the run, for its queued messages and its reply duty (Rules SM2, SM6).
+    host: Mutex<Option<HostRef>>,
+}
+
+#[derive(Clone)]
+struct HostRef(Arc<dyn ExecutionHost>);
+
+impl std::fmt::Debug for HostRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ExecutionHost")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +77,62 @@ impl LiveExecution {
         &self.token
     }
 
+    /// Rule CA3: the schema the run's submit tool takes, from its `ExecutionSpec`.
+    pub fn set_submit_schema(&self, schema: serde_json::Value) {
+        if !schema.is_null() {
+            *self.submit_schema.lock() = Some(schema);
+        }
+    }
+
+    pub fn submit_schema(&self) -> serde_json::Value {
+        self.submit_schema
+            .lock()
+            .clone()
+            .unwrap_or_else(|| ostra_core::submit::submit_schema(self.contract()))
+    }
+
+    pub fn set_contract(&self, contract: ostra_core::Contract) {
+        *self.contract.lock() = contract;
+    }
+
+    pub fn contract(&self) -> ostra_core::Contract {
+        *self.contract.lock()
+    }
+
+    pub fn set_report_file(&self, path: Option<PathBuf>) {
+        *self.report_file.lock() = path;
+    }
+
+    /// Rule CA5: the report an `ok` submit of this contract needs, when it is not written yet.
+    pub fn missing_report(&self, submit: &serde_json::Value) -> Option<PathBuf> {
+        let ok = submit
+            .get("status")
+            .and_then(|s| s.as_str())
+            .is_none_or(|s| s == "ok");
+        let path = self.report_file.lock().clone()?;
+        (ok && self.contract().report_required() && !path.exists()).then_some(path)
+    }
+
+    pub fn set_host(&self, host: Arc<dyn ExecutionHost>) {
+        *self.host.lock() = Some(HostRef(host));
+    }
+
+    fn host(&self) -> Option<Arc<dyn ExecutionHost>> {
+        self.host.lock().clone().map(|h| h.0)
+    }
+
+    /// Rule SM6: why the run may not submit yet.
+    pub fn submit_blocked(&self) -> Option<String> {
+        self.host()?.submit_blocked()
+    }
+
+    /// The pipeline's checks of the run's submit, after its shape check.
+    pub fn check_submit(&self, input: &serde_json::Value) -> Vec<String> {
+        self.host()
+            .map(|h| h.check_submit(self.contract(), input))
+            .unwrap_or_default()
+    }
+
     pub fn set_inspect(&self) {
         self.inspect.store(true, Ordering::SeqCst);
     }
@@ -71,16 +145,11 @@ impl LiveExecution {
         self.owes_reply.load(Ordering::SeqCst)
     }
 
-    /// What a run that tries to end without its result is told: reply first when it owes an
-    /// answer (Rule H3), else submit.
+    /// What a run that tries to end without its result is told: reply first when a sender waits
+    /// for it (Rule SM6), else submit.
     pub fn nudge(&self) -> String {
-        if self.owes_reply() {
-            ostra_core::coord::reply_instruction(ostra_core::coord::reply_tool(
-                ostra_core::ExecutorKind::Harness(self.harness),
-            ))
-        } else {
-            missing_submit_instruction(self.agent)
-        }
+        self.submit_blocked()
+            .unwrap_or_else(|| missing_submit_instruction(self.agent))
     }
 
     pub fn snapshot(&self) -> LiveState {
@@ -142,6 +211,10 @@ impl LiveExecution {
     }
 
     pub fn on_stop(&self, last_message: Option<String>) -> StopVerdict {
+        // Asked before the state lock, because the host reads the engine's state.
+        let host = self.host();
+        let mail = host.as_ref().is_some_and(|h| h.has_messages());
+        let nudge = self.nudge();
         let mut s = self.state.lock();
         s.last_activity = Instant::now();
         if last_message
@@ -155,15 +228,12 @@ impl LiveExecution {
         } else if s.submit.is_some() {
             s.stopped_after_submit = true;
             StopVerdict::Allow
+        } else if mail {
+            // Rule SM2: the turn ended, so the messages queued for the run are typed in now.
+            s.waiting = true;
+            StopVerdict::Allow
         } else if s.stops_without_submit < MAX_STOP_NUDGES {
             s.stops_without_submit += 1;
-            let nudge = if self.owes_reply.load(Ordering::SeqCst) {
-                ostra_core::coord::reply_instruction(ostra_core::coord::reply_tool(
-                    ostra_core::ExecutorKind::Harness(self.harness),
-                ))
-            } else {
-                missing_submit_instruction(self.agent)
-            };
             StopVerdict::Block(nudge)
         } else {
             s.gave_up = true;
@@ -231,6 +301,10 @@ impl LiveRegistry {
             changed: Notify::new(),
             inspect: AtomicBool::new(false),
             owes_reply: AtomicBool::new(false),
+            submit_schema: Mutex::new(None),
+            contract: Mutex::new(ostra_core::Contract::Stage),
+            report_file: Mutex::new(None),
+            host: Mutex::new(None),
         });
         self.map.lock().insert(id, live.clone());
         live
@@ -307,21 +381,71 @@ mod tests {
         assert!(matches!(live.on_stop(None), StopVerdict::Block(_)));
     }
 
+    struct Host {
+        mail: bool,
+        owes: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl ExecutionHost for Host {
+        fn emit(&self, _: ostra_core::exec::ExecutionDelta) {}
+        async fn ask_permission(
+            &self,
+            _: &ostra_core::policy::ToolCall,
+            _: &str,
+            _: &ostra_core::policy::RuleRef,
+        ) -> ostra_core::policy::PermissionAnswer {
+            ostra_core::policy::PermissionAnswer::Deny
+        }
+        fn has_messages(&self) -> bool {
+            self.mail
+        }
+        fn submit_blocked(&self) -> Option<String> {
+            self.owes.then(|| {
+                ostra_core::coord::reply_instruction("mcp__ostra__send_message", &["x_1".into()])
+            })
+        }
+    }
+
     #[test]
-    fn a_run_that_owes_an_answer_is_told_to_reply() {
+    fn sm6_a_run_that_owes_a_reply_is_told_to_send_it() {
         let reg = LiveRegistry::new();
         let live = reg.register(
             ExecutionId::new(),
             AgentName::GenerateSpec,
             HarnessKind::Claude,
         );
-        live.set_owes_reply(true);
+        live.set_host(Arc::new(Host {
+            mail: false,
+            owes: true,
+        }));
         assert!(
-            matches!(live.on_stop(None), StopVerdict::Block(ref m) if m.contains("mcp__ostra__subagent_reply"))
+            matches!(live.on_stop(None), StopVerdict::Block(ref m) if m.contains("mcp__ostra__send_message"))
         );
-        assert!(live.nudge().contains("mcp__ostra__subagent_reply"));
-        live.set_owes_reply(false);
+        assert!(live.nudge().contains("`x_1`"));
+        assert!(live.submit_blocked().is_some());
+        live.set_host(Arc::new(Host {
+            mail: false,
+            owes: false,
+        }));
         assert!(live.nudge().contains("submit_generate_spec"));
+    }
+
+    #[test]
+    fn sm2_queued_mail_is_typed_in_after_the_turn_ends() {
+        let reg = LiveRegistry::new();
+        let live = reg.register(
+            ExecutionId::new(),
+            AgentName::GenerateSpec,
+            HarnessKind::Claude,
+        );
+        live.set_host(Arc::new(Host {
+            mail: true,
+            owes: false,
+        }));
+        assert_eq!(live.on_stop(None), StopVerdict::Allow);
+        let s = live.snapshot();
+        assert!(s.waiting && !s.gave_up, "the supervisor types the mail in");
     }
 
     #[test]

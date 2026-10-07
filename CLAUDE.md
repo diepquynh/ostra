@@ -19,21 +19,32 @@ stage and answer a small set of named judgment questions.
 
 ```
 ostra-core        ids, settings and route resolution, pipeline enums, submit schemas, the event log,
-                  API DTOs (exported to TypeScript), the Executor and ExecutionHost traits
+                  API DTOs (exported to TypeScript), the Executor and ExecutionHost traits, workflows,
+                  and the plugin protocol and traits
 ostra-store       SQLite: workspace db (event log plus materialized tables), registry, project memory
 ostra-sandbox     sandbox profiles, the bubblewrap and Seatbelt backends, the egress proxy, decoys, and the
                   per-OS layer (`sys/`, one `Os` impl per OS, picked in `sys/mod.rs` only)
 ostra-policy      guards and permissions over canonical ToolCalls; bash parsing
 ostra-tools       native tool implementations (Read, Write, Edit, Bash, Grep, Glob, Skill, WebFetch, ...)
 ostra-providers   Anthropic and OpenAI streaming clients; ScriptedProvider for tests
-ostra-agents      embedded assets/, prompt rendering per executor, typed spawn structs, the repo brief
-ostra-engine      event-sourced session state, the pure planner, judges, the runner, the spawn factory
+ostra-agents      embedded assets/, the agent catalog (built-in, custom, and plugin agents), prompt rendering per
+                  executor, typed spawn structs, the repo brief
+ostra-engine      event-sourced session state, the pure planner, the runner, gates, workflows, messages, and
+                  the Pipeline trait; it knows no built-in stage
 ostra-exec-native the native agent loop (providers + tools + policy)
 ostra-exec-harness harness executors: PTY, per-harness adapters, hook bridge, MCP stdio shim
 ostra-notify      Web Push without OpenSSL
 ostra-mcp         MCP client for workspace MCP servers: stdio and streamable HTTP, OAuth
 ostra-code        tokenizer, per-project code index (usages, imports, symbols), LSP client, code providers
 ostra-workspace   workspaces: settings checks, projects, command approvals (trust), create/delete, WorkspaceRt
+ostra-sdk         the plugin SDK: the Plugin trait's helpers, typed result contracts (`contracts`), a plugin
+                  registry, workflow builders, and the stdio transport
+ostra-standard    the definitions of the standard plugin `ostra`, written with ostra-sdk: the built-in agents
+                  (from assets/agents/) and the default workflows (from assets/workflows/)
+ostra-default-plugin  the standard plugin's pipeline: one folder per built-in stage (`stages/<stage>/`) with
+                  its state, fold, planner rules, judges, gates, and view; the dispatchers and shared code in
+                  `data.rs`, `fold/`, `planner/`, `judge_input/`, `view/`, and `pipeline/`; the spawn factory
+                  (`factory.rs`)
 ostra-server      the `ostra` binary: axum, auth, REST, WebSocket, embedded web build, CLI
 ```
 
@@ -41,24 +52,33 @@ The browser code is one npm workspace, installed at the root (`npm ci`): `design
 React components), `web/` (the console, embedded in the binary), and `site/` (the homepage and docs). `web/` and
 `site/` import the design system from `@ostra/design`, never from each other.
 
-`ostra-core` depends on nothing internal. `ostra-engine` knows no executor, provider, or server: it reaches
-them through the `Services`, `SpawnFactory`, and `Executor` traits, and `ostra-server` wires the real ones in.
-Keep it that way. A new capability the engine needs becomes a trait method, not a dependency. The same holds
-for `ostra-workspace`: it reaches the server only through `WorkspaceHost`, which `Shared` implements.
+`ostra-core` depends on nothing internal. `ostra-engine` knows no executor, provider, server, or built-in stage:
+it reaches them through the `Services`, `SpawnFactory`, `Executor`, and `Pipeline` traits, and `ostra-server`
+wires the real ones in (`Services::pipeline` gives `ostra_default_plugin::pipeline()`). `ostra-default-plugin`
+depends on the engine, never the reverse. Keep it that way. A new capability the engine needs becomes a trait
+method, not a dependency. The same holds for `ostra-workspace`: it reaches the server only through
+`WorkspaceHost`, which `Shared` implements.
 
 ## The patterns every change follows
 
-**1. Every state change is an event.** A session's state is `SessionState::fold(events)`
-(`crates/ostra-engine/src/state.rs`). Nothing mutates session state except `SessionState::apply`, and
-nothing appends events except `Inner::append` in `runner.rs`, which stores, folds, broadcasts, and wakes the
-driver in one place. The fold must stay a pure function of the log: if a fact from outside the log changes
-how an event folds, record it in the event. Example: the project's auto-fixable rule IDs travel in the review
-execution's `params` (`AUTO_FIXABLE_PARAM`) because the fold cannot read `project.toml`.
+**1. Every state change is an event.** A session's state is `SessionState::fold(pipeline, id, events)`
+(`crates/ostra-engine/src/state.rs`). Nothing mutates session state except `SessionState::apply`, which calls
+the pipeline's fold hooks for the events the built-in stages read (the dispatchers in
+`crates/ostra-default-plugin/src/fold/` hand each event to its stage in `stages/<stage>/`, state in
+`SessionState::ext`). Nothing appends events except `Inner::append` in
+`crates/ostra-engine/src/runner/driver.rs`, which stores, folds, broadcasts, and wakes the driver in one place.
+The pipeline's step effects append through `StepHost::append`, which calls it. The fold must stay a pure
+function of the log: if a fact from outside the log changes how an event folds, record it in the event.
+Example: the project's auto-fixable rule IDs travel in the review execution's `params` (`AUTO_FIXABLE_PARAM`)
+because the fold cannot read `project.toml`.
 
-**2. The planner is pure.** `next_steps(&SessionState, &PlanCtx) -> Vec<Step>` in `plan.rs` decides what
-happens next; the runner performs steps and appends what happened. Settings reach the planner only through
-`PlanCtx`. Each `Step` has a `key()` so an in-flight step is never started twice. When you add behavior, add
-it as fold state plus a planner rule, never as logic inside the runner.
+**2. The planner is pure.** `next_steps(&SessionState, &PlanCtx) -> Vec<Step>` in
+`crates/ostra-engine/src/plan.rs` decides what happens next; the runner performs steps and appends what
+happened. The engine plans the generic parts (YOLO, the workflow walk, custom and plugin stages, messages), and
+the pipeline plans each built-in stage (`crates/ostra-default-plugin/src/stages/<stage>/planner.rs`). A step only the
+pipeline plans is `Step::Pipeline` (`OstraStep` in `steps.rs`), performed by `Pipeline::perform`. Settings reach
+the planner only through `PlanCtx`. Each `Step` has a `key()` so an in-flight step is never started twice. When
+you add behavior, add it as fold state plus a planner rule, never as logic inside the runner.
 
 **3. Rules are cited and tested.** Code that implements a HANDOVER or Ultracode rule cites its ID in a
 one-line comment (`// Rule D3a: ...`). Every rule has a fixture in `tests/conformance/main.rs`: an event
@@ -66,12 +86,17 @@ history built with the `H` helper and the expected `Step::summary()` list. A new
 a new or changed fixture in the same change.
 
 **4. Agents return structured data.** Every agent ends by calling `submit_<agent>`, whose schema is the struct
-in `crates/ostra-core/src/submit.rs`. The engine reads only that payload, never a final message. Prompts live
-in `assets/agents/<name>/prompt.md` and must describe the same fields. `validate_submit` guards the shape.
+in `crates/ostra-core/src/submit.rs`. The core keeps each struct that more than one part reads, and
+`ostra_sdk::contracts` ties each contract to its struct for plugins. The engine reads only that payload, never a
+final message. Prompts live in `assets/agents/<name>/prompt.md` and must describe the same fields.
+`validate_submit` guards the shape, and `Pipeline::check_submit` adds the pipeline's checks (executors call it
+through `ExecutionHost::check_submit`).
 
 **5. Spawns are typed.** Each agent's `Label: value` spawn block is a struct in
-`crates/ostra-agents/src/spawn.rs`; required parameters are non-`Option` fields. The engine's
-`factory.rs` maps planner `SpawnInputs` onto them. The engine names every report path (`paths::report`).
+`crates/ostra-agents/src/spawn.rs`; required parameters are non-`Option` fields. The standard plugin's
+`crates/ostra-default-plugin/src/factory.rs` maps planner `SpawnInputs` onto them: the generic fields, plus the
+pipeline's own inputs in `SpawnInputs::extra` (`OstraInputs` in `inputs.rs`). The engine names every report
+path (`paths::report`).
 
 **6. Every tool call passes the policy.** Native and harness executions alike call
 `ExecutionPolicy::check` on a canonical `ToolCall` (Claude Code tool names and input shapes). Layer 1 guards
@@ -84,8 +109,8 @@ are re-read per execution. A route that does not resolve is a validation error a
 (`validate_workspace`), never a silent fallback at spawn time.
 
 **8. Spend is bounded.** `limits.max_parallel_executions` caps concurrent executions per workspace (slots
-in `runner.rs`), and `limits.session_budget_usd` turns spawns into a `BudgetReached` gate. YOLO never answers
-a budget gate. Fan-out stages keep caps (`init::MAX_SCOUTS`, `init::MAX_DEFAULT_GENERATE`). Any new fan-out
+in `runner/driver.rs`), and `limits.session_budget_usd` turns spawns into a `BudgetReached` gate. YOLO never
+answers a budget gate. Fan-out stages keep caps (`init::MAX_SCOUTS`, `init::MAX_DEFAULT_GENERATE`). Any new fan-out
 needs a cap and must go through the slot limiter.
 
 **9. Every implementation updates the docs.** A change that adds or alters behavior updates the pages in
@@ -95,19 +120,38 @@ where it shows a behavior. Describe only what the code does now, and fix a page 
 an existing page in `docs/` only. A new page also needs a `NAV` entry in `site/src/docs/pages.ts` (recipe
 below).
 
+**10. Files stay small and group by feature.** Keep a source file under about 800 lines, because a person and
+an agent read one feature in one place. Group code by feature, not by layer. In the standard plugin, each stage
+has a folder `stages/<stage>/` with only the files it needs: `data.rs` (its state), `fold.rs`, `runs.rs`,
+`gates.rs`, and `judges.rs` (how events change it), `planner.rs` (its rules), `judge_input.rs`, `view.rs`
+(its board cards and artifacts), and `hooks.rs` (its answers to the engine's `Pipeline` hooks and its step
+effects). A `match` over every stage stays a short dispatcher in `fold/`, `planner/`, `judge_input/`, or
+`pipeline/effects.rs`, and each arm calls the stage. `view/` walks the stages to build the board, the
+artifacts, the summary, and the tree. `pipeline/hooks.rs` holds the one `impl Pipeline`, and each method
+forwards in one line. Code that several stages use stays in those folders and in `data.rs`. Put each trait in
+its own file.
+When a file grows past the limit, split it in a separate `refactor:` commit that only moves code.
+
 ## Recipes
 
 **Add a gate kind.** Add the variant to `GatePayload` (`ostra-core/src/event.rs`) with `stage()` and
-`kind_str()` arms; record it in the fold (`on_gate_opened`, `on_gate_answered`); open it from the planner;
-decide its YOLO handling in `judge_input::yolo_plan` (fixed answer, judge, or `None` for gates YOLO must not
-answer); accept its answer shape in `runner::validate_answer`; add a fixture; regenerate TypeScript (below).
+`kind_str()` arms. The rest is in `crates/ostra-default-plugin/src/`: record it in the fold: add an arm to the
+dispatchers `on_gate_opened` and `on_gate_answered` in `fold/gates.rs`, which call the stage's
+`stages/<stage>/gates.rs` (the engine folds `BudgetReached` itself); open it from the stage's `planner.rs`;
+decide its YOLO handling in `judge_input/yolo.rs` (`yolo_plan`: fixed answer, judge, or `None` for gates YOLO
+must not answer, plus `yolo_leaves_open`); accept its answer shape in `fold::validate_answer`. A gate that the
+pipeline does not validate gets its answer shape in the engine's `runner/control.rs` `validate_answer`. Add a
+fixture; regenerate TypeScript (below).
 
-**Add or change a judge.** Output struct and schema in `judge.rs`, input builder in `judge_input.rs`, prompt
-in `assets/judges/<name>.md`, the planner step that asks, the fold that applies the decision, and whether it
-can be overridden (`SessionState::can_override`).
+**Add or change a judge.** The `JudgeKind` variant in `ostra-core/src/event.rs`; in
+`crates/ostra-default-plugin/src/`: the output struct and schema in `judge.rs`, the input builder in the
+stage's `judge_input.rs` with an arm in `judge_input/inputs.rs`, the planner step that asks, the fold that
+applies the decision (the stage's `judges.rs`, with an arm in `fold/decisions.rs`), and
+whether it can be overridden (`can_override` in `fold/shared.rs`); the prompt in `assets/judges/<name>.md`.
 
 **Change an agent.** Edit `assets/agents/<name>/prompt.md` and `agent.toml` (tier, effort per executor,
-capabilities, timeout). If the return changes, change its submit struct and the fold that reads it. Prompts
+capabilities, timeout). If the return changes, change its submit struct and the fold that reads it
+(`runs.rs` in the stage's folder under `crates/ostra-default-plugin/src/stages/`). Prompts
 follow the writing rules below and keep every rule ID.
 
 **Add a native tool.** Implement it in `ostra-tools`, give it a definition modeled on Claude Code's own tool
@@ -137,9 +181,8 @@ STE for software.
 
 The standard covers the pages in `docs/`, `HANDOVER.md`, the README, prompts, judge prompts, UI copy, error
 messages, code comments, commit messages, pull request descriptions, and your replies to the user. The
-`documentation` and `system-architecture` prompts hold a copy of the same rules, so the books that Ostra writes
-and the pages in `docs/` follow one standard. When you change a rule here, change both prompts and HANDOVER
-section 20 in the same change.
+`documentation` prompt holds a copy of the same rules, so the books that Ostra writes and the pages in `docs/`
+follow one standard. When you change a rule here, change that prompt and HANDOVER section 20 in the same change.
 
 Use STE because these readers must all get the same meaning from one text:
 
@@ -303,10 +346,14 @@ Before you finish, read each text again and fix each failure:
   The details go in the body after a blank line: what changed and why, one bullet per part, with the rule
   IDs it touches. Never put the details in the title.
 - The title's type sets the version bump, because `./release.sh` computes the next version from the titles
-  since the last tag (git-cliff, `cliff.toml`): `feat:` is a feature, `fix:` and the rest a patch. A change
-  that breaks a user (config keys, API or CLI shape, stored data that no longer loads) adds `!` after the type,
-  `feat!: Rename the routes table`, and a `BREAKING CHANGE: <what to do>` line at the end of the body.
+  since the last tag (git-cliff, `cliff.toml`): `feat:` is a feature, `fix:` and the rest a patch.
   An optional scope names the crate or area, `fix(sandbox): ...`. Never bump versions by hand in a commit.
+- Do not break a user in a release. A user is a person, a plugin, or a program that uses Ostra. Change a public
+  shape only by addition. Public shapes are config keys, workflow and agent files, the API, the CLI, the SDK,
+  the plugin protocol, `pub` types of `ostra-core`, events, stored data, and old session logs. Keep the old item
+  working and mark it deprecated: `#[deprecated(note = "use X")]`, a serde alias for a renamed field, or a
+  settings notice for a file. Remove a deprecated item only when the user asks, in a later release, because
+  developers need time to move to the new shape. Do not use `!` or `BREAKING CHANGE:` in a commit.
 
 ## Tests
 
@@ -319,11 +366,13 @@ cd site && npm run check && npm run typecheck && npx vitest run
 cd tests/browser && npm test                # browser security suite: the console and the site
 ```
 
-- `tests/conformance/main.rs`: planner fixtures, one per rule. The fastest way to test engine behavior.
+- `tests/conformance/main.rs`: planner fixtures, one per rule. The fastest way to test engine behavior. It runs
+  as the `conformance` test of `ostra-default-plugin`: `cargo test -p ostra-default-plugin --test conformance`.
 - `tests/browser/specs/site.spec.ts`: the site as a static host serves it. Its pages carry their CSP as a meta
   tag (`site/vite.config.ts`, and `web/vite.config.ts` for the console shot), which must stay equal to the
   server's in `crates/ostra-server/src/api.rs`.
-- `crates/ostra-engine/tests/runner.rs` and `recover.rs`: a real `Engine` with fake services.
+- `crates/ostra-default-plugin/tests/runner.rs`, `recover.rs`, and `pause.rs`: a real `Engine` with the standard
+  pipeline and fake services. They live in the plugin crate because the engine does not depend on it.
 - `crates/ostra-server/tests/e2e.rs`: the whole stack with a `ScriptedProvider` playing each agent.
 - Provider live tests are `#[ignore]`d and run with `cargo test -p ostra-providers -- --ignored`.
 - Judge routing evals (`tests/evals/judges.toml`, run by `crates/ostra-server/tests/judge_evals.rs`) are live and

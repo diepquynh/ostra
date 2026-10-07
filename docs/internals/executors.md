@@ -57,7 +57,7 @@ An `ExecutionSpec` holds all the data that the run needs. The engine resolves th
 | `capabilities` | The tools that the agent can have, from its `agent.toml`. |
 | `submit_schema` | The JSON schema of `submit_<agent>`. |
 | `timeout_secs` | The hard time budget for this execution. |
-| `ctx` | The data that the policy needs: the repo root, the session dir, the report path, the permission mode and rules, the protected paths, the memory database, and the sandbox mode. |
+| `ctx` | The data that the policy needs: the repo root, the work dirs, the session dir, the report path, the permission mode and rules, the protected paths, the memory database, and the sandbox mode. |
 | `resume` | Set when this run continues an earlier run. After a pause, `resume.from` is the run's own id. |
 | `harness_session_id` | A session id that Ostra selects before the start, for the CLIs that accept one. |
 
@@ -130,8 +130,8 @@ Before the first model call, a run does the following, in order:
    variable to set.
 2. Opens the workspace's MCP servers for this execution ([MCP servers](mcp.md)). If the run cannot reach a
    server, it adds one status line and continues without that server.
-3. Builds the policy for this execution from the spec's context and the build and test commands of the project
-   profile. The build-streak guard uses those commands.
+3. Builds the policy for this execution from the spec's context and the build and test commands of the profile
+   of each work dir. The build-streak guard uses those commands.
 4. Builds the tool environment: the persistent shell directory, the set of files that the agent read, an HTTP
    client, and the list of environment variables that no child process can inherit.
 5. Decides the sandbox. The run reads the `[sandbox]` table fresh. If the table asks for a sandbox, these
@@ -148,6 +148,23 @@ Before the first model call, a run does the following, in order:
    last.
 7. Builds the message list. A new run starts with the first message. A resumed run rebuilds the stored
    transcript and adds a resume turn (below).
+
+### Work dirs
+
+A native run can work in more than one project (Rule WD1). The engine names the projects of the run in
+`ctx.work_dirs`, the main project first, and `ctx.repo_root` is the folder of the main project. The tools use
+the list in these ways:
+
+- Bash starts in the main project. Relative paths in every tool resolve against the shell's directory, so the
+  agent names a file in another work dir by its absolute path.
+- The Skill tool looks for a project skill in each work dir, the main project first.
+- `Memory` records a lesson in the main project's database. `MemoryRecall` also searches the database of each
+  other work dir.
+- A code navigation call goes to the index of the work dir that holds its `path`.
+- The build-streak guard counts the build and test commands of each work dir's profile.
+- The check that keeps a `.git` folder from changes covers each work dir and the workspace root.
+
+[Tools](tools.md) gives the details of each tool.
 
 Ostra marks the system prompt for caching. It also marks the last tool definition, the submit tool. Thus,
 there is one cache breakpoint after the system prompt and one after the tool list. Each turn after the first
@@ -179,7 +196,7 @@ The next action of the loop depends on the reason that the model stopped:
 | `pause_turn` | The provider paused a long server-side tool turn. The loop continues the turn. |
 | Refusal | Ends the run as `error` with the refusal category and text. |
 | Output limit, no tool call | Asks the model to continue from the point where it stopped, at most 3 times. |
-| Plain end of turn, no tool call | Reminds the model one time to call the submit tool. If a second turn has no tool call, the run ends as `ok` with no submit. The engine sees this result as a failed step. |
+| Plain end of turn, no tool call | If messages wait for the run, the loop gives them to the model and continues. If no messages wait, the loop reminds the model one time to call the submit tool. If a sender waits for a reply from this run (Rule SM6), the reminder tells the model to send that reply first. If a second turn has no tool call, the run ends as `ok` with no submit. The engine sees this result as a failed step. |
 
 The loop has a limit of 400 turns. If a run gets to this limit without a submit, it ends as an error. An agent
 without a submit after 400 turns is in a loop.
@@ -222,9 +239,19 @@ the loop does these steps:
 1. Changes stringified JSON fields back into objects, because models sometimes send a nested object as a
    string.
 2. Runs the policy on the call, the same as on all other calls.
-3. Validates the call against the agent's submit schema (`validate_submit`) and runs the document checks.
-4. Refuses an `ok` submit if the agent has a declared report file that does not exist, because the engine
-   reads that file next. This step does not apply to the code reviewer.
+3. Asks the engine if a sender waits for a reply from this run (`ExecutionHost::submit_blocked`, Rule SM6). If a
+   sender waits, the loop refuses the submit. The refusal tells the agent to send a message to that sender first,
+   and gives the subagent ID of the sender.
+4. Validates the call against the schema of the run (`validate_submit_with`). The run's result contract
+   (`ExecContext.contract`, Rule CA5) selects the schema, not the agent's name. The schema is one of these:
+   - The struct of a built-in contract.
+   - The `stage` contract with the `data` shape that the agent declares.
+   - The schema of a plugin contract.
+
+   The document checks (`doc::check_submit`) also follow the contract.
+5. Refuses an `ok` submit if the agent has a declared report file that does not exist, because the engine
+   reads that file next. This step does not apply to a `review` run (`Contract::report_required`), because its
+   ledger exists only when the review found a problem.
 
 A refused submit is an error result, and the model tries again. An accepted submit ends the run immediately.
 The loop answers "Not run" to all other tool calls in the same turn, and these calls never run. The submit's
@@ -275,7 +302,7 @@ loop waits until the window is almost full. A summary costs one request over the
 this cost to the execution's usage.
 
 Ostra stores the new window in the transcript as one `compaction` record. When Ostra reads a transcript back,
-it starts from the latest `compaction` record. Thus, a resumed run, a plan revision round, or a consult continues
+it starts from the latest `compaction` record. Thus, a resumed run, a plan revision round, or a message run continues
 from the summary, not from the full history. No summary can come back because the summary was cut off, the model
 refused, or the request failed. In this case, the run continues without a summary. It tries again only after
 the context increases by 2% of the window, because each try sends the full conversation.
@@ -311,10 +338,63 @@ loop records only the new turn. Its request starts with the same messages that t
 the provider's prompt cache covers that prefix until the cache expires. A run resumed from a different
 execution, such as a retry after a failure, copies the full rebuilt transcript into its own transcript.
 
-Subagent coordination uses the same two paths. A `SubagentAsk` ends the run with status `waiting`. Ostra
-records its tool result the same as a submit. Later, the answer resumes the run in place, with the answer as the
-note. A pair-loop round or a consult run continues the conversation of a different execution. Thus, it copies
-that transcript and adds the new spawn block as the note.
+Messages between subagents use the same two paths. A `SendMessage` with `wait: true`, or a `WaitForMessage`,
+ends the run with status `waiting`. Ostra records its tool result the same as a submit. Later, the next message
+for the run resumes it in place, with the messages as the note. A pair-loop round or a message run continues the
+conversation of a different execution. A message run is a subagent that Ostra continues for messages that
+arrived after its run ended. Thus, the round or the message run copies that transcript. Then it adds the new
+spawn block, or the messages, as the note.
+
+### Messages at the turn boundary
+
+Ostra never puts a message into a request that is in progress (Rule SM2). After the tool calls of a turn run,
+the loop asks the host for the messages that wait for this run (`ExecutionHost::take_messages`). The loop adds
+them as one text block after the tool results, in the same user turn. All turns before that turn stay the same.
+Thus, the next request still starts with the cached prefix.
+
+A turn with no tool calls is also a boundary. The waiting messages come first, and the submit reminder comes
+later. `take_messages` records each delivery as a `MessagesDelivered` event before it returns the text. Thus, the
+fold knows which run read which message.
+
+### Programmatic agents
+
+A plugin agent without a prompt runs in the code of its plugin, not in this loop (Rule PL2,
+`crates/ostra-exec-native/src/program.rs`). The engine sends it to `NativeExecutor::run_program`, whatever
+executor its settings name. The engine resolves its route again on the native executor. The model of that route
+serves the model calls of the agent.
+
+The run uses the same setup as the loop (`Run::setup`): the provider, the tool environment with its sandbox,
+the MCP tools, and the policy. Then the plugin gets its task and an `AgentCalls` handle. The task contains these
+items:
+
+- The spawn block and the brief, as `first_message`.
+- The repo root and the session dir.
+- The model.
+- The submit schema.
+- The names of its tools.
+
+The `AgentCalls` handle has these methods:
+
+- `tool(name, input)` runs one tool through the same `tool_end` path as a model's call: canonicalize, check,
+  ask, run, observe. The plugin can call only the tools that its capabilities give. Any other name, and the
+  submit tool, return an error result. The messages that wait for the run follow the output of the tool. A
+  `SendMessage` with `wait` or a `WaitForMessage` keeps the call open until a message arrives
+  (`ExecutionHost::wait_for_wake`). The message is the rest of its output. Thus, the agent waits with its process
+  alive, the same as a harness run.
+- `complete(request)` makes one model call on the route of the agent, with the effort of the run. It streams the
+  call to the Activity view and adds its usage to the usage of the run.
+- `status(text)` adds a line to the Activity view.
+
+A run can make at most 2,000 tool and model calls in total (`MAX_PROGRAM_CALLS`). This limit corresponds to the
+400 turns of the loop. When the plugin returns, the result goes through the same checks as a submit from a model:
+
+- If a sender still waits for a reply, the run fails.
+- Ostra validates the submit against the schema of the run (`validate_submit_with`).
+- A declared report file must exist, unless the contract is `review`.
+
+The document check of the model loop (`doc::check_submit`) does not run on a programmatic result. A plugin
+error, an invalid result, or a missing reply ends the run as `error`. The timeout and the cancel of the run
+apply the same as for each native run.
 
 Known weakness: if the effort of a continued conversation changes, the conversation loses the prompt cache.
 Ostra resolves the effort fresh for each execution from the agent's default and the workspace's
@@ -353,6 +433,19 @@ The four supported CLIs:
 | Codex | `codex` | Captured from the first event or transcript | `rollout-*.jsonl` |
 | Grok Build | `grok` | Chosen by Ostra (`--session-id`) | `sessions/<cwd>/<id>/updates.jsonl` |
 | Antigravity | `agy` | Captured from the screen or transcript | None: its transcript records no usage |
+
+A harness run works in its main project only (Rule WD1). The engine gives it one work dir, even when the
+step names more projects, because the harness CLIs do not all reach folders outside their working directory in
+the same way:
+
+| Harness | Flag for another folder | Its own permission layer in an Ostra run |
+| --- | --- | --- |
+| Claude Code | `--add-dir` | `--permission-mode default`. Ostra's hooks decide each call. |
+| Codex | `--add-dir` (writable roots) | Off (`--dangerously-bypass-approvals-and-sandbox`). |
+| Grok Build | None. It has `--cwd` only. | Off (`bypassPermissions`). |
+| Antigravity | `--add-dir` | Off (`--dangerously-skip-permissions`). |
+
+Use the native executor for an agent that must work in several projects in one run.
 
 You can change the binary name for each harness with `[harness.<name>].command`. Put more arguments in
 `[harness.<name>].args`. We checked the launch flags against claude 2.1.280, codex 0.153.4, grok 1.0.30, and
@@ -514,12 +607,16 @@ answers the handshake with no tools. Thus, a global registration has no effect.
 
 It serves:
 
-- `submit_<agent>`, the only submit tool that this agent can call.
-- `report`, `document`, `memory`, `memory_recall`, and `docs_search`, if the agent's capabilities allow them.
+- `submit_<agent>`, the only submit tool that this agent can call, with the schema of the run. The executor gives
+  the contract of the run to the live execution (`LiveExecution::set_contract`). The bridge validates the submit
+  and runs the document checks by that contract, the same as the native loop.
+- `report`, `memory`, `memory_recall`, and `docs_search`, if the agent's capabilities allow them. Also
+  `document`, with a schema for each typed document that the run has a grant for (Rule CA6).
 - `code_outline`, `code_find`, and the rest of the code navigation tools.
+- `list_agents`, `send_message`, and `wait_for_message`, to an agent with the `coordinate` capability.
 - `project_list` and `project_create`, only to an execution with an agent that has the `manage_projects`
-  capability (the implementer). The reason is that the shim lists them only when the server gave the execution a
-  management handle.
+  capability (the implementer by default). The reason is that the shim lists them only when the server gave the
+  execution a management handle.
 - The tools of each workspace MCP server, as `<server>__<tool>`. The CLI sees them as
   `mcp__ostra__<server>__<tool>`.
 
@@ -550,16 +647,27 @@ half second. On each pass, it checks these conditions:
 - **Quiet.** If a session has no hook event and no terminal output for 4 minutes, Ostra sends a reminder. Ostra
   types the submit instruction into the terminal, the same as a person. After two reminders, Ostra ends the run
   as an error.
-- **Waiting.** A `subagent_ask` or a `subagent_reply` can put the run into a wait. Then the loop stops its checks
-  and waits for the engine's message. These conditions apply during the wait:
-  - If the message is a question, Ostra marks the run as one that must answer. Thus, the blocked Stops and the
-    typed reminders name `subagent_reply`. Ostra refuses the run's submit until the run replies.
+- **Waiting.** A `send_message` with `wait` or a `wait_for_message` puts the run into a wait. The bridge marks the
+  run as waiting. Then the loop stops its checks and waits for the engine's message
+  (`ExecutionHost::wait_for_wake`). These conditions apply during the wait:
   - Ostra releases the run's execution slot.
   - Ostra lets a Stop without a submit through.
   - Ostra adds the wait time to the deadline.
 
-  Ostra types the message into the terminal, and the checks start again. Ostra records a `subagent_reply` from a
-  consult run the same as a submit, and the reply ends the run.
+  Ostra types the message into the terminal, and the checks start again. On the side of the engine
+  (`EngineHost::wait_for_wake` in `crates/ostra-engine/src/runner/host.rs`), the wait checks the fold for messages
+  at least every 2 seconds. It also checks each time an event is appended to a session of the workspace, because
+  `Inner::append` signals the wait. The wait releases the slot on its first empty check. It gets a slot again
+  before it returns. It returns nothing only when the session ended or the run no longer waits. If a run can get
+  no message, Ostra wakes it with a notice (Rule SM3).
+- **Messages for a running run.** Ostra never types a message into a turn that is in progress (Rule SM2). When
+  the turn of the CLI ends, the Stop hook asks the engine if messages wait for the run
+  (`ExecutionHost::has_messages`). If messages wait and the run did not submit, Ostra lets the Stop through and
+  marks the run as waiting. Thus, the next pass of the loop takes the messages immediately and types them in.
+- **Owed replies.** A sender can wait for a reply from this run (Rule SM6). Then the blocked Stops and the typed
+  reminders name `send_message` and the ID of that sender. The bridge refuses the submit until the run sends the
+  reply. The bridge asks the engine each time (`submit_blocked`). Thus, a reply duty that arrives with a message
+  during the run also counts.
 - **The budget.** After `timeout_secs`, the run ends.
 
 The terminal itself is a `vt100` screen model in the server (`pty.rs`). If a browser attaches in the middle of
@@ -650,7 +758,7 @@ Each agent's `agent.toml` sets `timeout_seconds`, which becomes `timeout_secs` i
 | quick-answer | 5 minutes |
 | advisor | 15 minutes |
 | code-reviewer, execution-path-analyzer | 20 minutes |
-| explore, generate-spec, fact-check, plan, system-architecture, prompt-generation | 30 minutes |
+| explore, generate-spec, fact-check, plan, prompt-generation | 30 minutes |
 | implementer, write-test, initializer, documentation | 40 minutes |
 
 The budget is a hard limit on wall time. It includes the time of a wait for a permission card. The native
@@ -691,6 +799,6 @@ executions spent. Thus, recovery can resume them (refer to [The event log](event
 | How a harness run ended | `crates/ostra-exec-harness/src/outcome.rs` |
 | Terminal and screen model | `crates/ostra-exec-harness/src/pty.rs` |
 | Live harness cost | `crates/ostra-exec-harness/src/usage_watch.rs`, `transcript.rs` |
-| Running an execution | `crates/ostra-engine/src/runner.rs` |
+| Running an execution | `crates/ostra-engine/src/runner/spawn.rs`, `crates/ostra-engine/src/runner/host.rs` |
 
 Next: [Tools](tools.md) describes each tool that an agent can call.

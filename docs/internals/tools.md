@@ -22,8 +22,9 @@ a capability to its own tool:
 
 ```toml
 # assets/agents/implementer/agent.toml
-capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill",
-                "memory_recall", "memory", "report", "code"]
+capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill", "memory_recall",
+                "memory", "report", "code", "manage_projects", "coordinate", "docs_search",
+                "review_ledger", "progress_log"]
 ```
 
 | Capability | Native tool | Claude Code | Codex | Grok Build | Antigravity |
@@ -38,12 +39,13 @@ capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill"
 | `web_search` | `WebSearch` | `WebSearch` | `web_search` | `web_search` | `search_web` |
 | `web_fetch` | `WebFetch` | `WebFetch` | `web_search` | `web_fetch` | `read_url_content` |
 | `report` | `Report` | `mcp__ostra__report` | `report` | `report` | `report` |
-| `document` | `Document` | `mcp__ostra__document` | `document` | `document` | `document` |
+| `document_research`, `document_spec`, `document_plan` | `Document` | `mcp__ostra__document` | `document` | `document` | `document` |
 | `memory` | `Memory` | `mcp__ostra__memory` | `memory` | `memory` | `memory` |
 | `memory_recall` | `MemoryRecall` | `mcp__ostra__memory_recall` | `memory_recall` | `memory_recall` | `memory_recall` |
 | `docs_search` | `DocsSearch` | `mcp__ostra__docs_search` | `docs_search` | `docs_search` | `docs_search` |
 | `code` | `CodeOutline`, `CodeFind`, ... | `mcp__ostra__code_*` | `code_*` | `code_*` | `code_*` |
 | `manage_projects` | `ProjectList`, `ProjectCreate` | `mcp__ostra__project_list`, `mcp__ostra__project_create` | `project_*` | `project_*` | `project_*` |
+| `coordinate` | `ListAgents`, `SendMessage`, `WaitForMessage` | `mcp__ostra__list_agents`, ... | `list_agents`, ... | `list_agents`, ... | `list_agents`, ... |
 
 The table is `assets/tool-mapping.toml`. The prompt renderer reads it. The renderer writes the prompt of each
 agent with the tool names of the executor that the agent runs on. Thus the prompt tells an implementer on Codex
@@ -69,22 +71,29 @@ executor. Then the policy sets more limits on what the tools of an agent can tou
 
 | Agent | Capabilities |
 | --- | --- |
-| explore | read, shell, search_text, glob, web_search, web_fetch, memory_recall, memory, document, code, coordinate, docs_search |
-| generate-spec | read, shell, search_text, glob, web_search, web_fetch, document, code, coordinate, docs_search |
+| explore | read, shell, search_text, glob, web_search, web_fetch, memory_recall, memory, document_research, code, coordinate, docs_search |
+| generate-spec | read, shell, search_text, glob, web_search, web_fetch, document_spec, code, coordinate, docs_search |
 | fact-check | read, write, shell, search_text, glob, web_search, web_fetch, code, coordinate, docs_search |
-| plan | read, shell, search_text, glob, document, code, coordinate, docs_search |
-| implementer | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, manage_projects, coordinate, docs_search |
-| write-test | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, coordinate, docs_search |
-| code-reviewer | read, shell, search_text, glob, code, coordinate, docs_search |
+| plan | read, shell, search_text, glob, document_plan, code, coordinate, docs_search |
+| implementer | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, manage_projects, coordinate, docs_search, review_ledger, progress_log |
+| write-test | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, coordinate, docs_search, review_ledger, test_files |
+| code-reviewer | read, shell, search_text, glob, code, coordinate, docs_search, review_ledger, security_block |
 | execution-path-analyzer | read, shell, write, search_text, glob, report, code, docs_search |
-| documentation, system-architecture | read, shell, search_text, glob, code, docs_search |
-| prompt-generation | read, edit, write, shell, search_text, glob, skill, report, code |
-| initializer | read, write, edit, shell, search_text, glob, code |
+| documentation | read, shell, search_text, glob, code, docs_search |
+| prompt-generation | read, edit, write, shell, search_text, glob, skill, report, code, test_files |
+| initializer | read, write, edit, shell, search_text, glob, code, test_files |
 | quick-answer | read, search_text, glob, web_search, web_fetch, memory_recall, code, docs_search |
 | advisor | read, shell, search_text, glob, web_search, web_fetch, memory_recall, docs_search |
 
-Each agent also gets its own `submit_<agent>` tool and the MCP tools of the workspace. [Agents](agents.md)
-tells what each agent is for.
+A custom agent lists its own capabilities in its definition. If it has no list, it gets read, search_text, glob,
+report, and coordinate. Each agent can request each capability, because no capability is reserved (Rule CA6).
+This includes the document grants, the ownership grants (`review_ledger`, `security_block`, `progress_log`,
+`test_files`), and `manage_projects`. The user approves the workspace file, and this approval lets the agent
+hold them. The ownership grants add no tool. They only let the guards accept more writes from the agent.
+
+The implementer holds `manage_projects` by default. Each agent that holds it can create a project, if the agent
+runs a phase in a project that the plan names as new. Each agent also gets its own `submit_<agent>` tool and
+the MCP tools of the workspace. [Agents](agents.md) tells what each agent is for.
 
 ## How the policy sees each tool
 
@@ -331,11 +340,12 @@ Ostra gets the page itself:
 
 Loads a `SKILL.md` and returns its text with the instruction to follow it. Give `name` or `path`.
 
-With `name`, the tool looks in three locations, in this order:
+With `name`, the tool looks in these locations, in this order:
 
-1. The `.agents/skills/<name>/SKILL.md` of the project.
-2. The older `.ostra/skills/<name>/SKILL.md`.
-3. The skills that Ostra ships, such as `meta-author`.
+1. The `.agents/skills/<name>/SKILL.md` of the main project, then the older `.ostra/skills/<name>/SKILL.md`.
+2. The same two folders in each other work dir of the run (Rule WD1), in the order of the work dirs.
+3. The `skills/<name>/SKILL.md` of the workspace artifacts.
+4. The skills that Ostra ships, such as `meta-author`.
 
 The tool refuses a name with `/` or `..`, because a name is not a path. With `path`, the tool reads that file,
 and the policy judges it as a `Read` of that path. The tool marks the skill file as read. Thus a later `Edit` of
@@ -360,9 +370,17 @@ describes it.
 
 ### Document
 
-Writes the typed document of explore (research), generate-spec (spec), or plan (plan). The schemas are the
-structs in `crates/ostra-core/src/doc`. This tool is specific to the agent: each of those three agents sees only
-its own document schema.
+Writes a typed document: a research document, a spec, or a plan. The schemas are the structs in
+`crates/ostra-core/src/doc`. An agent gets the tool when it holds a document grant (Rule CA6):
+`document_research`, `document_spec`, or `document_plan`. The name of the agent does not matter. The schema of
+the tool covers each kind that the run has a grant for (`document_tool_definition` in
+`crates/ostra-tools/src/defs.rs`). It is the schema of one kind, or a choice of schemas when the agent holds
+more than one grant.
+
+The tool gets the kind from the prefix of the file name (`ostra-research-`, `ostra-spec-`, `ostra-plan-`). It
+refuses a name that matches no granted kind. An agent with only one grant must also start the name with the
+prefix of that kind, because later stages find the file by the prefix (`crates/ostra-tools/src/doc.rs`). The
+standard agents `explore`, `generate-spec`, and `plan` each hold one grant.
 
 | Input | Meaning |
 | --- | --- |
@@ -396,7 +414,11 @@ send. Thus the agent sees what a partial update left unchanged.
 
 Only `Document` can write these files. The policy refuses a `Write`, `Edit`, or shell write to them, and tells
 the agent to call `Document`. The reason: the next render overwrites the change, and the browser does not show
-it.
+it. An agent without the matching grant cannot write them.
+
+The other grants, `review_ledger`, `security_block`, `progress_log`, and `test_files`, add no tool. They only let
+the write guards accept more paths from the file tools of the agent (see
+[agent containment](../security/agent-containment.md)).
 
 ### Memory and MemoryRecall
 
@@ -411,6 +433,10 @@ If an agent records the same area and lesson again, the tool updates the lesson.
 `MemoryRecall` returns recorded lessons, the most relevant first. Inputs: `query`, an optional `area` that
 limits the results to a module and its sub-scopes, and `limit` (default 8, at most 50).
 
+A run with more than one work dir (Rule WD1) records each lesson in the main project's database.
+`MemoryRecall` searches the main project first, then the database of each other work dir that has one, until it
+has `limit` lessons. Then each lesson starts with its project key, for example `[api: routes]`.
+
 The engine owns the database. Agents can use it only through these two tools, and no file tool can write it.
 The build streak also uses it. After the second failed build in a row, Ostra adds the recalled lessons for that
 failure to the tool result. The agent does not have to ask for them. [Project memory](project-memory.md) tells
@@ -419,60 +445,63 @@ how Ostra stores and ranks lessons.
 ### DocsSearch
 
 `DocsSearch` searches the documentation books that the docs stage wrote into the workspace (Rule B8). It returns
-the sections that best match a question. Each section has only the passages that matched. Inputs: `query`, an
+the units that best match a question. Each unit has only the passages that matched. Inputs: `query`, an
 optional `project` that limits the search to the part of one project, and `limit` (default 5, at most 15
-sections).
+units).
 
-A section of a book can be long, and most of it is not related to one question. Thus the search does not rank
-full sections. It cuts each section and sub-section into these passages:
+A page of a book can be long, and most of it is not related to one question. Thus the search does not rank full
+pages. It cuts each page at its `##` headings into units. The page unit holds the summary, the text above the
+first `##` heading, and the code references. Each `##` heading starts a unit with the title `Page > Heading`. The
+search then cuts each unit into these passages:
 
-- The purpose, the boundaries, the assumptions, and the business flow.
-- Each diagram and each table.
-- The separation of concerns and the code references.
+- Each paragraph.
+- Each `mermaid` diagram and each other code block.
+- Each list and each table, in windows of five rows.
+- The code references of the page, in windows of five.
 
-The search splits lists and tables of more than five rows into windows of five. The index uses the title of a
-diagram and the words in its labels and messages. It never uses the Mermaid keywords or the node IDs. Thus a
-question about "participants" does not match each sequence diagram. The glossary gives one passage for each
-term. The system architecture gives one passage for each component, each failure case, and each group of links
-or scaling rows.
+A `###` or deeper heading labels the passages under it, for example `Retries: list`. The index uses the words in
+the labels and messages of a diagram. It never uses the Mermaid keywords or the node IDs. Thus a question about
+"participants" does not match each sequence diagram. The glossary gives one passage for each term. The system
+architecture gives one passage for each component, each failure case, and each group of links or scaling rows.
 
 BM25 ranks each passage over three fields:
 
 - The label of the passage, with weight 2.
-- The paths and symbols of its code references, with weight 1.5.
+- The inline code of the passage and the paths and symbols of its code references, with weight 1.5.
 - Its text, with weight 1.
 
 The search changes words to lowercase and applies a light stemmer. An identifier also gives its parts. Thus
 `SessionState` matches "session state". The stemmer removes plurals, `-ed`, and `-ing`. Thus "started" matches
-"starts". A section gets a rank from the sum of four parts:
+"starts". A unit gets a rank from the sum of four parts:
 
 - Its title, with weight 3, counted one time.
 - Its best passage.
 - 35% of its second-best passage.
-- A BM25 score of the full text of the section. This part finds a question whose words are in several passages.
+- A BM25 score of the full text of the unit. This part finds a question whose words are in several passages.
 
-The title counts one time for the section, and it never decides which passages the search shows. If the title of
-a section matches the question, the hit shows the passages whose own text matches. If no passage matches, the
-hit shows the purpose. A hit shows at most two passages. Each of them has at least half the score of the best
-passage of the section. Then the hit shows the path of the Markdown file of the section. The agent reads that
-file when it needs the full section.
+The title counts one time for the unit, and it never decides which passages the search shows. If the title of a
+unit matches the question, the hit shows the passages whose own text matches. If no passage matches, the hit
+shows the first passage of the unit. A hit shows at most two passages. Each of them has at least half the score
+of the best passage of the unit. Then the hit shows the path of the Markdown file of the page. The agent reads
+that file when it needs the full page.
 
 In a list or table passage, the hit shows only the lines that contain a word of the question. It also shows a
-count of the lines that it does not show. Thus a window of five assumptions shows the one assumption that
-matched. The hit shows prose and diagrams in full, because a sentence or a flow cut in half gives a wrong
+count of the lines that it does not show. Thus a window of five list items shows the one item that matched. The
+hit shows prose, code blocks, and diagrams in full, because a sentence or a flow cut in half gives a wrong
 meaning.
 
 The search builds the index from `book.json` on each call. Thus the index always agrees with a book that the
-docs stage just wrote again. If the workspace has a book and the agent has the capability, the repo brief names
-the tool. The brief tells the agent to search before it reads code to learn an area.
+docs stage just wrote again. A book from before free pages loads with its typed sections as pages (Rule B9), so
+the search cuts it in the same way. If the workspace has a book and the agent has the capability, the repo brief
+names the tool. The brief tells the agent to search before it reads code to learn an area.
 
 The retrieval eval (`tests/evals/book_retrieval/`, run by `crates/ostra-core/tests/book_retrieval.rs`) measures
 the ranking. It uses 221 questions about the source of Ostra against a book that an Opus docs run wrote about
-the repository. Each question has labels for the sections that state its answer. 127 questions have one such
-section. For those questions, the correct section is first for 63%, and in the top five for 90%. A top-five
-result is about 3,200 characters. The search is weak on a question in plain words that share no word with the
-book, for example "the code formatter" for a section about the format command. 82% of those questions reach the
-top five. The eval fails if a ranking change goes below its floors.
+the repository. Each question has labels for the units that state its answer. 127 questions have one such unit.
+For those questions, the correct unit is first for 64%, and in the top five for 91%. A top-five result is about
+3,300 characters. The search is weak on a question in plain words that share no word with the book, for example
+"the code formatter" for a section about the format command. The eval fails if a ranking change goes below its
+floors.
 
 A Memory call expanded in the Activity tab, after a failed check and its fix:
 
@@ -498,13 +527,30 @@ does not include the mentions that a text search cannot tell apart from a differ
 name. On a harness, the tools are `code_outline`, `code_find`, and the other `code_*` names. The `ostra` MCP
 server serves them. [The code index](code-index.md) describes how Ostra builds the index.
 
-### Subagent tools
+Each call goes to one project's index (Rule WD1). An absolute `path` selects the work dir that contains it. A
+relative `path` that does not exist in the main project and starts with the folder name or the key of another
+work dir selects that work dir, and the tool removes that first part. Each other call goes to the main project.
 
-`SubagentList`, `SubagentAsk`, and `SubagentReply` let an agent with the `coordinate` capability ask a helper or
-a different subagent a question. The agent waits for the answer, then continues from its own conversation. On a
-harness, the tools are `subagent_list`, `subagent_ask`, and `subagent_reply`. The permission layer allows them in
-each mode, because they change no file. An ask ends the native run with the status `waiting`. On a harness, an
-ask makes the run wait with its process alive.
+### Messaging tools
+
+`ListAgents`, `SendMessage`, and `WaitForMessage` let an agent with the `coordinate` capability send messages to
+the other subagents of its session. The definitions are in `crates/ostra-tools/src/defs.rs`. The inputs and
+limits are in `crates/ostra-core/src/coord.rs`. On a harness, the tools are `list_agents`, `send_message`, and
+`wait_for_message`. Claude Code shows them as `mcp__ostra__send_message` and the same for the others.
+
+| Tool | Input | What it does |
+| --- | --- | --- |
+| `ListAgents` | none | Gives your subagent ID and each subagent of the session: its agent, label, project, status, what it waits for, and its report. Also gives the helper agents that you can start. |
+| `SendMessage` | `message`, exactly one of `to` (a subagent ID) or `agent` (a helper), an optional `project` for a helper, an optional `wait` | Puts the message in the queue and returns immediately. With `wait: true`, the run pauses after the call. |
+| `WaitForMessage` | none | Pauses the run until a message arrives for it. |
+
+A message is plain text of at most 8,000 characters (`MAX_MESSAGE_CHARS`). Put longer material in a file, and
+give its path in the message. Ostra never delivers a message during a request. The receiver reads it at its
+next turn boundary. A pause ends a native run with status `waiting`. A harness or programmatic run waits with
+its process alive. The next message for the run wakes it.
+
+Ostra refuses `WaitForMessage` when the run must reply to a waiting sender, because that sender then waits on a
+run that waits on it. The permission layer allows the three tools in each mode, because they change no file.
 [Subagents that talk to each other](agents.md#subagents-that-talk-to-each-other) covers the full flow.
 
 ### The submit tool
@@ -520,10 +566,10 @@ An agent calls management tools to change Ostra itself, not the files that it wo
 manages projects. It is for a request that needs a codebase that no project holds. An example is a new service
 that otherwise has to be inside an existing repository.
 
-Only the implementer has the `manage_projects` capability, and the guard limits that capability to one run. That
-run is the implementer of a phase that the approved plan puts in a project that does not exist yet. Thus Ostra
-creates a project only after the user approved the plan that needs it. If the user rejects a spec or plan,
-nothing stays on disk.
+The implementer holds the `manage_projects` capability by default, and each agent can request it (Rule CA6). The
+guard limits the capability to one run. That run holds the capability and runs a phase that the approved plan
+puts in a project that does not exist yet. Thus Ostra creates a project only after the user approved the plan
+that needs it. If the user rejects a spec or plan, nothing stays on disk.
 
 ### ProjectList
 
@@ -544,12 +590,12 @@ project is in the scope of this session. It is read-only, so each mode allows it
 | `folder` | Optional, relative to the workspace root, with no `..`. The default is the key. |
 | `git_init` | Optional, default true: run `git init` in the new folder. |
 
-The implementer gets these inputs from its phase file. The plan copied them from the `Constraint` criteria of
-the spec. A call must pass three checks before Ostra changes anything on disk:
+The implementer, or the agent that holds the grant, gets these inputs from its phase file. The plan copied them
+from the `Constraint` criteria of the spec. A call must pass three checks before Ostra changes anything on disk:
 
 1. **The guard (rule O2).** The `manage-tools` guard allows the call only from an execution whose context has
-   `creates_project` set. The runner sets it only for the implementer of a phase in a project that meets two
-   conditions:
+   `creates_project` set. The runner sets it only for a run that holds `manage_projects` in a phase in a project
+   that meets two conditions:
    - The approved plan lists the project in `new_projects`.
    - The session does not hold the project yet.
 

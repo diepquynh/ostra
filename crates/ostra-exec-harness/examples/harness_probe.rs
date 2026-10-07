@@ -7,9 +7,9 @@
 //! does them: it cancels the run during a slow step, then resumes the harness session with the note
 //! "Continue the workflow." and checks the task finishes.
 //!
-//! `harness_probe wake <harness> <model> <scratch-dir>` checks the subagent wait (Rule H2): the agent asks twice with
-//! `subagent_ask`, the process stays alive while it waits, the answer is typed into its terminal after a delay, and
-//! the agent must submit both answers.
+//! `harness_probe wake <harness> <model> <scratch-dir>` checks the self-pause (Rule SM3): the agent starts a helper twice
+//! with `send_message` and `wait: true`, the process stays alive while it waits, the helper's result is typed into its
+//! terminal after a delay, and the agent must submit both answers.
 //!
 //! With `PROBE_CODE` set, the repo gets a small Rust project, the bridge serves the real code
 //! navigation tools over an index of it, and the agent is asked to call `code_implementations`.
@@ -118,10 +118,13 @@ impl BridgeServices for Services {
         args: Value,
     ) -> Result<ostra_exec_harness::McpOut, String> {
         self.0.line(json!({"mcp_call": tool, "args": args}));
-        // Rule H2: an ask makes the run wait with its process alive, as the engine's answer does.
-        if self.2 && tool == "subagent_ask" {
+        // Rule SM3: a message with `wait` pauses the run with its process alive, as the engine does.
+        if self.2 && tool == "send_message" {
             return Ok(ostra_exec_harness::McpOut {
-                text: ostra_core::coord::waiting_text("the explore helper", true),
+                text: format!(
+                    "Queued message m_probe for a new explore helper. {}",
+                    ostra_core::coord::waiting_text(true)
+                ),
                 end: ostra_core::coord::RunEnd::Wait,
             });
         }
@@ -359,9 +362,10 @@ async fn main() {
         } else {
             vec![Capability::Read, Capability::Shell]
         },
-        submit_schema: ostra_core::submit::submit_schema(agent),
+        submit_schema: ostra_core::submit::submit_schema(ostra_core::Contract::Answer),
         timeout_secs: timeout,
         ctx: ExecContext {
+            work_dirs: Vec::new(),
             execution_id: id.clone(),
             session_id: None,
             agent,
@@ -393,8 +397,10 @@ async fn main() {
             },
             sandbox_blocked_ports: vec![],
             creates_project: false,
-            answer_only: false,
             owes_reply: false,
+            write_scope: None,
+            contract: ostra_core::Contract::Answer,
+            capabilities: vec![],
         },
         resume: resume_sid.map(|sid| ResumeInfo {
             from: ExecutionId::new(),
@@ -619,9 +625,10 @@ async fn pause_probe(args: &[String]) {
         ),
         first_message: task.clone(),
         capabilities: vec![Capability::Read, Capability::Shell],
-        submit_schema: ostra_core::submit::submit_schema(agent),
+        submit_schema: ostra_core::submit::submit_schema(ostra_core::Contract::Answer),
         timeout_secs: 300,
         ctx: ExecContext {
+            work_dirs: Vec::new(),
             execution_id: id.clone(),
             session_id: None,
             agent,
@@ -648,8 +655,10 @@ async fn pause_probe(args: &[String]) {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
-            answer_only: false,
             owes_reply: false,
+            write_scope: None,
+            contract: ostra_core::Contract::Answer,
+            capabilities: vec![],
         },
         resume,
         harness_session_id: sid,
@@ -785,6 +794,7 @@ async fn inspect_probe(args: &[String]) {
         submit_schema: serde_json::Value::Null,
         timeout_secs: 600,
         ctx: ExecContext {
+            work_dirs: Vec::new(),
             execution_id: id.clone(),
             session_id: None,
             agent,
@@ -811,8 +821,10 @@ async fn inspect_probe(args: &[String]) {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
-            answer_only: false,
             owes_reply: false,
+            write_scope: None,
+            contract: ostra_core::Contract::Answer,
+            capabilities: vec![],
         },
         resume: Some(ResumeInfo {
             from: ExecutionId::new(),
@@ -917,9 +929,9 @@ async fn wake_probe(args: &[String]) {
     let exec = HarnessExecutor::new(cfg, live, PtyRegistry::new());
     let agent = AgentName::QuickAnswer;
     let ask = if harness == HarnessKind::Claude {
-        "mcp__ostra__subagent_ask"
+        "mcp__ostra__send_message"
     } else {
-        "subagent_ask"
+        "send_message"
     };
     let submit = if harness == HarnessKind::Claude {
         format!("mcp__ostra__{}", agent.submit_tool_name())
@@ -937,15 +949,16 @@ async fn wake_probe(args: &[String]) {
         },
         effort: Effort::Low,
         system_prompt: format!(
-            "You are an Ostra probe agent. Follow the user's steps exactly and do nothing else.\n\nThe `mcp__ostra__*` tools come from Ostra's `ostra` MCP server. If one is not in your tool list yet, load it with ToolSearch (`select:mcp__ostra__<tool>`) and then call it.\n\nWhen you call `{ask}`, Ostra answers later: end your turn as the tool result says, and the answer arrives as the next message. When the task is finished and you have called `{submit}`, reply with only `Done!`."
+            "You are an Ostra probe agent. Follow the user's steps exactly and do nothing else.\n\nThe `mcp__ostra__*` tools come from Ostra's `ostra` MCP server. If one is not in your tool list yet, load it with ToolSearch (`select:mcp__ostra__<tool>`) and then call it.\n\nWhen you call `{ask}` with `wait: true`, the reply comes later: end your turn as the tool result says, and the reply arrives as the next message. When the task is finished and you have called `{submit}`, reply with only `Done!`."
         ),
         first_message: format!(
-            "Do exactly these steps in order and nothing more:\n1. Call `{ask}` with agent \"explore\" and message \"What is the release codename?\"\n2. When its answer arrives, call `{ask}` with agent \"explore\" and message \"What is the release date?\"\n3. When that answer arrives, call `{submit}` with answer set to the codename and the date, and sources [\"explore helper\"]."
+            "Do exactly these steps in order and nothing more:\n1. Call `{ask}` with agent \"explore\", wait true, and message \"What is the release codename?\"\n2. When its result arrives, call `{ask}` with agent \"explore\", wait true, and message \"What is the release date?\"\n3. When that result arrives, call `{submit}` with answer set to the codename and the date, and sources [\"explore helper\"]."
         ),
         capabilities: vec![Capability::Read, Capability::Coordinate],
-        submit_schema: ostra_core::submit::submit_schema(agent),
+        submit_schema: ostra_core::submit::submit_schema(ostra_core::Contract::Answer),
         timeout_secs: 300,
         ctx: ExecContext {
+            work_dirs: Vec::new(),
             execution_id: id.clone(),
             session_id: None,
             agent,
@@ -972,15 +985,17 @@ async fn wake_probe(args: &[String]) {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
-            answer_only: false,
             owes_reply: false,
+            write_scope: None,
+            contract: ostra_core::Contract::Answer,
+            capabilities: vec![],
         },
         resume: None,
         harness_session_id: None,
     };
     let answer = |q: &str, a: &str| {
         format!(
-            "The answer from the explore helper to your question arrived. Continue your task from here.\n\nYour question: {q}\n\nAnswer:\n{a}"
+            "Ostra hands you a message that arrived for you. Act on it, then continue your task.\n\nThe result of the explore helper for your message \"{q}\":\n{a}\n"
         )
     };
     let host = Arc::new(WakeHost {

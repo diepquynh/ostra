@@ -3,6 +3,10 @@ default_tier = "balanced"
 timeout_seconds = 300
 capabilities = ["read", "search_text", "glob", "web_search", "web_fetch", "memory_recall", "code", "docs_search"]
 
+returns = "answer"
+write_scope = "read_only"
+brief = ["stack", "commands", "skills", "modules"]
+
 [effort]
 native = "medium"
 claude = "medium"

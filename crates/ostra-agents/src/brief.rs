@@ -8,8 +8,8 @@
 //! another, and the brief must avoid stating a fact twice without withholding it. Routing settings
 //! are never included: they mean nothing to an agent and would leak tier names into its context.
 
-use ostra_core::AgentName;
 use ostra_core::config::{ModuleRow, ProjectProfile, SkillEntry};
+use ostra_core::{AgentName, Contract};
 use std::path::{Path, PathBuf};
 
 pub const MAX_BRIEF_CHARS: usize = 3600;
@@ -27,6 +27,7 @@ pub const BOOKS_HEADING: &str = "## Workspace documentation";
 /// Books the brief names; the rest are found with Glob in the folder.
 pub const MAX_BRIEF_BOOKS: usize = 20;
 const NEW_PROJECTS_HEADING: &str = "## Projects created in this session";
+pub const WORK_DIRS_HEADING: &str = "## Other work dirs";
 
 /// An agent instruction file at the project root and its text.
 #[derive(Debug, Clone)]
@@ -54,8 +55,35 @@ pub fn project_docs(repo_root: &Path) -> Vec<ProjectDoc> {
     out
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Section {
+/// Rule WD1: a project the run works in besides its main one, with the facts the brief gives
+/// about it.
+#[derive(Debug, Clone, Default)]
+pub struct WorkDirBrief {
+    pub key: String,
+    pub path: PathBuf,
+    pub profile: Option<ProjectProfile>,
+    /// `INVENTORY.md` text, when it exists.
+    pub inventory: Option<String>,
+    /// The project's `CLAUDE.md`, `AGENTS.md`, and `AGENT.md`.
+    pub project_docs: Vec<ProjectDoc>,
+}
+
+impl WorkDirBrief {
+    /// The facts of the project `key` at `path`, read from disk.
+    pub fn read(key: &str, path: &Path) -> WorkDirBrief {
+        WorkDirBrief {
+            key: key.to_string(),
+            path: path.to_path_buf(),
+            profile: ostra_core::config::load_toml(&ostra_core::paths::project_profile(path)).ok(),
+            inventory: std::fs::read_to_string(ostra_core::paths::project_inventory(path)).ok(),
+            project_docs: project_docs(path),
+        }
+    }
+}
+
+/// Rule CA6: one section of the repo brief, which an agent's definition picks (`brief`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
     Stack,
     Commands,
     Testing,
@@ -65,23 +93,48 @@ enum Section {
     Modules,
 }
 
-fn sections(agent: AgentName) -> &'static [Section] {
-    use Section::*;
-    match agent {
-        AgentName::Implementer => &[Commands, Skills, Conventions, Modules],
-        AgentName::WriteTest => &[Commands, Testing, Skills, Conventions, Modules],
-        AgentName::CodeReviewer => &[Commands, Review, Conventions, Skills],
-        AgentName::ExecutionPathAnalyzer => &[Commands, Testing, Modules],
-        AgentName::Explore => &[Stack, Skills, Modules],
-        AgentName::Plan => &[Stack, Commands, Skills, Modules],
-        AgentName::GenerateSpec => &[Stack, Modules],
-        AgentName::Documentation => &[Stack, Commands, Modules],
-        AgentName::SystemArchitecture => &[Stack, Modules],
-        AgentName::FactCheck => &[Stack, Modules],
-        AgentName::PromptGeneration => &[Skills],
-        AgentName::QuickAnswer => &[Stack, Commands, Skills, Modules],
-        AgentName::Initializer => &[],
-        AgentName::Advisor => &[Stack, Commands, Skills, Modules],
+impl Section {
+    pub const ALL: [Section; 7] = [
+        Section::Stack,
+        Section::Commands,
+        Section::Testing,
+        Section::Skills,
+        Section::Conventions,
+        Section::Review,
+        Section::Modules,
+    ];
+
+    /// The sections an agent gets when its definition names none.
+    pub const DEFAULT: [Section; 5] = [
+        Section::Stack,
+        Section::Commands,
+        Section::Skills,
+        Section::Conventions,
+        Section::Modules,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Section::Stack => "stack",
+            Section::Commands => "commands",
+            Section::Testing => "testing",
+            Section::Skills => "skills",
+            Section::Conventions => "conventions",
+            Section::Review => "review",
+            Section::Modules => "modules",
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Section, String> {
+        Section::ALL
+            .into_iter()
+            .find(|x| x.as_str() == s.trim())
+            .ok_or_else(|| {
+                format!(
+                    "Name brief sections from {}: `{s}` is not one.",
+                    Section::ALL.map(|x| x.as_str()).join(", ")
+                )
+            })
     }
 }
 
@@ -136,6 +189,10 @@ impl BooksBrief {
 /// What the brief is built from.
 pub struct BriefInput<'a> {
     pub agent: AgentName,
+    /// Rule CA5: the contract the agent returns, which picks the skills it is shown.
+    pub contract: Contract,
+    /// Rule CA6: the sections its definition asks for.
+    pub sections: &'a [Section],
     /// The spawn block and task text, scanned for paths that narrow the module map.
     pub prompt: &'a str,
     pub repo_root: &'a Path,
@@ -150,6 +207,8 @@ pub struct BriefInput<'a> {
     pub books: Option<&'a BooksBrief>,
     /// Rule O3: projects agents created in this session, with the facts from their `ProjectCreate`.
     pub new_projects: &'a [ostra_core::manage::CreatedProject],
+    /// Rule WD1: the other projects the run works in, after the main one at `repo_root`.
+    pub work_dirs: &'a [WorkDirBrief],
 }
 
 fn squash(s: &str) -> String {
@@ -212,7 +271,7 @@ fn relevant_modules<'p>(map: &'p [ModuleRow], hints: &[String]) -> Vec<&'p Modul
 }
 
 fn skill_rows(
-    agent: AgentName,
+    contract: Contract,
     skills: &[SkillEntry],
     inventory: &str,
     repo_root: &Path,
@@ -224,12 +283,12 @@ fn skill_rows(
             if s.kind == "convention" {
                 return true;
             }
-            match agent {
-                AgentName::WriteTest => {
+            match contract {
+                Contract::Tests => {
                     let hay = format!("{} {}", s.name, s.kind).to_lowercase();
                     hay.contains("test") || hay.contains("spec")
                 }
-                AgentName::CodeReviewer => s.kind == "convention",
+                Contract::Review => s.kind == "convention",
                 _ => true,
             }
         })
@@ -254,7 +313,7 @@ fn skill_rows(
 /// The brief as markdown, or `None` when there is nothing to say.
 pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
     let mut out: Vec<String> = vec![];
-    let wanted = sections(input.agent);
+    let wanted = input.sections;
     if let Some(profile) = input.profile.filter(|_| !wanted.is_empty()) {
         let inventory = squash(input.inventory.unwrap_or(""));
         let mut body: Vec<String> = vec![];
@@ -321,7 +380,7 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         }
 
         if wanted.contains(&Section::Skills) {
-            let rows = skill_rows(input.agent, &profile.skills, &inventory, input.repo_root);
+            let rows = skill_rows(input.contract, &profile.skills, &inventory, input.repo_root);
             if !rows.is_empty() {
                 body.push(format!(
                     "### Skills\nLoad a skill by its name with the skill tool, or read the file at its path. \
@@ -418,21 +477,27 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         let docs: Vec<String> = input
             .project_docs
             .iter()
-            .map(|d| {
-                let text = d.content.trim();
-                let body = if text.chars().count() > MAX_PROJECT_DOC_CHARS {
-                    let cut: String = text.chars().take(MAX_PROJECT_DOC_CHARS).collect();
-                    format!("{cut}\n\n(truncated; read the file for the rest)")
-                } else {
-                    text.to_string()
-                };
-                format!("### `{}`\n\n{body}", d.path.display())
-            })
+            .map(|d| doc_text(d, "###"))
             .collect();
         out.push(format!(
             "{PROJECT_DOCS_HEADING}\n\nThe project's own agent instruction files. Follow them for work in this \
              project unless they conflict with your own rules above, which win.\n\n{}",
             docs.join("\n\n")
+        ));
+    }
+
+    // Rule WD1: the run also works in these projects, so it gets the facts it needs to work there.
+    if !input.work_dirs.is_empty() {
+        let parts: Vec<String> = input
+            .work_dirs
+            .iter()
+            .map(|w| work_dir_text(input.contract, w))
+            .collect();
+        out.push(format!(
+            "{WORK_DIRS_HEADING}\n\nYou also work in these projects. Use absolute paths for their files, and run \
+             each command from the folder of its project. Follow each project's instruction files for work in that \
+             project unless they conflict with your own rules above, which win.\n\n{}",
+            parts.join("\n\n")
         ));
     }
 
@@ -494,15 +559,10 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
             .take(MAX_BRIEF_BOOKS)
             .map(|k| {
                 format!(
-                    "- `{dir}/{}/index.md`: {} ({} sections{})",
+                    "- `{dir}/{}/index.md`: {} ({} sections)",
                     k.id,
                     k.projects.join(", "),
                     k.sections,
-                    if k.has_architecture {
-                        ", with the system architecture"
-                    } else {
-                        ""
-                    }
                 )
             })
             .collect();
@@ -522,7 +582,7 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         };
         out.push(format!(
             "{BOOKS_HEADING}\n\nOstra's docs stage wrote these books about the workspace's projects. Each `index.md` links \
-             one Markdown file per section, with its assumptions, flows, diagrams, and code references. {how}. Check \
+             one Markdown file per page, with its flows, diagrams, rules, and code references. {how}. Check \
              what you find against the code, because a book describes the code when it was written. Do not write in \
              `{dir}`, because Ostra writes the books.\n\n{}",
             rows.join("\n")
@@ -550,12 +610,59 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
     }
 }
 
+fn doc_text(d: &ProjectDoc, heading: &str) -> String {
+    let text = d.content.trim();
+    let body = if text.chars().count() > MAX_PROJECT_DOC_CHARS {
+        let cut: String = text.chars().take(MAX_PROJECT_DOC_CHARS).collect();
+        format!("{cut}\n\n(truncated; read the file for the rest)")
+    } else {
+        text.to_string()
+    };
+    format!("{heading} `{}`\n\n{body}", d.path.display())
+}
+
+/// Rule WD1: one other work dir: its folder, commands, skills, and instruction files.
+fn work_dir_text(contract: Contract, w: &WorkDirBrief) -> String {
+    let mut body = vec![format!("### `{}` at `{}`", w.key, w.path.display())];
+    if let Some(profile) = &w.profile {
+        let rows: Vec<String> = profile
+            .commands
+            .entries()
+            .iter()
+            .map(|(k, v)| format!("- **{k}**: `{v}`"))
+            .collect();
+        if !rows.is_empty() {
+            body.push(format!(
+                "Commands: use these exact strings, run from `{}`.\n{}",
+                w.path.display(),
+                rows.join("\n")
+            ));
+        }
+        let inventory = squash(w.inventory.as_deref().unwrap_or(""));
+        let skills = skill_rows(contract, &profile.skills, &inventory, &w.path);
+        if !skills.is_empty() {
+            body.push(format!("Skills:\n{}", skills.join("\n")));
+        }
+    }
+    if w.inventory.is_some() {
+        body.push(format!(
+            "Inventory: `{}`",
+            ostra_core::paths::project_inventory(&w.path).display()
+        ));
+    }
+    for d in &w.project_docs {
+        body.push(doc_text(d, "####"));
+    }
+    body.join("\n\n")
+}
+
 /// The first message with the brief appended. Idempotent: a message that already carries a brief is
 /// returned unchanged.
 pub fn augment(first_message: &str, input: &BriefInput<'_>) -> String {
     if [
         BRIEF_HEADING,
         PROJECT_DOCS_HEADING,
+        WORK_DIRS_HEADING,
         ARTIFACTS_HEADING,
         BOOKS_HEADING,
         INSTRUCTIONS_HEADING,

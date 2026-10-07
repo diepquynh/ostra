@@ -177,6 +177,7 @@ async fn boot(root: &Path) -> (Arc<ostra_server::app::App>, String, reqwest::Cli
         exe: PathBuf::from("/nonexistent/ostra"),
         bind: None,
         allow_hosts: vec![],
+        plugins: ostra_sdk::Registry::new(),
     };
     let app = ostra_server::app::build(&opts, port).await.unwrap();
     app.shared.providers.register(

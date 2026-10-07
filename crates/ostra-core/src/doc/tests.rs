@@ -1,5 +1,4 @@
 use super::*;
-use crate::AgentName;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -136,6 +135,32 @@ fn broken_references_are_errors() {
 }
 
 #[test]
+fn a_phase_is_a_working_feature_not_a_layer() {
+    // Phases 1 and 2 split R1 to R3 into a service layer and a route layer.
+    let mut v = value(PLAN);
+    let mut route = v["phases"][0].clone();
+    route["id"] = json!(2);
+    route["name"] = json!("Cancel route");
+    route["depends_on"] = json!([1]);
+    route["steps"] = json!([v["phases"][0]["steps"][1].clone()]);
+    route["steps"][0]["id"] = json!("2.1");
+    v["phases"][0]["steps"] = json!([v["phases"][0]["steps"][0].clone()]);
+    v["phases"][1]["id"] = json!(3);
+    v["phases"][1]["depends_on"] = json!([2]);
+    v["phases"][1]["steps"][0]["id"] = json!("3.1");
+    v["phases"].as_array_mut().unwrap().insert(1, route);
+    let issues = check(&DocKind::Plan.parse(&v).unwrap());
+    let lines: Vec<String> = issues.iter().map(|i| i.line()).collect();
+    let all = lines.join("\n");
+    assert!(all.contains("Merge phase 2 with phase 1"), "{all}");
+    assert!(all.contains("Deliver `R1` in one phase: phases 1, 2"), "{all}");
+    // Phase 1 completes R3 alone, so only the route phase is an error.
+    assert!(!all.contains("Merge phase 1"), "{all}");
+    // The web phase consumes the backend contract in another repo and completes R4.
+    assert!(!all.contains("Merge phase 3"), "{all}");
+}
+
+#[test]
 fn schema_errors_name_the_field() {
     let mut v = value(SPEC);
     v["requirements"][0]["acceptance"][0]
@@ -162,21 +187,21 @@ fn submit_needs_a_clean_document_that_matches() {
     let dir = tempfile_dir();
     let md = dir.join("ostra-spec-1.md");
     let submit = json!({"spec_path": md, "open_questions": [], "external_evidence_rows": 1, "deliverables": 2, "requirements": 4, "summary": "s"});
-    let err = check_submit(AgentName::GenerateSpec, &submit).unwrap_err();
+    let err = check_submit(crate::contract::Contract::Spec, &submit).unwrap_err();
     assert!(
         err.contains("Write the spec with the Document tool"),
         "{err}"
     );
     write(DocKind::Spec, &md, &value(SPEC), None).unwrap();
-    check_submit(AgentName::GenerateSpec, &submit).unwrap();
+    check_submit(crate::contract::Contract::Spec, &submit).unwrap();
     let mut wrong = submit.clone();
     wrong["requirements"] = json!(5);
     assert!(
-        check_submit(AgentName::GenerateSpec, &wrong)
+        check_submit(crate::contract::Contract::Spec, &wrong)
             .unwrap_err()
             .contains("`requirements` is 5, but the spec has 4")
     );
-    assert!(check_submit(AgentName::Implementer, &json!({})).is_ok());
+    assert!(check_submit(crate::contract::Contract::Implementation, &json!({})).is_ok());
 }
 
 const PROFILE: &str = r#"schema_version = 1
@@ -202,17 +227,17 @@ fn inventory_submit_needs_a_profile_that_parses() {
     let submit = json!({"status": "ok", "summary": "s", "result": {"inventory_path": inventory, "profile_path": profile, "report_path": "/r"}});
     let refused = |text: &str| {
         std::fs::write(&profile, text).unwrap();
-        check_submit(AgentName::Initializer, &submit).unwrap_err()
+        check_submit(crate::contract::Contract::Setup, &submit).unwrap_err()
     };
 
     std::fs::write(&profile, PROFILE).unwrap();
     assert!(
-        check_submit(AgentName::Initializer, &submit)
+        check_submit(crate::contract::Contract::Setup, &submit)
             .unwrap_err()
             .contains("INVENTORY.md before you submit")
     );
     std::fs::write(&inventory, "# Inventory\n").unwrap();
-    check_submit(AgentName::Initializer, &submit).unwrap();
+    check_submit(crate::contract::Contract::Setup, &submit).unwrap();
 
     let err = refused(&PROFILE.replace("area = \"app\"", "area = \"app\"\nreference = null"));
     assert!(
@@ -229,7 +254,7 @@ fn inventory_submit_needs_a_profile_that_parses() {
 
     std::fs::remove_file(&profile).unwrap();
     assert!(
-        check_submit(AgentName::Initializer, &submit)
+        check_submit(crate::contract::Contract::Setup, &submit)
             .unwrap_err()
             .contains("project.toml before you submit")
     );
@@ -241,7 +266,7 @@ fn inventory_submit_needs_a_profile_that_parses() {
         json!({"skill_path": "/s"}),
     ] {
         let other = json!({"status": "ok", "summary": "s", "result": result});
-        check_submit(AgentName::Initializer, &other).unwrap();
+        check_submit(crate::contract::Contract::Setup, &other).unwrap();
     }
 }
 
@@ -252,9 +277,14 @@ fn plan_submit_must_match_the_phases() {
     write(DocKind::Plan, &md, &value(PLAN), None).unwrap();
     let phase = |id: u32, deliverable: &str, project: &str, complexity: &str, deps: Vec<u32>| json!({"id": id, "deliverable": deliverable, "project": project, "title": "t", "complexity": complexity, "test_policy": "Required", "depends_on": deps, "file": phase_path(&md, id)});
     let mut submit = json!({"spec_path": "/s", "master_plan_path": md, "phases": [phase(1, "D1", "backend", "Medium", vec![]), phase(2, "D2", "web", "Low", vec![1])], "stakes": "Medium", "summary": "s", "step_count": 3, "requirement_coverage": "4 of 4"});
-    check_submit(AgentName::Plan, &submit).unwrap();
+    check_submit(crate::contract::Contract::Plan, &submit).unwrap();
+    // A phase without `file` takes the path Ostra rendered.
+    submit["phases"][0].as_object_mut().unwrap().remove("file");
+    check_submit(crate::contract::Contract::Plan, &submit).unwrap();
+    let parsed: crate::submit::PlanSubmit = serde_json::from_value(submit.clone()).unwrap();
+    assert_eq!(parsed.phase_file(&parsed.phases[0]), phase_path(&md, 1));
     submit["phases"][1]["complexity"] = json!("High");
-    let err = check_submit(AgentName::Plan, &submit).unwrap_err();
+    let err = check_submit(crate::contract::Contract::Plan, &submit).unwrap_err();
     assert!(
         err.contains("Phase 2 in `phases` disagrees with the plan")
             && err.contains("complexity Low"),
@@ -417,7 +447,7 @@ fn spec_groundings_and_consumed_sources_must_exist() {
         "the browser view does not check the code"
     );
     let submit = json!({"spec_path": md, "open_questions": [], "external_evidence_rows": 1, "deliverables": 2, "requirements": 4, "summary": "s"});
-    let err = check_submit(AgentName::GenerateSpec, &submit).unwrap_err();
+    let err = check_submit(crate::contract::Contract::Spec, &submit).unwrap_err();
     assert!(err.contains("`cancel` does not appear"), "{err}");
 }
 
@@ -512,7 +542,11 @@ fn a_research_document_records_its_files_and_cites_only_real_ones() {
         "{:?}",
         issue_lines(&w)
     );
-    let err = check_submit(AgentName::Explore, &json!({"research_path": md})).unwrap_err();
+    let err = check_submit(
+        crate::contract::Contract::Research,
+        &json!({"research_path": md}),
+    )
+    .unwrap_err();
     assert!(err.contains("is not there"), "{err}");
 }
 

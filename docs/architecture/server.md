@@ -7,7 +7,7 @@ running server again.
 
 ## One binary, several roles
 
-The first argument of the `ostra` command selects its job (`crates/ostra-server/src/main.rs`):
+The first argument of the `ostra` command selects its job (`crates/ostra-server/src/cli.rs`):
 
 | Command | What it does |
 | --- | --- |
@@ -18,6 +18,7 @@ The first argument of the `ostra` command selects its job (`crates/ostra-server/
 | `ostra signout` | The same as `ostra sessions revoke --all` |
 | `ostra stop <session-id>` | Stops a session when the server is down. Then the next start does not run the session again |
 | `ostra config` | Prints the config path. If no config exists, it writes a default config |
+| `ostra plugin add <name> -- <command>...` | Registers a plugin program in the `[[plugins]]` of the workspace that holds the current folder. `--workspace` selects a different workspace |
 | `ostra hook ...` | The hook bridge that harness CLIs call. Do not run it yourself |
 | `ostra mcp-stdio ...` | The MCP stdio shim that harness CLIs start. Do not run it yourself |
 

@@ -492,20 +492,10 @@ fn docs_index() -> Index {
                         }
                     }
                     for chunk in items.chunks(5) {
-                        push(
-                            passages,
-                            PassageKind::Table,
-                            named("List"),
-                            chunk.join("\n"),
-                        );
+                        push(passages, PassageKind::List, named("List"), chunk.join("\n"));
                     }
                 } else {
-                    push(
-                        passages,
-                        PassageKind::Purpose,
-                        named("Text"),
-                        lines.join(" "),
-                    );
+                    push(passages, PassageKind::Text, named("Text"), lines.join(" "));
                 }
             };
         for line in text.lines() {
@@ -514,7 +504,7 @@ fn docs_index() -> Index {
                     let kind = if lang == "mermaid" {
                         PassageKind::Diagram
                     } else {
-                        PassageKind::Overview
+                        PassageKind::Code
                     };
                     let body = std::mem::take(&mut block).join("\n");
                     let l = if label.is_empty() {
@@ -620,8 +610,9 @@ fn retrieval_over_docs() {
 }
 
 /// A corpus by name and its labels: `book` (one writer for the whole repository), `split` (one
-/// writer per crate, `book_split.json`), `area` (Rule B9's area writers on Sonnet, `book_area.json`),
-/// or `docs` (the pages in `docs/`).
+/// writer per crate, `book_split.json`), `area` (the former area writers on Sonnet, `book_area.json`),
+/// `single`, `topics`, `loop`, and `coverage` (the docs pipeline's runs, `results.md`), `docs` (the
+/// pages in `docs/`), or the path of any `book.json`.
 fn corpus(name: &str) -> (Index, BTreeMap<String, Vec<String>>) {
     let book = |f: &str| -> Index {
         let b: Book =
@@ -632,6 +623,20 @@ fn corpus(name: &str) -> (Index, BTreeMap<String, Vec<String>>) {
         "docs" => (docs_index(), labels_in("docs_labels")),
         "split" => (book("book_split.json"), labels_in("split_labels")),
         "area" => (book("book_area.json"), labels_in("area_labels")),
+        // The docs pipeline's eval runs of 2026-10-06 on one snapshot, each graded by pooled labels
+        // over its top 10 results plus a full-book check of the questions they missed (`results.md`).
+        "single" => (book("book_single.json"), labels_in("single_labels")),
+        "topics" => (book("book_topics.json"), labels_in("topics_labels")),
+        "loop" => (book("book_loop.json"), labels_in("loop_labels")),
+        "coverage" => (book("book_coverage.json"), labels_in("coverage_labels")),
+        "owners" => (book("book_owners.json"), labels_in("owners_labels")),
+        // Any book by its path, with the labels folder in `OSTRA_EVAL_LABELS` when it has one.
+        path if path.ends_with(".json") => (
+            book(path),
+            std::env::var("OSTRA_EVAL_LABELS")
+                .map(|l| labels_in(&l))
+                .unwrap_or_default(),
+        ),
         _ => (book("book.json"), labels()),
     }
 }

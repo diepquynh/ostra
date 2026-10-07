@@ -1,0 +1,8 @@
+# Ostra's default `research` workflow. A workspace runs its own copy in .ostra/workflows/research.toml
+# when it has one, and this file otherwise. Each stage waits for the one before it.
+description = "Research the request and write up what the code says."
+base = "research"
+
+[[stage]]
+id = "research"
+uses = "ostra:research"

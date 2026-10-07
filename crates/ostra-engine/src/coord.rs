@@ -1,53 +1,63 @@
-//! Subagent coordination in the fold (HANDOVER 10.8): questions between subagents, who answers
-//! them, and which run waits for which message. Everything here is a pure function of the log.
+//! Messaging in the fold (HANDOVER 10.8): the messages subagents send each other, which run waits,
+//! and what each run is handed at its next turn boundary. Everything here is a pure function of the
+//! log.
 
-use crate::state::{ExecRecord, ExploreOrigin, SessionState, purpose_key};
+use crate::pipeline::HelperResult;
+use crate::state::{ExecRecord, SessionState, purpose_key};
 use chrono::{DateTime, Utc};
+use ostra_core::Contract;
 use ostra_core::agent::AgentName;
 use ostra_core::coord::{
-    AskInput, AskTarget, CoordReply, DeliveryKind, MAX_CONVERSATION_RUNS, MAX_HELPERS_PER_RUN,
-    MAX_SESSION_ASKS, ReplyInput, RunEnd, SUBAGENT_ASK, SUBAGENT_LIST, SUBAGENT_REPLY,
+    LIST_AGENTS, MAX_CONVERSATION_RUNS, MAX_HELPERS_PER_RUN, MAX_SESSION_MESSAGES, MessageKind,
+    MessageTarget, SEND_MESSAGE, SendInput,
 };
-use ostra_core::event::{ExecPurpose, FactTarget, SessionEvent};
+use ostra_core::event::{ExecPurpose, SessionEvent};
 use ostra_core::exec::{ExecutionResult, ExecutionStatus};
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{ExecutionId, MessageId};
 use std::path::PathBuf;
 
-/// One question from a run to a helper or another subagent.
+/// One message between subagents.
 #[derive(Debug, Clone)]
-pub struct Ask {
+pub struct Message {
     pub id: MessageId,
+    /// The run that sent it, or the helper run whose result it carries.
     pub from: ExecutionId,
-    pub target: AskTarget,
-    pub message: String,
+    pub target: MessageTarget,
+    /// The receiving subagent. A message to a new helper has none until the helper starts.
+    pub to: Option<ExecutionId>,
+    pub text: String,
+    pub kind: MessageKind,
+    /// The sender paused after sending it.
+    pub wait: bool,
     pub at: DateTime<Utc>,
-    /// The helper research task a question to `explore` started.
+    /// The helper research task a message to `explore` started.
     pub explore_task: Option<u32>,
-    /// The run that got the question: the helper, the consult run, or the subagent woken in place.
-    pub answerer: Option<ExecutionId>,
-    pub answer: Option<String>,
-    pub answer_delivered: bool,
+    /// The run it was handed to.
+    pub delivered_to: Option<ExecutionId>,
 }
 
-/// Where a question to a subagent goes now (Rule H3).
+/// What a paused run waits for (Rule SM3).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Route {
-    /// The subagent waits on the asker: wake it in place with the question.
-    WakeInPlace(ExecutionId),
-    /// The subagent ended its run: a consult run continues this head.
-    Consult(ExecutionId),
-    /// The subagent is busy: the question waits.
-    Pending,
-    Failed(String),
+pub enum WaitOn {
+    /// A message from this subagent, or any message.
+    Subagent(ExecutionId),
+    /// The helper the message started, once it starts.
+    Helper(MessageId),
+    /// Any message.
+    Any,
 }
 
-/// A message ready for a waiting run.
+/// A message hand-over ready for a run (Rule SM2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Delivery {
-    pub ask: MessageId,
-    pub kind: DeliveryKind,
+    pub ids: Vec<MessageId>,
+    /// Rule SM3: why no message will come to a waiting run.
+    pub notice: Option<String>,
+    /// The text the run reads.
     pub note: String,
+    /// Rule SM6: the senders that wait for this run's reply.
+    pub owes: Vec<ExecutionId>,
 }
 
 /// The header of a run that continues its conversation for a pair loop (Rule H5).
@@ -59,16 +69,14 @@ pub fn continuation_note(block: &str) -> String {
     )
 }
 
-/// The header of a consult run (Rule H3).
-pub fn consult_note(block: &str, reply_tool: &str) -> String {
+/// The header of a run that continues an ended conversation for its messages (Rule SM4).
+pub fn message_continuation_note(messages: &str) -> String {
     format!(
-        "Another subagent asks you a question about your work. Answer it from your conversation and what you \
-         read, then call {reply_tool} with the complete answer and end your turn. Change no file in this run: \
-         name any change in your answer instead.\n\n{block}"
+        "Ostra continues your conversation because other subagents sent you messages after your run ended. \
+         Your earlier work and your tools are as before. Do what the messages ask, reply where a sender waits, \
+         and end with your submit call, which records your work again.\n\n{messages}"
     )
 }
-
-pub use ostra_core::coord::reply_tool;
 
 fn ended_ok(status: ExecutionStatus) -> bool {
     matches!(
@@ -77,16 +85,9 @@ fn ended_ok(status: ExecutionStatus) -> bool {
     )
 }
 
-fn failed(status: ExecutionStatus) -> bool {
-    matches!(
-        status,
-        ExecutionStatus::Error | ExecutionStatus::Denied | ExecutionStatus::Cancelled
-    )
-}
-
 impl SessionState {
     // -----------------------------------------------------------------------------------------
-    // Subagents (Rule H1)
+    // Subagents (Rule SM1)
     // -----------------------------------------------------------------------------------------
 
     /// The subagent ID of an execution: its conversation's first execution.
@@ -112,54 +113,32 @@ impl SessionState {
         self.runs_of(subagent).any(|r| r.result.is_none())
     }
 
-    /// The question a run asked and has not had answered yet.
-    pub fn open_ask_of(&self, exec: &ExecutionId) -> Option<&Ask> {
-        self.asks
-            .values()
-            .rev()
-            .find(|a| &a.from == exec)
-            .filter(|a| !a.answer_delivered)
+    fn message(&self, id: &MessageId) -> Option<&Message> {
+        self.messages.iter().find(|m| &m.id == id)
     }
 
-    /// Rule H2: the run asked and waits, ended (native) or alive (harness).
+    fn message_mut(&mut self, id: &MessageId) -> Option<&mut Message> {
+        self.messages.iter_mut().find(|m| &m.id == id)
+    }
+
+    /// Rule SM3: the run paused itself and no message has woken it yet, ended (native) or alive
+    /// (harness).
     pub fn is_waiting(&self, exec: &ExecutionId) -> bool {
-        let Some(rec) = self.executions.get(exec) else {
-            return false;
-        };
-        match &rec.result {
-            Some(r) => r.status == ExecutionStatus::Waiting,
-            None => self.open_ask_of(exec).is_some(),
-        }
+        self.waits.contains_key(exec)
+            && self.executions.get(exec).is_some_and(|r| {
+                r.result
+                    .as_ref()
+                    .is_none_or(|r| r.status == ExecutionStatus::Waiting)
+            })
     }
 
-    /// The question this run was given and has not answered.
-    pub fn owed_by(&self, exec: &ExecutionId) -> Option<&Ask> {
-        self.asks
-            .values()
-            .find(|a| a.answerer.as_ref() == Some(exec) && a.answer.is_none())
-            .filter(|a| matches!(a.target, AskTarget::Subagent { .. }))
-    }
-
-    /// The subagent a waiting run waits on.
+    /// The subagent a waiting run waits on, when it waits on one.
     fn waits_on(&self, exec: &ExecutionId) -> Option<ExecutionId> {
-        let ask = self.open_ask_of(exec)?;
-        match &ask.target {
-            AskTarget::Subagent { id } => Some(self.subagent_of(id)),
-            AskTarget::Agent { .. } => ask.answerer.as_ref().map(|a| self.subagent_of(a)),
+        match self.waits.get(exec)? {
+            WaitOn::Subagent(s) => Some(s.clone()),
+            WaitOn::Helper(m) => self.message(m).and_then(|m| m.to.clone()),
+            WaitOn::Any => None,
         }
-    }
-
-    /// The answer of a question, including the failures the fold derives (Rule H3).
-    pub fn effective_answer(&self, ask: &Ask) -> Option<String> {
-        if let Some(a) = &ask.answer {
-            return Some(a.clone());
-        }
-        if ask.answerer.is_none()
-            && let Route::Failed(why) = self.route(ask)
-        {
-            return Some(why);
-        }
-        None
     }
 
     fn describe(&self, subagent: &ExecutionId) -> String {
@@ -173,81 +152,186 @@ impl SessionState {
         }
     }
 
-    /// Rule H3: where a question to a subagent goes now.
-    pub fn route(&self, ask: &Ask) -> Route {
-        let AskTarget::Subagent { id } = &ask.target else {
-            return Route::Pending;
+    /// Rule SM4: an ended subagent a message continues with its own tools.
+    pub fn can_continue(&self, subagent: &ExecutionId) -> bool {
+        let Some(h) = self.head(subagent) else {
+            return false;
         };
-        let subagent = self.subagent_of(id);
-        let asker = self.subagent_of(&ask.from);
-        let Some(h) = self.head(&subagent) else {
-            return Route::Failed(format!("No subagent {id} exists in this session."));
+        let Some(r) = &h.result else {
+            return false;
         };
-        let waits_on_asker = self.waits_on(&h.id).as_ref() == Some(&asker);
-        match &h.result {
-            None if self.is_waiting(&h.id) && waits_on_asker => Route::WakeInPlace(h.id.clone()),
-            None => Route::Pending,
-            Some(r) if r.status == ExecutionStatus::Waiting => {
-                if waits_on_asker {
-                    Route::WakeInPlace(h.id.clone())
-                } else {
-                    Route::Pending
-                }
+        ended_ok(r.status)
+            && !matches!(h.purpose, ExecPurpose::Inspect { .. })
+            && !(matches!(h.executor, ExecutorKind::Harness(_)) && r.native_session_id.is_none())
+            && self.runs_of(subagent).count() < MAX_CONVERSATION_RUNS
+    }
+
+    /// Messages to `subagent` not handed over yet. A helper's result to a subagent that ended is
+    /// dropped, because nothing waits for it.
+    fn pending_for(&self, subagent: &ExecutionId) -> Vec<&Message> {
+        let ended = self
+            .head(subagent)
+            .is_some_and(|h| h.result.is_some() && !self.is_waiting(&h.id));
+        self.messages
+            .iter()
+            .filter(|m| m.to.as_ref() == Some(subagent) && m.delivered_to.is_none())
+            .filter(|m| !(ended && m.kind == MessageKind::Result))
+            .collect()
+    }
+
+    /// Rule SM3: why no message will come to waiting run `exec`, when none can.
+    fn wait_notice(&self, exec: &ExecutionId) -> Option<String> {
+        let me = self.subagent_of(exec);
+        match self.waits.get(exec)? {
+            WaitOn::Any => {
+                let others_busy = self.executions.values().any(|r| {
+                    self.subagent_of(&r.id) != me && (r.result.is_none() || self.is_waiting(&r.id))
+                });
+                let queued = self.messages.iter().any(|m| {
+                    m.delivered_to.is_none()
+                        && m.kind == MessageKind::Sent
+                        && m.to
+                            .as_ref()
+                            .is_some_and(|t| *t != me && self.can_continue(t))
+                });
+                (!others_busy && !queued).then(|| {
+                    "No other subagent of this session is running or waiting, so no message can come. Continue your task without one.".to_string()
+                })
             }
-            Some(_) if self.subagent_live(&subagent) => Route::Pending,
-            Some(r) if ended_ok(r.status) => Route::Consult(h.id.clone()),
-            Some(r) if failed(r.status) => Route::Failed(format!(
-                "{} ended with status {:?}, so it cannot answer. Continue without the answer, or ask another subagent.",
-                self.describe(&subagent),
-                r.status
-            )),
-            Some(_) => Route::Pending,
+            _ => {
+                let on = self.waits_on(exec)?;
+                let h = self.head(&on)?;
+                let r = h.result.as_ref()?;
+                if self.is_waiting(&h.id) {
+                    return None;
+                }
+                let revived = self
+                    .pending_for(&on)
+                    .iter()
+                    .any(|m| m.kind == MessageKind::Sent)
+                    && self.can_continue(&on);
+                if revived {
+                    return None;
+                }
+                Some(format!(
+                    "{} ended its run with status {:?} without sending you a message. Continue without its answer, or message another subagent.",
+                    self.describe(&on),
+                    r.status
+                ))
+            }
         }
     }
 
-    /// The message that wakes a waiting run: the answer to its own question first, then a
-    /// question from the subagent it waits on.
+    /// Rule SM2: what run `exec` is handed at its next turn boundary, or to wake it.
     pub fn next_delivery(&self, exec: &ExecutionId) -> Option<Delivery> {
-        if !self.is_waiting(exec) {
+        let rec = self.executions.get(exec)?;
+        let me = self.subagent_of(exec);
+        if self.head(&me).map(|h| &h.id) != Some(exec) {
             return None;
         }
-        let rec = self.executions.get(exec)?;
-        if let Some(ask) = self.open_ask_of(exec)
-            && let Some(answer) = self.effective_answer(ask)
-        {
-            let who = match &ask.target {
-                AskTarget::Subagent { id } => self.describe(&self.subagent_of(id)),
-                AskTarget::Agent { agent, .. } => match &ask.answerer {
-                    Some(a) => format!("the {agent} helper {}", self.subagent_of(a)),
-                    None => format!("the {agent} helper"),
-                },
-            };
-            let mut note = format!(
-                "The answer from {who} to your question arrived. Continue your task from here.\n\nYour question: {}\n\nAnswer:\n{answer}",
-                ask.message
-            );
-            note.push_str(&self.amended_since(ask.at));
-            return Some(Delivery {
-                ask: ask.id.clone(),
-                kind: DeliveryKind::Answer,
-                note,
-            });
+        let waiting = self.is_waiting(exec);
+        if rec.result.is_some() && !waiting {
+            return None;
         }
-        let q = self.asks.values().find(|a| {
-            a.answerer.is_none()
-                && a.answer.is_none()
-                && self.route(a) == Route::WakeInPlace(exec.clone())
-        })?;
+        let msgs = self.pending_for(&me);
+        let notice = if msgs.is_empty() && waiting {
+            self.wait_notice(exec)
+        } else {
+            None
+        };
+        if msgs.is_empty() && notice.is_none() {
+            return None;
+        }
+        let owes = self.owers_after(&me, &msgs);
         Some(Delivery {
-            ask: q.id.clone(),
-            kind: DeliveryKind::Question,
-            note: format!(
-                "{} asks you a question while you wait for it. Answer it with {} and the complete answer, then end your turn: you go back to waiting for your own answer.\n\nQuestion:\n{}",
-                self.describe(&self.subagent_of(&q.from)),
-                reply_tool(rec.executor),
-                q.message
-            ),
+            ids: msgs.iter().map(|m| m.id.clone()).collect(),
+            note: self.render(rec.executor, &msgs, notice.as_deref(), &owes),
+            notice,
+            owes,
         })
+    }
+
+    /// Rule SM4: the messages a run that continues ended subagent `subagent` starts with.
+    pub fn continuation_delivery(
+        &self,
+        subagent: &ExecutionId,
+        executor: ExecutorKind,
+    ) -> Option<Delivery> {
+        let msgs = self.pending_for(subagent);
+        if !msgs.iter().any(|m| m.kind == MessageKind::Sent) {
+            return None;
+        }
+        let owes = self.owers_after(subagent, &msgs);
+        Some(Delivery {
+            ids: msgs.iter().map(|m| m.id.clone()).collect(),
+            note: self.render(executor, &msgs, None, &owes),
+            notice: None,
+            owes,
+        })
+    }
+
+    /// The senders of `msgs` that wait for `me` to answer.
+    fn owers_after(&self, me: &ExecutionId, msgs: &[&Message]) -> Vec<ExecutionId> {
+        let mut out: Vec<ExecutionId> = vec![];
+        for m in msgs
+            .iter()
+            .filter(|m| m.wait && m.kind == MessageKind::Sent)
+        {
+            let sender = self.subagent_of(&m.from);
+            if !out.contains(&sender)
+                && self
+                    .head(&sender)
+                    .is_some_and(|h| self.waits_on(&h.id).as_ref() == Some(me))
+            {
+                out.push(sender);
+            }
+        }
+        out
+    }
+
+    fn render(
+        &self,
+        executor: ExecutorKind,
+        msgs: &[&Message],
+        notice: Option<&str>,
+        owes: &[ExecutionId],
+    ) -> String {
+        let send = ostra_core::coord::send_tool(executor);
+        let mut out = String::new();
+        if !msgs.is_empty() {
+            out.push_str(&format!(
+                "Ostra hands you {} that arrived for you. Act on {}, then continue your task.\n",
+                if msgs.len() == 1 {
+                    "a message".to_string()
+                } else {
+                    format!("{} messages", msgs.len())
+                },
+                if msgs.len() == 1 { "it" } else { "them" }
+            ));
+        }
+        for m in msgs {
+            let sender = self.subagent_of(&m.from);
+            let head = match m.kind {
+                MessageKind::Result => format!("The result of {}", self.describe(&sender)),
+                MessageKind::Sent => format!("Message from {}", self.describe(&sender)),
+            };
+            let reply = if owes.contains(&sender) {
+                format!(
+                    ". It waits for your reply: answer with {send} and `to: \"{sender}\"` before you submit"
+                )
+            } else {
+                String::new()
+            };
+            out.push_str(&format!("\n{head}{reply}:\n{}\n", m.text.trim_end()));
+        }
+        if let Some(n) = notice {
+            out.push_str(n);
+            out.push('\n');
+        }
+        if let Some(first) = msgs.iter().map(|m| m.at).min() {
+            out.push_str(&self.amended_since(first));
+        }
+        out
     }
 
     fn amended_since(&self, at: DateTime<Utc>) -> String {
@@ -261,161 +345,305 @@ impl SessionState {
             return String::new();
         }
         format!(
-            "\n\nThe user added to the request while you waited. Take it into account:\n{}",
+            "\nThe user added to the request while you waited. Take it into account:\n{}\n",
             added.join("\n")
         )
     }
 
-    /// Rule H9: a question is open or a subagent waits.
+    /// Rule SM6: the subagents that wait for run `exec`'s reply and have not had one since.
+    pub fn owed_by(&self, exec: &ExecutionId) -> Vec<ExecutionId> {
+        let me = self.subagent_of(exec);
+        let mut out: Vec<ExecutionId> = vec![];
+        for (i, m) in self.messages.iter().enumerate() {
+            if m.delivered_to.as_ref() != Some(exec) || !m.wait || m.kind != MessageKind::Sent {
+                continue;
+            }
+            let sender = self.subagent_of(&m.from);
+            let still_waits = self
+                .head(&sender)
+                .is_some_and(|h| self.waits_on(&h.id).as_ref() == Some(&me));
+            let answered = self.messages[i + 1..].iter().any(|r| {
+                r.kind == MessageKind::Sent
+                    && self.subagent_of(&r.from) == me
+                    && r.to.as_ref() == Some(&sender)
+            });
+            if still_waits && !answered && !out.contains(&sender) {
+                out.push(sender);
+            }
+        }
+        out
+    }
+
+    /// Rule SM6: why run `exec` may not submit yet.
+    pub fn submit_blocked(&self, exec: &ExecutionId) -> Option<String> {
+        let owed = self.owed_by(exec);
+        if owed.is_empty() {
+            return None;
+        }
+        let executor = self.executions.get(exec)?.executor;
+        Some(ostra_core::coord::reply_instruction(
+            &ostra_core::coord::send_tool(executor),
+            &owed.iter().map(|o| o.to_string()).collect::<Vec<_>>(),
+        ))
+    }
+
+    /// Rule SM9: a message is still to be handed over, or a subagent waits.
     pub fn coordination_open(&self) -> bool {
-        self.asks
+        self.waits.keys().any(|e| self.is_waiting(e))
+            || self.messages.iter().any(|m| {
+                m.delivered_to.is_none()
+                    && m.kind == MessageKind::Sent
+                    && m.to.as_ref().is_some_and(|t| {
+                        self.subagent_live(t)
+                            || self.head(t).is_some_and(|h| self.is_waiting(&h.id))
+                            || self.can_continue(t)
+                    })
+            })
+            || self.helpers_due().next().is_some()
+    }
+
+    /// Rule SM4: ended subagents with messages to act on, and the first of those messages.
+    pub fn continuations_due(&self) -> Vec<(ExecutionId, MessageId)> {
+        let mut roots: Vec<ExecutionId> = self
+            .executions
+            .keys()
+            .filter(|id| self.subagent_of(id) == **id)
+            .cloned()
+            .collect();
+        roots.sort();
+        roots
+            .into_iter()
+            .filter(|s| !self.subagent_live(s) && self.can_continue(s))
+            .filter_map(|s| {
+                let first = self
+                    .pending_for(&s)
+                    .into_iter()
+                    .find(|m| m.kind == MessageKind::Sent)?
+                    .id
+                    .clone();
+                Some((self.head(&s)?.id.clone(), first))
+            })
+            .collect()
+    }
+
+    /// Rule SM7: messages to a custom helper agent whose helper has not started.
+    pub fn helpers_due(&self) -> impl Iterator<Item = &Message> {
+        self.messages.iter().filter(|m| {
+            m.to.is_none()
+                && m.explore_task.is_none()
+                && matches!(m.target, MessageTarget::Agent { .. })
+        })
+    }
+
+    /// Waiting native runs a message wakes now (Rule SM3).
+    pub fn wakes_due(&self) -> Vec<ExecutionId> {
+        self.executions
             .values()
-            .any(|a| !a.answer_delivered && self.is_waiting(&a.from))
+            .filter(|r| {
+                r.result
+                    .as_ref()
+                    .is_some_and(|x| x.status == ExecutionStatus::Waiting)
+                    && self.next_delivery(&r.id).is_some()
+            })
+            .map(|r| r.id.clone())
+            .collect()
+    }
+
+    /// The message a helper run serves.
+    pub fn helper_message(&self, rec: &ExecRecord) -> Option<&Message> {
+        match &rec.purpose {
+            ExecPurpose::Helper { message } => self.message(message),
+            other => self.message(&self.pipeline.helper_ask(self, other)?),
+        }
     }
 
     // -----------------------------------------------------------------------------------------
     // Fold
     // -----------------------------------------------------------------------------------------
 
-    pub(crate) fn on_coord_event(&mut self, event: &SessionEvent, at: DateTime<Utc>) {
+    fn add_message(
+        &mut self,
+        id: &MessageId,
+        from: &ExecutionId,
+        target: &MessageTarget,
+        text: &str,
+        wait: bool,
+        at: DateTime<Utc>,
+    ) {
+        let (to, explore_task) = match target {
+            MessageTarget::Subagent { id: s } => (Some(self.subagent_of(s)), None),
+            // Rule SM7: a research helper runs as a research task, whose document joins the
+            // session's research. Logs from before contracts name only `explore`.
+            MessageTarget::Agent {
+                agent,
+                project,
+                contract,
+            } => {
+                let asker = self.describe(&self.subagent_of(from));
+                let task = self
+                    .pipeline
+                    .clone()
+                    .helper_task(self, id, *agent, *contract, project, &asker, text);
+                (None, task)
+            }
+        };
+        if wait {
+            let on = match target {
+                MessageTarget::Subagent { .. } => WaitOn::Subagent(to.clone().unwrap_or_default()),
+                MessageTarget::Agent { .. } => WaitOn::Helper(id.clone()),
+            };
+            self.waits.insert(from.clone(), on);
+        }
+        self.messages.push(Message {
+            id: id.clone(),
+            from: from.clone(),
+            target: target.clone(),
+            to,
+            text: text.to_string(),
+            kind: MessageKind::Sent,
+            wait,
+            at,
+            explore_task,
+            delivered_to: None,
+        });
+    }
+
+    fn deliver(&mut self, id: &MessageId, to: &ExecutionId) {
+        if let Some(m) = self.message_mut(id)
+            && m.delivered_to.is_none()
+        {
+            m.delivered_to = Some(to.clone());
+        }
+    }
+
+    pub fn on_coord_event(&mut self, event: &SessionEvent, at: DateTime<Utc>) {
         match event {
+            SessionEvent::MessageSent {
+                id,
+                from,
+                to,
+                text,
+                wait,
+            } => self.add_message(id, from, to, text, *wait, at),
+            SessionEvent::AgentWaiting { id } => {
+                self.waits.insert(id.clone(), WaitOn::Any);
+            }
+            SessionEvent::MessagesDelivered { to, ids, .. } => {
+                for id in ids {
+                    self.deliver(id, to);
+                }
+                self.waits.remove(to);
+            }
+            // Logs written before messaging: a question waited, and an answer was a message back.
             SessionEvent::AgentAsked {
                 id,
                 from,
                 target,
                 message,
-            } => {
-                let explore_task = match target {
-                    AskTarget::Agent { project, .. } => {
-                        let task = format!(
-                            "{} asks for this research and waits for your findings:\n{message}",
-                            self.describe(&self.subagent_of(from))
-                        );
-                        Some(self.push_explore(
-                            project.clone(),
-                            task,
-                            ExploreOrigin::Ask { ask: id.clone() },
-                        ))
-                    }
-                    AskTarget::Subagent { .. } => None,
+            } => self.add_message(id, from, target, message, true, at),
+            SessionEvent::AgentReplied { ask, from, message } => {
+                let Some(asker) = self.message(ask).map(|m| self.subagent_of(&m.from)) else {
+                    return;
                 };
-                self.asks.insert(
-                    id.clone(),
-                    Ask {
-                        id: id.clone(),
-                        from: from.clone(),
-                        target: target.clone(),
-                        message: message.clone(),
-                        at,
-                        explore_task,
-                        answerer: None,
-                        answer: None,
-                        answer_delivered: false,
-                    },
-                );
+                self.messages.push(Message {
+                    id: reply_id(ask),
+                    from: from.clone(),
+                    target: MessageTarget::Subagent { id: asker.clone() },
+                    to: Some(asker),
+                    text: message.clone(),
+                    kind: MessageKind::Sent,
+                    wait: false,
+                    at,
+                    explore_task: None,
+                    delivered_to: None,
+                });
             }
-            SessionEvent::AgentReplied { ask, message, .. } => {
-                if let Some(a) = self.asks.get_mut(ask)
-                    && a.answer.is_none()
-                {
-                    a.answer = Some(message.clone());
-                }
-            }
-            SessionEvent::MessageDelivered { ask, to, kind } => {
-                let answer = self.effective_answer_of(ask);
-                if let Some(a) = self.asks.get_mut(ask) {
-                    match kind {
-                        DeliveryKind::Question => a.answerer = Some(to.clone()),
-                        DeliveryKind::Answer => {
-                            a.answer = a.answer.take().or(answer);
-                            a.answer_delivered = true;
-                        }
+            SessionEvent::MessageDelivered { ask, to, kind } => match kind {
+                ostra_core::coord::DeliveryKind::Question => self.deliver(ask, to),
+                ostra_core::coord::DeliveryKind::Answer => {
+                    for id in [reply_id(ask), result_id(ask)] {
+                        self.deliver(&id, to);
                     }
+                    self.waits.remove(to);
                 }
-            }
+            },
             _ => {}
         }
     }
 
-    fn effective_answer_of(&self, ask: &MessageId) -> Option<String> {
-        self.asks.get(ask).and_then(|a| self.effective_answer(a))
-    }
-
-    /// A helper or consult run got its question as its spawn.
-    pub(crate) fn coord_started(&mut self, id: &ExecutionId, purpose: &ExecPurpose) {
-        let ask = match purpose {
-            ExecPurpose::Consult { ask, .. } => Some(ask.clone()),
-            ExecPurpose::Explore { task } => match self.explore.get(*task as usize) {
-                Some(t) => match &t.origin {
-                    ExploreOrigin::Ask { ask } => Some(ask.clone()),
-                    _ => None,
-                },
-                None => None,
-            },
-            _ => None,
-        };
-        if let Some(a) = ask.and_then(|a| self.asks.get_mut(&a)) {
-            a.answerer = Some(id.clone());
-        }
-    }
-
-    /// A run that ended without answering the question it was given answers with that.
-    pub(crate) fn coord_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult) {
-        let owed: Vec<MessageId> = self
-            .asks
-            .values()
-            .filter(|a| a.answerer.as_ref() == Some(&rec.id) && a.answer.is_none())
-            .map(|a| a.id.clone())
-            .collect();
-        for id in owed {
-            let answer = match (&rec.purpose, result.status) {
-                (ExecPurpose::Explore { task }, ExecutionStatus::Ok) => {
-                    let Some(sub) = self
-                        .explore
-                        .get(*task as usize)
-                        .and_then(|t| t.result.clone())
-                    else {
-                        continue;
-                    };
-                    let mut s = format!(
-                        "{}\n\nResearch document: {}",
-                        sub.findings_summary, sub.research_path
-                    );
-                    if !sub.not_covered.is_empty() {
-                        s.push_str(&format!("\nNot covered: {}", sub.not_covered.join("; ")));
-                    }
-                    s
+    /// A helper or a pre-messaging consult run got its message as its spawn.
+    pub fn coord_started(&mut self, id: &ExecutionId, purpose: &ExecPurpose) {
+        let root = self.subagent_of(id);
+        match purpose {
+            ExecPurpose::Consult { ask, .. } => self.deliver(ask, id),
+            ExecPurpose::Helper { message } => {
+                let message = message.clone();
+                if let Some(m) = self.message_mut(&message) {
+                    m.to = Some(root);
+                    m.delivered_to = Some(id.clone());
                 }
-                // Interrupted or waiting for its own answer: the question stays with this run.
-                (
-                    ExecPurpose::Explore { .. },
-                    ExecutionStatus::Interrupted | ExecutionStatus::Waiting,
-                ) => {
-                    continue;
-                }
-                // An explore that errors is retried once before it counts as failed.
-                (ExecPurpose::Explore { task }, _)
-                    if self
-                        .explore
-                        .get(*task as usize)
-                        .is_some_and(|t| t.failed.is_none() && !t.abandoned) =>
+            }
+            other => {
+                if let Some(ask) = self.pipeline.helper_ask(self, other)
+                    && let Some(m) = self.message_mut(&ask)
+                    && m.to.is_none()
                 {
-                    continue;
+                    m.to = Some(root);
+                    m.delivered_to = Some(id.clone());
                 }
-                (_, ExecutionStatus::Interrupted)
-                    if !matches!(rec.purpose, ExecPurpose::Consult { .. }) =>
-                {
-                    continue;
-                }
-                (_, status) => format!(
-                    "{} ended its run with status {status:?} without answering. Continue without the answer, or ask again.",
-                    self.describe(&self.subagent_of(&rec.id))
-                ),
-            };
-            if let Some(a) = self.asks.get_mut(&id) {
-                a.answer = Some(answer);
             }
         }
+    }
+
+    /// A run ended: it no longer waits, and a helper's result goes to the run that started it.
+    pub fn coord_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult) {
+        if result.status != ExecutionStatus::Waiting {
+            self.waits.remove(&rec.id);
+        }
+        let Some(asked) = self.helper_message(rec).cloned() else {
+            return;
+        };
+        let text = match self.pipeline.helper_result(self, rec, result) {
+            Some(HelperResult::NotYet) => return,
+            Some(HelperResult::Text(t)) => t,
+            None => match (&rec.purpose, result.status) {
+                // Interrupted or waiting for its own message: the helper is not done yet.
+                (_, ExecutionStatus::Interrupted | ExecutionStatus::Waiting) => return,
+                // Rule PL5: a plugin contract's result reaches the starter as its plugin handled it.
+                (ExecPurpose::Helper { .. }, s)
+                    if ended_ok(s) && matches!(rec.contract, Contract::Plugin(_)) =>
+                {
+                    match &rec.handled {
+                        Some(h) => render_submit(&serde_json::to_value(h).unwrap_or_default()),
+                        None => return,
+                    }
+                }
+                (ExecPurpose::Helper { .. }, s) if ended_ok(s) => match &result.submit {
+                    Some(v) => render_submit(v),
+                    None => "The helper ended without a result.".into(),
+                },
+                (_, status) => format!(
+                    "The helper ended its run with status {status:?} without a result. Continue without it, or ask again."
+                ),
+            },
+        };
+        let id = result_id(&asked.id);
+        if self.message(&id).is_some() {
+            return;
+        }
+        let to = self.subagent_of(&asked.from);
+        self.messages.push(Message {
+            id,
+            from: rec.id.clone(),
+            target: MessageTarget::Subagent { id: to.clone() },
+            to: Some(to),
+            text,
+            kind: MessageKind::Result,
+            wait: false,
+            at: rec.ended_at.unwrap_or(asked.at),
+            explore_task: None,
+            delivered_to: None,
+        });
     }
 
     // -----------------------------------------------------------------------------------------
@@ -432,41 +660,14 @@ impl SessionState {
                 .map(|r| r.id.clone())
         };
         let prev = match purpose {
-            ExecPurpose::Spec { .. } if self.spec.current.is_some() => {
-                last(&|p| matches!(p, ExecPurpose::Spec { .. }))
-            }
-            ExecPurpose::Plan { .. } if self.plan.current.is_some() => {
-                last(&|p| matches!(p, ExecPurpose::Plan { .. }))
-            }
-            ExecPurpose::FactCheck { target, .. } => {
-                let t = *target;
-                last(&|p| matches!(p, ExecPurpose::FactCheck { target, .. } if *target == t))
-            }
-            ExecPurpose::Review { phase, tests, .. } => {
-                let (ph, te) = (*phase, *tests);
+            // Rule WF5: the next round of a workflow stage continues its agent's conversation.
+            ExecPurpose::Stage { node, scope, round } if *round > 1 => {
+                let (n, sc) = (node.clone(), scope.clone());
                 last(
-                    &|p| matches!(p, ExecPurpose::Review { phase, tests, .. } if *phase == ph && *tests == te),
+                    &|p| matches!(p, ExecPurpose::Stage { node, scope, .. } if *node == n && *scope == sc),
                 )
             }
-            ExecPurpose::Implement { phase, work } | ExecPurpose::WriteTest { phase, work }
-                if matches!(
-                    work,
-                    ostra_core::event::WorkKind::Fix
-                        | ostra_core::event::WorkKind::BlockerFix
-                        | ostra_core::event::WorkKind::Rescue
-                        | ostra_core::event::WorkKind::Resume
-                ) =>
-            {
-                let (ph, test) = (*phase, matches!(purpose, ExecPurpose::WriteTest { .. }));
-                last(&|p| match p {
-                    ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
-                        !test && *phase == ph
-                    }
-                    ExecPurpose::WriteTest { phase, .. } => test && *phase == ph,
-                    _ => false,
-                })
-            }
-            _ => None,
+            other => self.pipeline.previous_run(self, other),
         }?;
         let prev_rec = self.executions.get(&prev)?;
         let prev_ok = prev_rec
@@ -482,7 +683,8 @@ impl SessionState {
             || !ended_ok(result.status)
             || result.submit.is_none()
             || self
-                .forced_executor(agent)
+                .pipeline
+                .forced_executor(self, agent)
                 .is_some_and(|e| e != head.executor)
             || (matches!(head.executor, ExecutorKind::Harness(_))
                 && result.native_session_id.is_none())
@@ -501,64 +703,70 @@ impl SessionState {
 
     /// The session dir a subagent's runs work in.
     pub fn session_dir_of(&self, rec: &ExecRecord) -> PathBuf {
-        match rec.purpose {
-            ExecPurpose::Spec { .. }
-            | ExecPurpose::Plan { .. }
-            | ExecPurpose::FactCheck {
-                target: FactTarget::Spec | FactTarget::Plan,
-                ..
-            } => self.session_root.clone(),
-            _ => self.project_session_dir(&rec.project),
+        if self.pipeline.session_wide(&rec.purpose) {
+            self.session_root.clone()
+        } else {
+            self.project_session_dir(&rec.project)
         }
     }
 
-    /// The purpose key of a waiting native run that has a message to wake it.
+    /// The purpose key of a waiting native run: `Some(None)` holds its stage's spawn, and
+    /// `Some(Some(run))` wakes the run with its messages.
     pub fn wake_for_key(&self, key: &str) -> Option<Option<ExecutionId>> {
         let exec = self.waiting_keys.get(key)?;
         Some(self.next_delivery(exec).map(|_| exec.clone()))
     }
 
     // -----------------------------------------------------------------------------------------
-    // Tool calls (Rule H4)
+    // Tool calls (Rule SM5)
     // -----------------------------------------------------------------------------------------
 
-    /// Check a `SubagentAsk` from `exec` and build its event.
-    pub fn ask_event(
+    /// Check a `SendMessage` from `exec` and build its event. `helpers` are the agents the
+    /// workspace lets `SendMessage` start, with the contract each returns.
+    pub fn send_event(
         &self,
         exec: &ExecutionId,
         input: &serde_json::Value,
+        helpers: &[(AgentName, Contract)],
     ) -> Result<(SessionEvent, String), String> {
-        let a = AskInput::parse(input)?;
+        let a = SendInput::parse(input)?;
         let rec = self.running_rec(exec)?;
-        if matches!(rec.purpose, ExecPurpose::Consult { .. }) {
+        let sent = self
+            .messages
+            .iter()
+            .filter(|m| m.kind == MessageKind::Sent)
+            .count();
+        if sent >= MAX_SESSION_MESSAGES {
             return Err(format!(
-                "Answer with {SUBAGENT_REPLY} instead: this run answers a question and may not ask one."
+                "Continue without sending: this session reached its limit of {MAX_SESSION_MESSAGES} messages between subagents."
             ));
         }
-        if self.owed_by(exec).is_some() {
-            return Err(format!(
-                "Answer the question you were given with {SUBAGENT_REPLY} first, because its asker waits for you."
-            ));
-        }
-        if self.asks.len() >= MAX_SESSION_ASKS {
-            return Err(format!(
-                "Continue without asking: this session reached its limit of {MAX_SESSION_ASKS} questions between subagents."
-            ));
-        }
-        let target = match a.helper()? {
-            Some(agent) => {
-                let is_helper = matches!(rec.purpose, ExecPurpose::Explore { task }
-                    if self.explore.get(task as usize).is_some_and(|t| matches!(t.origin, ExploreOrigin::Ask { .. })));
-                if is_helper {
+        let me = self.subagent_of(exec);
+        let target = match (&a.to, &a.agent) {
+            (_, Some(name)) => {
+                let (agent, contract) = name
+                    .parse::<AgentName>()
+                    .ok()
+                    .and_then(|a| helpers.iter().find(|(h, _)| *h == a).copied())
+                    .ok_or_else(|| {
+                        format!(
+                            "Start a helper of an agent Ostra can start for you: {}. `{name}` is not one; message an existing subagent with `to` instead.",
+                            helpers
+                                .iter()
+                                .map(|(a, _)| format!("`{a}`"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })?;
+                if self.helper_message(rec).is_some() {
                     return Err(
-                        "Do the research yourself: a helper may not start helpers of its own."
-                            .into(),
+                        "Do the work yourself: a helper may not start helpers of its own.".into(),
                     );
                 }
                 let started = self
-                    .asks
-                    .values()
-                    .filter(|x| &x.from == exec && matches!(x.target, AskTarget::Agent { .. }))
+                    .messages
+                    .iter()
+                    .filter(|x| &x.from == exec && matches!(x.target, MessageTarget::Agent { .. }))
                     .count();
                 if started >= MAX_HELPERS_PER_RUN {
                     return Err(format!(
@@ -572,63 +780,61 @@ impl SessionState {
                         self.scope.join(", ")
                     ));
                 }
-                AskTarget::Agent { agent, project }
+                MessageTarget::Agent {
+                    agent,
+                    project,
+                    contract: Some(contract),
+                }
             }
-            None => {
-                let raw: ExecutionId = a.subagent_id.clone().unwrap_or_default().into();
+            (Some(raw), None) => {
+                let raw: ExecutionId = raw.clone().into();
                 if !self.executions.contains_key(&raw) {
                     return Err(format!(
-                        "Ask a subagent {SUBAGENT_LIST} shows: `{raw}` is not a subagent of this session."
+                        "Message a subagent {LIST_AGENTS} shows: `{raw}` is not a subagent of this session."
                     ));
                 }
-                let subagent = self.subagent_of(&raw);
-                if subagent == self.subagent_of(exec) {
-                    return Err("Ask another subagent: this ID is your own.".into());
+                let to = self.subagent_of(&raw);
+                if to == me {
+                    return Err("Message another subagent: this ID is your own.".into());
                 }
-                AskTarget::Subagent { id: subagent }
+                let h = self.head(&to).ok_or("That subagent has no run.")?;
+                if let Some(r) = &h.result
+                    && !self.is_waiting(&h.id)
+                    && !self.can_continue(&to)
+                {
+                    return Err(format!(
+                        "{} ended with status {:?} and cannot take messages any more, so nothing reads this one. Continue without it, or message another subagent.",
+                        self.describe(&to),
+                        r.status
+                    ));
+                }
+                MessageTarget::Subagent { id: to }
             }
+            (None, None) => unreachable!("SendInput::parse requires a target"),
         };
         let who = match &target {
-            AskTarget::Agent { agent, .. } => format!("the {agent} helper"),
-            AskTarget::Subagent { id } => self.describe(id),
+            MessageTarget::Agent { agent, .. } => format!("a new {agent} helper"),
+            MessageTarget::Subagent { id } => self.describe(id),
         };
         Ok((
-            SessionEvent::AgentAsked {
+            SessionEvent::MessageSent {
                 id: MessageId::new(),
                 from: exec.clone(),
-                target,
-                message: a.message,
+                to: target,
+                text: a.message,
+                wait: a.wait,
             },
             who,
         ))
     }
 
-    /// Check a `SubagentReply` from `exec` and build its event and what it does to the run.
-    pub fn reply_event(
-        &self,
-        exec: &ExecutionId,
-        input: &serde_json::Value,
-    ) -> Result<(SessionEvent, RunEnd), String> {
-        let r = ReplyInput::parse(input)?;
-        let rec = self.running_rec(exec)?;
-        let Some(ask) = self.owed_by(exec) else {
-            return Err(format!(
-                "No question waits for your answer, so there is nothing to reply to. Use {SUBAGENT_ASK} to ask, or go on with your task."
-            ));
-        };
-        let end = if matches!(rec.purpose, ExecPurpose::Consult { .. }) {
-            RunEnd::Finish
-        } else {
-            RunEnd::Wait
-        };
-        Ok((
-            SessionEvent::AgentReplied {
-                ask: ask.id.clone(),
-                from: exec.clone(),
-                message: r.message,
-            },
-            end,
-        ))
+    /// Check a `WaitForMessage` from `exec` and build its event.
+    pub fn wait_event(&self, exec: &ExecutionId) -> Result<SessionEvent, String> {
+        self.running_rec(exec)?;
+        if let Some(why) = self.submit_blocked(exec) {
+            return Err(why);
+        }
+        Ok(SessionEvent::AgentWaiting { id: exec.clone() })
     }
 
     fn running_rec(&self, exec: &ExecutionId) -> Result<&ExecRecord, String> {
@@ -638,8 +844,8 @@ impl SessionState {
             .ok_or_else(|| "This run is not running in its session any more.".to_string())
     }
 
-    /// The `SubagentList` text for `exec`.
-    pub fn subagent_list(&self, exec: &ExecutionId) -> String {
+    /// The `ListAgents` text for `exec`.
+    pub fn list_agents(&self, exec: &ExecutionId, helpers: &[(AgentName, Contract)]) -> String {
         let me = self.subagent_of(exec);
         let partners = self.partners(exec);
         let mut out =
@@ -657,11 +863,17 @@ impl SessionState {
             let status = if self.is_waiting(&head.id) {
                 match self.waits_on(&head.id) {
                     Some(on) => format!("waiting on {on}"),
-                    None => "waiting on a helper".into(),
+                    None => "waiting for a message".into(),
                 }
             } else {
                 match &head.result {
                     None => "running".into(),
+                    Some(r) if self.can_continue(root) => {
+                        format!(
+                            "{} (a message continues it)",
+                            format!("{:?}", r.status).to_lowercase()
+                        )
+                    }
                     Some(r) => format!("{:?}", r.status).to_lowercase(),
                 }
             };
@@ -683,10 +895,10 @@ impl SessionState {
             out.push('\n');
         }
         out.push_str(&format!(
-            "\nAsk a subagent with {SUBAGENT_ASK} and `subagent_id`, or start a helper with `agent`: {}.\n",
-            ostra_core::coord::HELPER_AGENTS
+            "\nMessage a subagent with {SEND_MESSAGE} and `to`, or start a helper with `agent`: {}.\n",
+            helpers
                 .iter()
-                .map(|a| a.as_str())
+                .map(|(a, _)| a.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
@@ -694,72 +906,66 @@ impl SessionState {
     }
 
     /// The subagents a run works with, and their role toward it.
-    fn partners(&self, exec: &ExecutionId) -> Vec<(ExecutionId, &'static str)> {
+    fn partners(&self, exec: &ExecutionId) -> Vec<(ExecutionId, String)> {
         let Some(rec) = self.executions.get(exec) else {
             return vec![];
         };
-        let latest = |f: &dyn Fn(&ExecRecord) -> bool| {
-            self.executions
-                .values()
-                .filter(|r| f(r))
-                .max_by_key(|r| r.id.clone())
-                .map(|r| self.subagent_of(&r.id))
-        };
-        let mut out = vec![];
-        let checked = |target: FactTarget| -> Option<ExecutionId> {
-            latest(
-                &|r| matches!(&r.purpose, ExecPurpose::FactCheck { target: t, .. } if *t == target),
-            )
-        };
-        match &rec.purpose {
-            ExecPurpose::Spec { .. } => {
-                out.extend(checked(FactTarget::Spec).map(|c| (c, "your fact checker")))
+        let mut out = self.pipeline.partners(self, rec);
+        // Rule WF6: a workflow stage names the subagents of the stages it reads.
+        out.extend(self.stage_partners(rec));
+        for sender in self.owed_by(exec) {
+            if !out.iter().any(|(id, _)| *id == sender) {
+                out.push((sender, "waits for your reply".to_string()));
             }
-            ExecPurpose::Plan { .. } => {
-                out.extend(checked(FactTarget::Plan).map(|c| (c, "your fact checker")))
-            }
-            ExecPurpose::FactCheck { target, .. } => {
-                let author = match target {
-                    FactTarget::Spec => latest(&|r| matches!(r.purpose, ExecPurpose::Spec { .. })),
-                    FactTarget::Plan => latest(&|r| matches!(r.purpose, ExecPurpose::Plan { .. })),
-                };
-                out.extend(author.map(|a| (a, "the author of the document you check")));
-            }
-            _ if rec.loop_key.is_some() => {
-                let key = rec.loop_key;
-                let review = matches!(rec.purpose, ExecPurpose::Review { .. });
-                let other = latest(&|r| {
-                    r.loop_key == key && matches!(r.purpose, ExecPurpose::Review { .. }) != review
-                });
-                out.extend(other.map(|o| {
-                    (
-                        o,
-                        if review {
-                            "the implementer of the phase you review"
-                        } else {
-                            "the reviewer of your phase"
-                        },
-                    )
-                }));
-            }
-            _ => {}
-        }
-        if let Some(ask) = self.owed_by(exec) {
-            out.push((
-                self.subagent_of(&ask.from),
-                "asked you the question you answer",
-            ));
         }
         out
     }
 
     /// A purpose key a waiting run blocks.
-    pub(crate) fn waiting_key(rec: &ExecRecord) -> String {
+    pub fn waiting_key(rec: &ExecRecord) -> String {
         purpose_key(&rec.purpose)
     }
 }
 
-/// What a coordination call returns to the model and does to its run.
-pub fn reply(text: String, end: RunEnd) -> CoordReply {
-    CoordReply { text, end }
+/// The id of the reply to question `ask` in a log written before messaging.
+fn reply_id(ask: &MessageId) -> MessageId {
+    MessageId::from(format!("{ask}-reply"))
+}
+
+/// The id of the result a helper started by message `id` returns.
+fn result_id(id: &MessageId) -> MessageId {
+    MessageId::from(format!("{id}-result"))
+}
+
+/// A helper's submit as the message its starter reads.
+fn render_submit(v: &serde_json::Value) -> String {
+    if let Ok(c) = serde_json::from_value::<ostra_core::submit::CustomSubmit>(v.clone()) {
+        let verdict = serde_json::to_value(c.verdict)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default();
+        let mut s = format!("Verdict: {verdict}\n{}", c.summary);
+        for f in &c.findings {
+            s.push_str(&format!(
+                "\n- {}{}{}",
+                f.file
+                    .as_deref()
+                    .map(|p| format!("{p}: "))
+                    .unwrap_or_default(),
+                f.description,
+                f.fix
+                    .as_deref()
+                    .map(|x| format!(" Fix: {x}"))
+                    .unwrap_or_default()
+            ));
+        }
+        if let Some(p) = &c.report_path {
+            s.push_str(&format!("\nReport: {p}"));
+        }
+        if let Some(d) = &c.data {
+            s.push_str(&format!("\nData: {d}"));
+        }
+        return s;
+    }
+    serde_json::to_string_pretty(v).unwrap_or_default()
 }

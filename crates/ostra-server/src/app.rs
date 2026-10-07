@@ -33,6 +33,8 @@ pub struct ServeOptions {
     pub bind: Option<String>,
     /// Extra host names, added to the config's `server.allowed_hosts`.
     pub allow_hosts: Vec<String>,
+    /// Rule PL1: plugins built into this binary.
+    pub plugins: ostra_sdk::Registry,
 }
 
 /// The listen address: the flag, else the config, else 127.0.0.1.
@@ -81,6 +83,8 @@ pub struct Shared {
     pub notifier: Arc<Notifier>,
     /// Connections to each workspace's external MCP servers.
     pub mcp: Arc<crate::mcp::McpGateway>,
+    /// Rule PL1: plugins built in and each workspace's plugin programs.
+    pub plugins: Arc<crate::plugins::PluginHost>,
     pub env: RwLock<EnvStatus>,
     pub exe: PathBuf,
     pub port: u16,
@@ -122,7 +126,78 @@ impl Shared {
     }
 }
 
+impl Shared {
+    /// The settings a workspace's programs start from: its folder file, with the commands that
+    /// wait for approval left out.
+    pub fn workspace_settings(&self, root: &Path) -> ostra_core::config::WorkspaceSettings {
+        let file = ostra_core::config::load_toml_required(&paths::workspace_toml(root))
+            .unwrap_or_else(|_| ostra_core::config::WorkspaceSettings::seeded("workspace"));
+        ostra_workspace::trust::effective(&self.registry, root, file)
+    }
+}
+
 impl WorkspaceHost for Shared {
+    /// Rules CA1 and PL2: the built-in agents, the workspace's agent files while its folder file
+    /// is approved, and its plugins' agents.
+    fn agents(
+        &self,
+        root: &Path,
+    ) -> (
+        ostra_agents::AgentCatalog,
+        Vec<ostra_agents::catalog::CatalogIssue>,
+    ) {
+        let approved = ostra_workspace::trust::definitions_approved(&self.registry, root);
+        // Rule PL1: a plugin program that should run and does not starts now, so its agents and
+        // stages show up in the next read.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.plugins
+                .prepare_soon(root, self.workspace_settings(root));
+        }
+        let (cat, mut issues) = ostra_agents::AgentCatalog::load(
+            approved.then_some(root),
+            &self.plugins.agent_defs(root),
+            &self.plugins.contracts(root),
+        );
+        if !approved && !ostra_workspace::trust::definition_files(root).is_empty() {
+            issues.push(ostra_agents::catalog::CatalogIssue {
+                source: paths::workspace_toml(root).display().to_string(),
+                message: "The workspace's agent and workflow files wait for approval in Settings, so none of them runs yet.".into(),
+            });
+        }
+        (cat, issues)
+    }
+
+    fn plugin_stages(&self, root: &Path) -> Vec<(String, String)> {
+        self.plugins.stages(root)
+    }
+
+    fn plugin_manifests(&self, root: &Path) -> Vec<(String, ostra_core::plugin::PluginManifest)> {
+        self.plugins
+            .plugins(root)
+            .into_iter()
+            .map(|(n, p)| (n, p.manifest()))
+            .collect()
+    }
+
+    fn plugin_infos(
+        &self,
+        root: &Path,
+        _settings: &ostra_core::config::WorkspaceSettings,
+    ) -> Vec<ostra_core::api::PluginInfo> {
+        let file = ostra_core::config::load_toml_required(&paths::workspace_toml(root))
+            .unwrap_or_else(|_| ostra_core::config::WorkspaceSettings::seeded("workspace"));
+        let approved = ostra_workspace::trust::workspace_file_approved(&self.registry, root);
+        self.plugins.infos(root, &file, approved)
+    }
+
+    fn plugin_issues(
+        &self,
+        root: &Path,
+        settings: &ostra_core::config::WorkspaceSettings,
+    ) -> Vec<ostra_core::config::ValidationIssue> {
+        self.plugins.issues(root, settings)
+    }
+
     fn registry(&self) -> &RegistryDb {
         &self.registry
     }
@@ -141,6 +216,7 @@ impl WorkspaceHost for Shared {
                 .filter(|p| p.has_key)
                 .map(|p| p.name)
                 .collect(),
+            agents: vec![],
         }
     }
 
@@ -229,11 +305,68 @@ pub fn stop_offline(session: &str) -> anyhow::Result<usize> {
         }
         let db = ostra_store::WorkspaceDb::open(&db_path)?;
         if db.get_session(&id)?.is_some() {
-            return ostra_engine::runner::stop_session_offline(&db, &id)
-                .map_err(|e| anyhow::anyhow!("{e}"));
+            return ostra_engine::runner::stop_session_offline(
+                ostra_default_plugin::pipeline(),
+                &db,
+                &id,
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"));
         }
     }
     anyhow::bail!("No registered workspace has a session {session}.")
+}
+
+/// `ostra plugin add`: what the new `[[plugins]]` entry changed.
+pub struct AddedPlugin {
+    pub workspace: PathBuf,
+    /// Whether the folder file stays approved, so the program may start (Rule PL1).
+    pub approved: bool,
+}
+
+/// `ostra plugin add`: append a `[[plugins]]` entry to the registered workspace that holds
+/// `dir`. A running server starts the program on its next read of the workspace's agents.
+pub fn add_plugin(
+    dir: &std::path::Path,
+    entry: ostra_core::plugin::PluginConfig,
+) -> anyhow::Result<AddedPlugin> {
+    let registry = open_registry()?;
+    let dir = paths::resolve(&std::env::current_dir()?, dir);
+    let root = registry
+        .list_workspaces()?
+        .into_iter()
+        .map(|w| w.root)
+        .filter(|r| paths::is_inside(r, &dir))
+        .max_by_key(|r| r.components().count())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Run this inside a workspace folder or pass --workspace, because no registered workspace holds {}.",
+                dir.display()
+            )
+        })?;
+    let file = paths::workspace_toml(&root);
+    let mut settings: ostra_core::config::WorkspaceSettings =
+        ostra_core::config::load_toml_required(&file)?;
+    if settings.plugins.iter().any(|p| p.name == entry.name) {
+        anyhow::bail!(
+            "Pick another name or remove the entry first, because {} already has a plugin `{}`.",
+            file.display(),
+            entry.name
+        );
+    }
+    settings.plugins.push(entry);
+    let mut issues = vec![];
+    ostra_core::plugin::validate(&settings.plugins, &mut issues);
+    if !issues.is_empty() {
+        let lines: Vec<String> = issues.iter().map(|i| i.message.clone()).collect();
+        anyhow::bail!("{}", lines.join("\n"));
+    }
+    // Rule A2: the save also writes the registry's access settings, so start from them.
+    ostra_workspace::trust::overlay(&registry, &root, &mut settings);
+    ostra_workspace::trust::save_workspace(&registry, &root, &settings)?;
+    Ok(AddedPlugin {
+        approved: ostra_workspace::trust::workspace_file_approved(&registry, &root),
+        workspace: root,
+    })
 }
 
 pub fn ensure_global_config() -> anyhow::Result<PathBuf> {
@@ -430,6 +563,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         harness,
         notifier,
         mcp,
+        plugins: Arc::new(crate::plugins::PluginHost::new(opts.plugins.clone())),
         env: RwLock::new(env),
         exe: opts.exe.clone(),
         port,

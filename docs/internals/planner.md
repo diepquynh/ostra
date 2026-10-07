@@ -16,11 +16,18 @@ Read [The event log](event-log.md) first, because it explains the source of the 
 
 ## A pure function
 
-The whole planner is one function in `crates/ostra-engine/src/plan.rs`:
+The planner is one function in `crates/ostra-engine/src/plan.rs`:
 
 ```rust
 pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step>
 ```
+
+The engine's planner holds the generic parts: the YOLO answers, the workflow walk, custom and plugin stages,
+transform and prompt nodes, and messages between subagents. The rules of the built-in stages are in the pipeline
+of the standard plugin, in the `planner.rs` of each stage folder in `crates/ostra-default-plugin/src/stages/`
+([Plugins](plugins.md#the-pipeline)). The planner calls the pipeline (`Pipeline::plan` and
+`Pipeline::builtin_stage`) with the same `Planner`, so both parts push steps into one list. The pipeline is
+deterministic Rust code, so the function stays pure.
 
 The function takes the folded session state and a small context, and returns steps. It reads no files and
 calls no model. It starts no process, writes no event, and reads no clock. If you call it two times with the
@@ -29,9 +36,10 @@ same inputs, you get the same list.
 This design is important for three reasons:
 
 - **The rules are in one place.** Each orchestration rule from HANDOVER section 8.2 and the Ultracode
-  orchestrator is a branch in this file. A comment next to the branch gives its rule ID. Examples are Rule D1
+  orchestrator is a branch of the planner: in `plan.rs` for a generic rule, and in the stage's file of the
+  pipeline for a rule of a built-in stage. A comment next to the branch gives its rule ID. Examples are Rule D1
   "full-track IMPLEMENT always passes through Spec", Rule M2 "one implement pipeline per project", and Rule D9
-  "a failed phase removes its dependents". To find why Ostra did something, read this file.
+  "a failed phase removes its dependents". To find why Ostra did something, read these files.
 - **Models do not control the pipeline.** A model never decides that the spec is good enough for a plan. A
   model never decides that three review passes are enough. The planner decides from the structured data that
   agents submitted. Models only answer the named judgment questions (Classify, Sufficiency, Stakes, and the
@@ -51,11 +59,16 @@ pub struct PlanCtx {
     pub format_commands: BTreeMap<String, Option<String>>,
     /// The session budget from workspace settings. `None` means no limit.
     pub budget_usd: Option<f64>,
+    /// Rule WD3: the executor each agent's route resolves to, at the agent's default tier.
+    pub executors: BTreeMap<AgentName, ExecutorKind>,
 }
 ```
 
 Each time the runner plans, it builds a new `PlanCtx` from the current workspace settings and the
-`project.toml` of each project. Thus, if you change the session budget or a format command during a session,
+`project.toml` of each project. For `executors`, the runner resolves the route of each agent in the catalog with
+`resolve_route`. A programmatic agent counts as native (Rule PL2). `PlanCtx::several_projects` reads this map,
+because only the native executor works in several projects (Rule WD3). An agent without an entry counts as
+native, so a fixture that sets no routes plans as an all-native workspace. Thus, if you change the session budget or a format command during a session,
 the next planning round sees the change. The struct is small on purpose. With each field, the result of the
 planner can depend on a fact that a fixture does not control. Thus, a new field needs a reason.
 
@@ -69,14 +82,17 @@ A `Step` is one unit of work that the runner can do:
 | `Spawn` | Resolves the route of the agent (executor, model, effort) and builds the typed spawn block. Waits for an execution slot, runs the executor, and appends `ExecutionStarted` and then `ExecutionFinished`. |
 | `OpenGate` | Appends `GateOpened`. Then the session waits for you, or for YOLO. |
 | `YoloAnswer` | In YOLO mode, answers an open gate with a fixed answer or with the YOLO judge. Appends `GateAnswered` with source `yolo` and the reason of the judge. |
-| `PlanDocs` | Measures the tracked source of a project for each module-map area, and puts the areas into groups for the writers. Appends `DocsPlanned` with these areas, the areas that the current part of the book records, and the areas that the changes of this session touched (rule B9). |
 | `WriteBook` | Merges the documentation parts and the architecture of the session into the workspace book. Writes the book files under `.ostra/docs/<book>/`, then appends `BookWritten` (rule B5). |
 | `Command` | Runs the format command of the project or `git add` on the changed files of a phase. Appends `CommandRan`. |
 | `Autofix` | Applies the review findings that have an exact fix text (`Change \`x\` to \`y\` on line N`). Appends `AutofixApplied`. |
 | `AnnounceBlocked` | Appends `PhaseBlocked`. This event also sends a push notification. |
 | `FinishInit` | Ends the init of a project that the session created (rule O4). Makes sure that `INVENTORY.md` and a valid `project.toml` exist. Then it marks the project as initialized and appends `ProjectInitFinished`. If a file is missing or not valid, it appends `InitStepFailed` against the generate-inventory run. Then the advisor examines the problem (rule O5). |
 | `RecordInitProblem` | Appends `InitStepFailed` for an init step that finished but gave no usable result. An example is a detect step with no slices. Then the advisor examines the problem (rule O5). |
-| `Deliver` | Gives a question or an answer to a harness run that waits for it with a live process (Rule H2). Appends `MessageDelivered` and sends the message to the executor. The executor types the message into the terminal. |
+| `ResolveWorkflow` | Reads the workflow files of the workspace and resolves the named workflow, or the default workflow for the category (Rule WF1). Checks that the workflow can run (`check_runnable`, Rule WF8), then appends `WorkflowResolved`. If the workflow cannot run, it appends `SessionFailed`. See [Workflows](workflows.md). |
+| `HandleResult` | Asks the plugin that owns the result contract of a run to handle the result. Appends `ResultHandled`, or a `fail` outcome when the plugin cannot handle it (Rule PL5). See [Plugins](plugins.md). |
+| `DecideStage` | Asks the stage logic of a plugin for the next decision about its workflow stage. Appends `StageDecided`, or a `fail` decision when the plugin cannot decide (Rule PL3). See [Plugins](plugins.md). |
+| `SkipStage` | Appends `StageSkipped` for a workflow node whose conditions are false after the nodes that it waits for are done (Rule WB5). See [Workflows](workflows.md#conditions-and-skipping). |
+| `RunNode` | Runs the function of a transform node, or the model call of a prompt node through the judge path, on the resolved inputs of the node. Appends `NodeRan` with the output or the error, and the cost of the call (Rules WB2 and WB3). The budget guard holds the step of a prompt node, the same as a spawn. See [Workflows](workflows.md#transform-nodes). |
 | `Complete` | Writes the completion report to the session folder and appends `SessionCompleted`. |
 | `Fail` | Appends `SessionFailed`. |
 
@@ -137,22 +153,38 @@ Thus, two branches of the planner that reach the same result give one step.
   The planner also drops the format, staging, and autofix steps of the project. Research in the project also
   waits, but work in other projects does not wait. The planner asks again on its next pass. Thus, a held step
   starts after the init ends.
+- **Work dirs (Rule WD1).** At the end of `push`, the planner names every project that a spawn works in
+  (`SessionState::work_projects`, in `crates/ostra-engine/src/work_dirs.rs`). A session-wide run gets the
+  session's scope. A phase run gets the projects of its phase. Init and the advisor get one project. A resumed or
+  continued run keeps the projects of its first run. The pipeline can answer for its own purposes through
+  `Pipeline::work_projects`, which the standard plugin uses for docs runs. The planner sets the list after the
+  resume marks, because a resumed run keeps its list.
 - **Resume after pause (Rule P2).** If the session has a paused run for the same purpose, the planner marks the
   spawn to resume that run. Then the runner continues that execution and does not start a new one.
-- **A run that waits for an answer (Rule H2).** A native run that asked another subagent ended with status
-  `waiting`. Its stage sees this run as a paused run. The planner drops the next spawn of the stage until the
-  answer or a question for the run is ready. Then the planner marks the spawn to resume the run in place. The
-  runner uses the message as the resume note.
+- **A run that waits for a message (Rule SM3).** A native run that paused itself ended with status `waiting`.
+  Its stage sees this run as a paused run. The planner drops the next spawn of the stage until a message for the
+  run is ready. Then the planner marks the spawn to resume the run in place. The runner gives the messages to the
+  run as the resume note.
 - **Pair loops continue conversations (Rules H5 to H7).** The planner marks a fact-check round, a re-pass, a fix,
   and a re-review to continue the conversation of the run before them. The source is
   `SessionState::continuation`. A rule can tell the planner to start a new conversation. The planner drops a
   spawn that continues a conversation with a live run until that run ends. Thus, a conversation never has two
   live runs.
 
-After the stage logic, a coordination pass adds these steps:
+After the stage logic, a coordination pass handles the messages between subagents (HANDOVER 10.8) and the
+plugin results:
 
-- A consult spawn for each question to a subagent that ended its run.
-- A `Deliver` step for each harness run whose message is ready.
+- A run that returned a plugin contract and has no handled outcome gets a `HandleResult` step (Rule PL5).
+  Nothing reads such a result before its plugin handles it.
+- If a native run ended `waiting` and a message for it is ready, the planner resumes the run in place (Rule SM3).
+  The exception is a stage spawn in the same pass that already resumes the run.
+- A subagent whose run ended `ok`, `stuck`, or `handoff` and that got a message gets a new run. This run
+  continues its conversation with its own tools (`Message` purpose, Rule SM4).
+- A message that starts a helper spawns that helper (`Helper` purpose, Rule SM7). If the contract of the helper
+  is `research`, the helper runs as a research task with that agent.
+
+A running run needs no step. Its executor takes its messages at its next turn boundary. The executor of a
+waiting harness or programmatic run wakes that run (Rule SM2).
 
 At the top of `run`, before all stage logic, this check occurs:
 
@@ -167,31 +199,53 @@ if !s.created || s.is_terminal() || s.paused {
 
 `Planner::run` uses the same order as the pipeline diagram in HANDOVER section 8.1. The order is:
 
-1. **YOLO first.** In YOLO mode, each open gate gets a `YoloAnswer` step. The exceptions are permission asks,
-   budget gates, and the failure gate of an execution that you stopped (Rule P4). The live execution answers the
-   permission asks.
+1. **YOLO first.** In YOLO mode, each open gate gets a `YoloAnswer` step. The exceptions are budget gates, the
+   failure gate of an execution that you stopped (Rule P4), and a custom stage that failed in its last round.
+   These gates stay open for you. Permission asks also get no step, because the runner allows them first.
+   After the YOLO answers, the planner calls the pipeline (`Pipeline::plan`). The standard pipeline does steps 2
+   to 7 (`session_flow` in `crates/ostra-default-plugin/src/planner/shared.rs`).
 2. **Init sessions** use their own flow: detect, scouts, propose, skill approval, generate skills, and generate
    the inventory.
-3. **No category yet** means a `Classify` judge. Answers that wait for the Route answer judge get their judge step
+3. **A named workflow** gets a `ResolveWorkflow` step first, because its base sets the category (Rule WF1).
+4. **No category yet** means a `Classify` judge. Answers that wait for the Route answer judge get their judge step
    here. If context that you added waits for this judge, all other work stops. The planner returns only those
    judge steps until the judge decides (Rule C2).
-4. **Explore tasks** spawn in each stage, because a rescue can add a research task in the middle of a build.
-5. **The category's path.** The path for each category is:
-   - RESEARCH completes after explore.
-   - SPEC adds the spec flow.
-   - PLAN adds the plan flow.
-   - IMPLEMENT asks the `Track` judge after research. The full track adds the spec flow, the Stakes judge, and
-     the plan flow. If the stakes are low, the full track does not add the plan flow. The light track goes
-     directly to the phases. Then the two tracks run the phases and the implementation review gate with its
-     feedback rounds (Rule F1). After you accept, they run the closing stages.
-   - VERIFY, PROMPT, and QUICK CHANGE go directly to the phases.
-   - TEST goes to the closing stages.
-6. **Completion** occurs when nothing runs and no gate is open. First the `Completion` judge runs. Then
-   `Complete` runs with the report that the judge wrote.
+5. **The workflow.** A new session that has no recorded workflow gets only a `ResolveWorkflow` step. A QUICK
+   ANSWER session is the exception, because it runs no workflow. A session from a log that Ostra wrote before
+   workflows existed runs the built-in workflow of its category.
+6. **Explore tasks** spawn in each stage, because a rescue can add a research task in the middle of a build.
+7. **The workflow walk.** QUICK ANSWER keeps its own flow. All other categories walk the stages of their workflow
+   in dependency order (`workflow_flow`). A stage runs when all stages in its `after` list are done. A built-in
+   stage goes to the pipeline (`Pipeline::builtin_stage`), which calls the same function that the fixed pipeline
+   called:
+   - Research runs `explore_complete`.
+   - Track and stakes ask their judges.
+   - Spec and plan run `spec_flow` and `plan_flow`.
+   - Build runs `phases` and the phase stages.
+   - Feedback runs `implementation_review` (Rule F1).
+   - Closing runs `closing_stages`.
+   - Book runs `book_flow`: the docs stage of each project that the closing gate chose docs for, then the book
+     write. Without a book stage, closing runs these steps itself.
+
+   A custom stage runs its agent or asks its plugin. See [Workflows](workflows.md).
+
+   Each agent that a built-in stage spawns comes from `SessionState::agent_for(stage, contract)` (Rules WF8 and
+   PL4). This is the agent that the workflow binds to that contract in that stage. If the workflow binds no
+   agent, it is the agent of the standard plugin for the contract (`Pipeline::default_agent`, which reads
+   `Standard::default_for`). The planner never
+   names an agent. A work loop records the contracts of its work and fix runs (`WorkLoop::work` and `fix`), not
+   agents. Examples are `implementation`, `prompt`, and `tests`. The fold creates loops at Classify time, before
+   Ostra resolves the workflow, so the planner binds the agent when it spawns. Steps outside all built-in stages
+   use the standard agent for their contract (`default_agent`). Examples are a quick answer and the init of a
+   created project.
+8. **Completion** occurs when all stages are done, nothing runs, and no gate is open. First the `Completion`
+   judge runs. Then `Complete` runs with the report that the judge wrote.
 
 Each stage function returns whether its stage is finished. Later stages run only when the earlier stages are
 finished. This is how the planner enforces a rule such as D1. `spec_flow` does not start without a research
-document, and no code path goes from explore to plan without it.
+document. A workflow must also keep research before the spec (Rule WF2). Thus, no path goes from explore to plan
+without research. The built-in workflow of each category chains its built-in stages in the order of the fixed
+pipeline. Thus, a workspace without workflow files plans exactly as before, and the conformance fixtures prove it.
 
 The phases function shows the style. This is the full scheduler for implement loops:
 
@@ -203,9 +257,11 @@ fn phases(&mut self) {
         if removed.contains(&p.info.id) { continue; }
         let l = &p.impl_loop;
         if l.is_idle() {
-            // Rule M2: one implement pipeline per project at a time.
-            if busy.contains(&p.info.project) || !deps_passed(s, p) { continue; }
-            busy.insert(p.info.project.clone());
+            // Rule M2: one implement pipeline per project at a time. Rule WD2: a phase
+            // holds every project it works in.
+            let projects = p.info.projects();
+            if projects.iter().any(|k| busy.contains(k)) || !deps_passed(s, p) { continue; }
+            busy.extend(projects);
             self.loop_work(p, false, WorkKind::Initial, None);
             continue;
         }
@@ -222,7 +278,8 @@ loop and changes it into a step.
 
 ## The runner and the driver loop
 
-The runner (`crates/ostra-engine/src/runner.rs`) does the steps. Each live session has one driver. The driver is
+The runner (`crates/ostra-engine/src/runner/`) does the steps. A step that only the pipeline plans is
+`Step::Pipeline`, and the runner gives it back to the pipeline (`Pipeline::perform`). Each live session has one driver. The driver is
 a Tokio task that runs this loop:
 
 ```rust
@@ -276,9 +333,9 @@ This design has these results:
 the same time in the workspace. `perform_spawn` takes a slot before all other work. It holds the slot until the
 execution ends. When the slot is dropped, the slot becomes free and the waiters wake.
 
-A harness run that waits for the answer of another subagent is the only exception (Rule H2). It gives back its
-slot during the wait. It takes a slot again before it continues. Without this exception, one slot can cause a
-deadlock between the asker and the helper that it waits for.
+A harness or programmatic run that waits for a message is the only exception (Rule SM3). It gives back its slot
+during the wait. It takes a slot again before it continues. Without this exception, one slot can cause a deadlock
+between the sender and the subagent that it waits for.
 
 The planner can ask for six scouts together. The runner starts them when slots become free. For this reason,
 fan-out stages also keep their own caps (`init::MAX_SCOUTS` is 6). The slot limiter sets the maximum number at the
@@ -382,17 +439,18 @@ finding. It asserts that no review-cap gate opens. A security block has no cap, 
 (Hard rule 21).
 
 Fixtures are the contract for changes to the engine. A new rule or a changed rule needs a new or changed fixture
-in the same change. The rule ID must be in the section comment of the fixture. It must also be at the line in
-`plan.rs` or `state.rs` that implements the rule. To see what Ostra does in a situation, write the history as a
-fixture and print `h.summaries()`. This is frequently the quickest method.
+in the same change. The rule ID must be in the section comment of the fixture. It must also be at the line in the
+planner or the fold that implements the rule. To see what Ostra does in a situation, write the history as a
+fixture and print `h.summaries()`. This runs the planner without a server or a model.
 
 ### Beyond fixtures
 
 Fixtures test the planner and the fold. Other tests examine the runner around them:
 
-- `crates/ostra-engine/tests/runner.rs` runs a real `Engine` with fake services and executors. Thus, the driver
-  loop, the slots, and the appends are real.
-- `crates/ostra-engine/tests/recover.rs` and `pause.rs` test restart recovery, and pause and continue.
+- `crates/ostra-default-plugin/tests/runner.rs` runs a real `Engine` with the standard pipeline and fake
+  services and executors. Thus, the driver loop, the slots, and the appends are real.
+- `crates/ostra-default-plugin/tests/recover.rs` and `pause.rs` test restart recovery, and pause and continue.
+  These tests are in the plugin crate, because the engine does not depend on the standard plugin.
 - `crates/ostra-server/tests/e2e.rs` runs the full server. A scripted provider acts as each agent.
 
 ## Adding behavior
@@ -413,7 +471,17 @@ Fixtures cannot see such logic, and a restart loses it.
 | What | Where |
 | --- | --- |
 | `next_steps`, `PlanCtx`, `Step`, `key()` | `crates/ostra-engine/src/plan.rs` |
-| Loop state the planner reads (`WorkLoop`, `LoopNext`) | `crates/ostra-engine/src/state.rs` |
-| Driver loop, `perform`, slots, `validate_answer` | `crates/ostra-engine/src/runner.rs` |
-| Spawn parameters from planner inputs | `crates/ostra-engine/src/factory.rs` |
+| The `Pipeline` trait | `crates/ostra-engine/src/pipeline.rs` |
+| The rules of the built-in stages, one folder for each stage | `crates/ostra-default-plugin/src/stages/<stage>/planner.rs` (track and stakes in their `mod.rs`) |
+| Loop state the planner reads (`WorkLoop`, `LoopNext`) | `crates/ostra-default-plugin/src/stages/build/data.rs` |
+| Driver loop, `perform`, slots | `crates/ostra-engine/src/runner/driver.rs` |
+| `validate_answer` | `crates/ostra-engine/src/runner/control.rs` |
+| The pipeline's own steps (`OstraStep`) and their effects | `crates/ostra-default-plugin/src/steps.rs`, the dispatcher in `crates/ostra-default-plugin/src/pipeline/effects.rs`, and each stage's `stages/<stage>/hooks.rs` |
+| Spawn parameters from planner inputs | `crates/ostra-default-plugin/src/factory.rs` |
+| The workflow walk (`workflow_flow`, `phase_stages`) | `crates/ostra-engine/src/plan.rs` |
+| `builtin_stage` | `crates/ostra-default-plugin/src/planner/shared.rs` |
+| `build_done`, `book_flow` | `crates/ostra-default-plugin/src/stages/build/planner.rs`, `crates/ostra-default-plugin/src/stages/book/planner.rs` |
+| Custom stage fold and actions | `crates/ostra-engine/src/workflow.rs` |
+| Plugin stage planning and the stage view | `crates/ostra-engine/src/plugin_stage.rs` |
+| Messages in the fold, `wakes_due`, `continuations_due`, `helpers_due` | `crates/ostra-engine/src/coord.rs` |
 | Conformance fixtures and the `H` helper | `tests/conformance/main.rs` |

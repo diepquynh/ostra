@@ -21,8 +21,9 @@ use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
 use ostra_core::model::Effort;
 use ostra_core::pipeline::StageKind;
 use ostra_core::{AgentName, ExecutorKind};
-use ostra_engine::judge::output_schema;
-use ostra_engine::judge_input::{ProjectFacts, judge_input};
+use ostra_default_plugin::data::{OsExt, OstraData};
+use ostra_default_plugin::judge::output_schema;
+use ostra_default_plugin::judge_input::{ProjectFacts, judge_input};
 use ostra_engine::state::SessionState;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -283,6 +284,7 @@ impl Log {
     ) -> ExecutionId {
         let id = ExecutionId::new();
         self.ev(SessionEvent::ExecutionStarted {
+            projects: Vec::new(),
             id: id.clone(),
             agent,
             purpose,
@@ -294,6 +296,7 @@ impl Log {
             spawn_block: String::new(),
             report_path: None,
             resumes: None,
+            contract: None,
         });
         id
     }
@@ -322,9 +325,11 @@ fn session(case: &Case, dir: &Path) -> SessionState {
         uploads: vec![],
         pinned: vec![],
         docs_book: None,
+        workflow: None,
     });
     if case.judge == "classify" {
-        return SessionState::fold(SessionId::from("eval"), &log.events);
+        ostra_default_plugin::install();
+        return ostra_default_plugin::fold_session(SessionId::from("eval"), &log.events);
     }
     let scope: Vec<String> = ws.iter().map(|(k, _, _, _)| k.clone()).collect();
     let tasks: Vec<Value> = case
@@ -355,7 +360,8 @@ fn session(case: &Case, dir: &Path) -> SessionState {
         );
     }
     if matches!(case.judge.as_str(), "track" | "sufficiency") {
-        return SessionState::fold(SessionId::from("eval"), &log.events);
+        ostra_default_plugin::install();
+        return ostra_default_plugin::fold_session(SessionId::from("eval"), &log.events);
     }
     let full = case.track.as_deref() == Some("full");
     log.decide(
@@ -373,7 +379,8 @@ fn session(case: &Case, dir: &Path) -> SessionState {
         );
     }
     if case.judge == "stakes" {
-        return SessionState::fold(SessionId::from("eval"), &log.events);
+        ostra_default_plugin::install();
+        return ostra_default_plugin::fold_session(SessionId::from("eval"), &log.events);
     }
     keep_notes(&mut log, case, &session_root);
     if case.judge == "route_answer" && case.gate.as_deref() == Some(AMENDMENT) {
@@ -385,11 +392,12 @@ fn session(case: &Case, dir: &Path) -> SessionState {
             delivery: ostra_core::event::ContextDelivery::Queue,
             routed: true,
         });
-        return SessionState::fold(SessionId::from("eval"), &log.events);
+        ostra_default_plugin::install();
+        return ostra_default_plugin::fold_session(SessionId::from("eval"), &log.events);
     }
     if case.judge == "route_answer" {
         let (payload, answer) = route_gate(case, &session_root);
-        let routed = ostra_engine::state::answer_needs_route(&payload, &answer);
+        let routed = ostra_default_plugin::fold::answer_needs_route(&payload, &answer);
         assert!(routed, "{}: the answer would not be routed", case.id);
         log.ev(SessionEvent::GateOpened {
             id: GateId::from(ROUTE_GATE),
@@ -404,7 +412,8 @@ fn session(case: &Case, dir: &Path) -> SessionState {
             reason: None,
             routed,
         });
-        return SessionState::fold(SessionId::from("eval"), &log.events);
+        ostra_default_plugin::install();
+        return ostra_default_plugin::fold_session(SessionId::from("eval"), &log.events);
     }
     if full {
         // Low stakes builds one inline phase per project, as the light track does.
@@ -413,7 +422,10 @@ fn session(case: &Case, dir: &Path) -> SessionState {
             json!({"stakes": "low", "reason": "eval"}),
         );
     }
-    let phases: Vec<u32> = SessionState::fold(SessionId::from("eval"), &log.events)
+    ostra_default_plugin::install();
+    let phases: Vec<u32> = ostra_default_plugin::fold_session(SessionId::from("eval"), &log.events)
+        .ext
+        .os()
         .phases
         .keys()
         .copied()
@@ -445,7 +457,8 @@ fn session(case: &Case, dir: &Path) -> SessionState {
             json!({"status": "stuck", "report_path": session_root.join("r.md"), "changed_files": [], "summary": "Stuck.",
                    "stuck": {"diagnostic": case.diagnostic, "need": case.need}}),
         );
-        return SessionState::fold(SessionId::from("eval"), &log.events);
+        ostra_default_plugin::install();
+        return ostra_default_plugin::fold_session(SessionId::from("eval"), &log.events);
     }
     for (id, p) in phases.iter().zip(&case.phase) {
         let path = session_root
@@ -485,7 +498,8 @@ fn session(case: &Case, dir: &Path) -> SessionState {
         reason: None,
         routed: true,
     });
-    SessionState::fold(SessionId::from("eval"), &log.events)
+    ostra_default_plugin::install();
+    ostra_default_plugin::fold_session(SessionId::from("eval"), &log.events)
 }
 
 const ROUTE_GATE: &str = "g_eval";
@@ -494,11 +508,13 @@ const AMENDMENT: &str = "amendment";
 
 /// The stuck run a rescue case asks the judge about.
 fn rescue_subject(st: &SessionState) -> String {
-    st.phases
+    st.ext
+        .os()
+        .phases
         .values()
         .flat_map(|p| [&p.impl_loop, &p.test_loop])
         .find_map(|l| match &l.next {
-            ostra_engine::state::LoopNext::Rescue { exec, .. } => Some(exec.to_string()),
+            ostra_default_plugin::data::LoopNext::Rescue { exec, .. } => Some(exec.to_string()),
             _ => None,
         })
         .unwrap_or_default()
@@ -666,17 +682,17 @@ fn route_gate(case: &Case, session_root: &Path) -> (GatePayload, GateAnswer) {
 fn score_items(e: &Expect, out: &Value) -> (String, bool) {
     // Read the items as the engine does (`judge::item_for`): split parts merge, and on a gate with
     // one text every item is about it.
-    let items: Vec<ostra_engine::judge::AnswerItem> =
+    let items: Vec<ostra_default_plugin::judge::AnswerItem> =
         serde_json::from_value(out["items"].clone()).unwrap_or_default();
     let mut label = vec![];
     let mut ok = true;
     for (id, want) in &e.dispositions {
-        let merged = ostra_engine::judge::item_for(&items, id);
+        let merged = ostra_default_plugin::judge::item_for(&items, id);
         let got = serde_json::to_value(merged.disposition)
             .ok()
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default();
-        let mut stages: Vec<String> = ostra_engine::judge::parts_for(&items, id)
+        let mut stages: Vec<String> = ostra_default_plugin::judge::parts_for(&items, id)
             .iter()
             .flat_map(|p| p.stages.iter())
             .filter_map(|s| serde_json::to_value(s).ok()?.as_str().map(String::from))
@@ -1116,7 +1132,7 @@ fn eval_cases_build_their_sessions() {
             }
             "stakes" => {
                 assert!(
-                    st.spec.current.is_some() && !case.expect.stakes.is_empty(),
+                    st.ext.os().spec.current.is_some() && !case.expect.stakes.is_empty(),
                     "{}",
                     case.id
                 );
@@ -1131,17 +1147,27 @@ fn eval_cases_build_their_sessions() {
                 );
             }
             _ if !case.notes.is_empty()
-                && st.user_notes.iter().filter(|n| !n.forgotten).count() != case.notes.len() =>
+                && st
+                    .ext
+                    .os()
+                    .user_notes
+                    .iter()
+                    .filter(|n| !n.forgotten)
+                    .count()
+                    != case.notes.len() =>
             {
                 panic!("{}: the earlier notes were not kept", case.id)
             }
             "route_answer" => {
                 assert!(
-                    st.held_answers.contains_key(&GateId::from(ROUTE_GATE))
+                    st.ext
+                        .os()
+                        .held_answers
+                        .contains_key(&GateId::from(ROUTE_GATE))
                         || st.pending_amendments().next().is_some()
-                        || st.phases.values().any(|p| matches!(
+                        || st.ext.os().phases.values().any(|p| matches!(
                             p.impl_loop.next,
-                            ostra_engine::state::LoopNext::AwaitRoute { .. }
+                            ostra_default_plugin::data::LoopNext::AwaitRoute { .. }
                         ))
                         || case
                             .gate
@@ -1177,21 +1203,25 @@ fn eval_cases_build_their_sessions() {
                 );
             }
             "feedback" => {
-                let round = &st.feedback.rounds[0];
+                let round = &st.ext.os().feedback.rounds[0];
                 assert!(
                     round.route.is_none(),
                     "{}: routed without the judge",
                     case.id
                 );
-                assert_eq!(st.phases.len(), case.phase.len(), "{}", case.id);
+                assert_eq!(st.ext.os().phases.len(), case.phase.len(), "{}", case.id);
                 assert!(
-                    st.phases.values().all(|p| p.implementer_report.is_some()),
+                    st.ext
+                        .os()
+                        .phases
+                        .values()
+                        .all(|p| p.implementer_report.is_some()),
                     "{}",
                     case.id
                 );
                 assert_eq!(
                     case.spec.is_some(),
-                    st.spec.current.is_some(),
+                    st.ext.os().spec.current.is_some(),
                     "{}",
                     case.id
                 );

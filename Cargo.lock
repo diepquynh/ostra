@@ -2299,12 +2299,15 @@ dependencies = [
  "chrono",
  "minijinja",
  "ostra-core",
+ "ostra-sdk",
+ "ostra-standard",
  "regex",
  "rust-embed",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "tokio",
  "toml",
 ]
 
@@ -2355,6 +2358,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "ostra-default-plugin"
+version = "0.1.3"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "globset",
+ "ostra-agents",
+ "ostra-core",
+ "ostra-engine",
+ "ostra-sandbox",
+ "ostra-sdk",
+ "ostra-standard",
+ "ostra-store",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "ostra-engine"
 version = "0.1.3"
 dependencies = [
@@ -2366,12 +2394,13 @@ dependencies = [
  "ostra-core",
  "ostra-sandbox",
  "ostra-store",
- "pretty_assertions",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
 ]
@@ -2413,6 +2442,7 @@ version = "0.1.3"
 dependencies = [
  "async-trait",
  "futures",
+ "ostra-agents",
  "ostra-core",
  "ostra-policy",
  "ostra-providers",
@@ -2475,6 +2505,7 @@ name = "ostra-policy"
 version = "0.1.3"
 dependencies = [
  "globset",
+ "ostra-agents",
  "ostra-core",
  "pretty_assertions",
  "regex",
@@ -2525,6 +2556,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ostra-sdk"
+version = "0.1.3"
+dependencies = [
+ "async-trait",
+ "ostra-core",
+ "ostra-standard",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "ostra-server"
 version = "0.1.3"
 dependencies = [
@@ -2548,6 +2595,7 @@ dependencies = [
  "ostra-agents",
  "ostra-code",
  "ostra-core",
+ "ostra-default-plugin",
  "ostra-engine",
  "ostra-exec-harness",
  "ostra-exec-native",
@@ -2556,6 +2604,7 @@ dependencies = [
  "ostra-policy",
  "ostra-providers",
  "ostra-sandbox",
+ "ostra-sdk",
  "ostra-store",
  "ostra-tools",
  "ostra-workspace",
@@ -2579,6 +2628,18 @@ dependencies = [
  "uuid",
  "which",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ostra-standard"
+version = "0.1.3"
+dependencies = [
+ "async-trait",
+ "ostra-core",
+ "ostra-sdk",
+ "rust-embed",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]
@@ -2635,6 +2696,7 @@ dependencies = [
  "hex",
  "ostra-agents",
  "ostra-core",
+ "ostra-default-plugin",
  "ostra-engine",
  "ostra-policy",
  "ostra-sandbox",

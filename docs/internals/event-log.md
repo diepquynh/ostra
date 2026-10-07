@@ -50,16 +50,18 @@ Ostra calculates the sequence number in an immediate SQLite transaction. The num
 the session plus one. Thus, two events in one session cannot have the same number
 (`crates/ostra-store/src/workspace/events.rs`, `Events::append`).
 
-There are 33 event kinds. This table puts them in groups by the data that they record:
+There are 41 event kinds. This table puts them in groups by the data that they record:
 
 | Group | Events | What they record |
 | --- | --- | --- |
-| Session lifecycle | `SessionCreated`, `SessionCompleted`, `SessionFailed` | At the start: the request, options, projects, and folders. At the end: the completion report or the reason for the stop. |
+| Session lifecycle | `SessionCreated`, `SessionCompleted`, `SessionFailed` | At the start: the request, options, projects, folders, and the workflow that the session asked for. At the end: the completion report or the reason for the stop. |
+| Workflow | `WorkflowResolved`, `StageDecided`, `StageSkipped`, `NodeRan` | The workflow that the session runs, with each stage resolved (Rule WF1). The decision of a plugin about the next step of its stage (Rule PL3). A node that Ostra skipped because its conditions were false (Rule WB5). The output or error of a transform node or a prompt node, its round, and the cost of a prompt node (Rules WB2 and WB3). |
+| Messages | `MessageSent`, `AgentWaiting`, `MessagesDelivered` | A message between subagents, and whether its sender waits. A run that paused and sent no message. The messages that Ostra gave to a run, with a notice when no message will come (Rule SM8). |
 | What you did | `RequestAmended`, `AmendmentWithdrawn`, `SessionPaused`, `SessionResumed`, `YoloSet` | Context that you added during the session. It is queued or sent now, with `routed` when the Route answer judge decides it (Rule C2). Queued context that you took back before a step read it. Pause and continue (Rules P1 and P2). YOLO on or off. |
 | Judgment | `DecisionMade`, `DecisionOverridden` | The output of a judge, its reason, and the input summary that it saw. An override of it by a user. |
-| Executions | `ExecutionStarted`, `ExecutionResumed`, `ExecutionFinished`, `ExecutionSkipped`, `ExecutionSteered`, `SteerWithdrawn` | Agent, purpose, stage, executor, model, the full spawn parameters, and the rendered spawn block. Later, the result with its submit payload, token usage, and cost. `ExecutionResumed` opens again an execution that the pause interrupted (Rule P2). Thus, one execution can have more than one result in the log. The last result counts, and it includes the spend of the earlier parts. |
+| Executions | `ExecutionStarted`, `ExecutionResumed`, `ExecutionFinished`, `ExecutionSkipped`, `ExecutionSteered`, `SteerWithdrawn`, `ResultHandled` | Agent, purpose, stage, result contract, executor, model, the full spawn parameters, and the rendered spawn block. Later, the result with its submit payload, token usage, and cost. `ResultHandled` records what a plugin did with a result of its own contract (Rule PL5). `ExecutionResumed` opens again an execution that the pause interrupted (Rule P2). Thus, one execution can have more than one result in the log. The last result counts, and it includes the spend of the earlier parts. |
 | Gates | `GateOpened`, `GateAnswered` | A question from the pipeline, and its answer with its source: `user`, `yolo`, or `engine`. |
-| Engine work | `CommandStarted`, `CommandRan`, `AutofixApplied`, `DocsPlanned`, `BookWritten` | Format and `git add` commands with their exit code and output tail. Review findings that the engine applied itself. The split of the part of a project in the book among writers, measured from the disk because the fold cannot read it (rule B9). The documentation book that the engine wrote, with the projects whose parts it holds and the write error, if there is one (rule B5). |
+| Engine work | `CommandStarted`, `CommandRan`, `AutofixApplied`, `DocsPlanned`, `DocsScanned`, `BookWritten` | Format and `git add` commands with their exit code and output tail. Review findings that the engine applied itself. An old split of the part of a project among area writers, which the fold now ignores (rule B9). The modules and named constants of a project, read from disk before the docs survey, with `session_wide` when the scan serves the session-wide docs pipeline (rule B10). The documentation book that the engine wrote, with the projects whose parts it holds and the write error, if there is one (rule B5). |
 | Projects | `ProjectCreated`, `ProjectInitFinished`, `InitStepFailed` | A project that an implementer created with `ProjectCreate`, with each fact of the call (rule O3). The successful end of its init in the session (rule O4). An init step whose result the engine cannot use, for example no slices or a missing inventory. The advisor examines this step next (rule O5). |
 | Outcomes | `SecurityBlock`, `PhaseBlocked`, `Note` | A BLOCKER finding (Hard rule 21), a phase that cannot continue, and free-text notes, for example "A step failed". |
 
@@ -69,13 +71,29 @@ field to find the loop of an execution. The second is `ExecutionFinished.result.
 payload that the agent gave to its `submit_<agent>` tool. The engine reads only this payload, never the final
 chat message of an agent. Thus, the log holds all the data that the engine used.
 
+`ExecutionStarted.projects` records the projects that the run works in, with its main project first (Rule
+WD1). The planner names them, and the runner removes the other projects from a harness run (Rule WD3). Thus, the
+list that a resumed run keeps is in the log. A run in one project records no list, and a run from a log before
+work dirs has none. The fold reads both as a run in `ExecutionStarted.project` alone.
+
+`ExecutionStarted.contract` records the result contract that the run submits (Rule CA5). The fold reads a result
+by its contract, and the catalog that maps an agent to its contract is outside the log. A run from a log before
+contracts has no contract. The fold gives it the contract of its agent in the standard plugin, or `stage` for a
+custom agent (`workflow::legacy_contract`). These are the contracts that those runs had.
+
+The fold reads the result of a plugin contract only after its plugin handles it:
+
+1. The planner asks the plugin with `Step::HandleResult`.
+2. The runner records the outcome as `ResultHandled`.
+3. The fold applies that outcome in the place of a verdict.
+
 ## The fold
 
-A session's state is `SessionState::fold(events)` in `crates/ostra-engine/src/state.rs`:
+A session's state is `SessionState::fold(pipeline, id, events)` in `crates/ostra-engine/src/state.rs`:
 
 ```rust
-pub fn fold(id: SessionId, events: &[StoredEvent]) -> Self {
-    let mut s = SessionState::new(id);
+pub fn fold(pipeline: crate::pipeline::PipelineRef, id: SessionId, events: &[StoredEvent]) -> Self {
+    let mut s = SessionState::new(pipeline, id);
     for e in events {
         s.apply(e);
     }
@@ -83,7 +101,12 @@ pub fn fold(id: SessionId, events: &[StoredEvent]) -> Self {
 }
 ```
 
-`apply` is one large `match` on the event kind. It sets the data that the rest of the engine reads:
+`apply` is one large `match` on the event kind. The engine folds the generic events itself: gates, decisions,
+executions, messages, workflow stages, checkpoints, the budget, and pause. For each event that a built-in stage
+reads, `apply` calls the pipeline at the same point (`Pipeline::event`, `started`, `finished`, `decision`,
+`gate_opened`, `gate_answered`). The standard pipeline keeps its state in `SessionState::ext`
+(`OstraState` in `crates/ostra-default-plugin/src/data.rs`), and its fold is in the dispatchers of
+`crates/ostra-default-plugin/src/fold/` and in each stage folder of `crates/ostra-default-plugin/src/stages/`. Together, the two parts set the data that the planner reads:
 
 - The explore tasks and their research documents.
 - The spec and plan tracks: runs, fact-check passes, pending answers, and approval.
@@ -117,9 +140,9 @@ answer from the original run.
 Thus, the runner records the list in the `params` of the execution when it starts the review:
 
 ```rust
-// crates/ostra-engine/src/runner.rs, perform_spawn
-if matches!(req.purpose, ExecPurpose::Review { .. }) && let Value::Object(map) = &mut params {
-    let ids = profile.as_ref().map(|p| p.auto_fixable_ids()).unwrap_or_default();
+// crates/ostra-default-plugin/src/stages/build/hooks.rs, spawn_params (perform_spawn calls it)
+if matches!(req.purpose, ExecPurpose::Review { .. }) && let Value::Object(map) = params {
+    let ids = profile.map(|p| p.auto_fixable_ids()).unwrap_or_default();
     map.insert(AUTO_FIXABLE_PARAM.into(), serde_json::to_value(ids).unwrap_or_default());
 }
 ```
@@ -127,7 +150,7 @@ if matches!(req.purpose, ExecPurpose::Review { .. }) && let Value::Object(map) =
 The fold reads the list from the event, not from the file:
 
 ```rust
-// crates/ostra-engine/src/state.rs, loop_finished
+// crates/ostra-default-plugin/src/stages/build/loops.rs, loop_finished
 // Recorded at spawn from the project's Review Rule Set, so the fold stays a pure function
 // of the event log.
 let autofix_ids: BTreeSet<String> = rec.params.get(AUTO_FIXABLE_PARAM) ...
@@ -143,9 +166,28 @@ Ostra uses the same method in other places:
 - Ostra moves uploads into the session folder and records their names, paths, and sizes in the event. Thus, a
   later change to the workspace does not change the data that an old session saw.
 
+Workflows follow the same rule. `SessionCreated.workflow` records the workflow that the session asked for. This is
+a workflow by name, or the workflow of the workspace for the category that Classify picks. The runner reads the
+workflow files one time, when the planner asks for the workflow. It records the resolved workflow in
+`WorkflowResolved`, with `extends` and `remove` applied and all stages listed. After that event, the fold and the
+planner read only that event. Thus, a change to a workflow file never changes a session that runs.
+
+The other workflow facts from outside the log are events too:
+
+- The stage logic of a plugin is outside the log. Ostra records its answers as `StageDecided` events, and the
+  fold never calls the plugin.
+- Ostra records the output of a transform node in `NodeRan`. The fold does not compute it. Thus, a later Ostra
+  with a changed function still folds an old log to the same state.
+- Ostra records the answer and the cost of a prompt node in `NodeRan` for the same reason.
+- Ostra records a node that its conditions skip as `StageSkipped`.
+
+A session from a log before workflows has no `workflow` in `SessionCreated`. It runs the default workflow of its
+category, which is the same chain of stages that the pipeline ran before workflows.
+
 ## One place appends
 
-Each event goes through one function, `Inner::append` in `crates/ostra-engine/src/runner.rs`. It holds the
+Each event goes through one function, `Inner::append` in `crates/ostra-engine/src/runner/driver.rs`. The
+pipeline's step effects append through `StepHost::append`, which calls the same function. It holds the
 state lock of the session and does five steps in this sequence:
 
 1. **Store.** Write the event to SQLite and get its sequence number.
@@ -193,8 +235,8 @@ workspace, it does these steps:
    now. Thus, Ostra appends `ExecutionFinished` with status `interrupted` and the error "The server restarted
    while this execution ran." Ostra stored the usage of the execution during the stream. Thus, the interrupted
    result keeps its spend, and your cost figure does not decrease after a restart. A special case is a harness
-   run that waited for the answer of another subagent with a live process. Ostra records this run as `waiting`.
-   The answer then resumes its harness session and does not run it again (Rule H2).
+   run that waited for a message with a live process. Ostra records this run as `waiting`. The message then
+   resumes its harness session and does not run it again (Rule SM3).
 3. Finds each open permission gate. The execution that asked does not exist now. Thus, the engine answers the
    gate with deny, source `engine`, and gives the reason.
 4. Starts the driver of the session again if the session did not end.
@@ -204,7 +246,7 @@ planner decides the next step. For the work loop of a phase, the fold sets the n
 re-run (`WorkKind::Rerun`) with the same instructions:
 
 ```rust
-// crates/ostra-engine/src/state.rs
+// crates/ostra-default-plugin/src/stages/build/loops.rs
 if status == ExecutionStatus::Interrupted {
     // Re-run with the same spawn block (HANDOVER 11.2).
     l.next = match in_flight { LoopNext::Work { instructions, .. } => LoopNext::Work {
@@ -218,7 +260,7 @@ finished. Check the progress log and continue." The implementer writes a progres
 during its work. Thus, a re-run reads the point where the last run stopped, and it does not start the phase
 again. Ostra marks an interrupted spec, plan, EPA, or docs run as a run to do again, and the planner starts it.
 
-`crates/ostra-engine/tests/recover.rs` tests this behavior. The test does these steps:
+`crates/ostra-default-plugin/tests/recover.rs` tests this behavior. The test does these steps:
 
 1. It starts a session whose executor reports $0.50 of usage and then hangs.
 2. It opens the same database from a second `Engine`, as if the first process crashed.
@@ -282,18 +324,44 @@ The result shows the difference between a restart and a pause. A restart runs a 
 check the progress log, because the old process and its conversation do not exist now. A pause resumes the
 same conversation, because Ostra stopped it intentionally and saved it.
 
-## Questions between subagents
+## Messages between subagents
 
-Subagent coordination (HANDOVER 10.8) is also a set of events. `AgentAsked` records a question: the asker,
-the target, and the text. The target is a new helper of an agent, or a subagent ID. `AgentReplied` records an
-answer. `MessageDelivered` records that Ostra gave a question or an answer to a waiting run. A run that asks
-and then ends records `ExecutionFinished` with status `waiting`.
+Messages between subagents (HANDOVER 10.8) are also events. `MessageSent` records a message with these data:
 
-The fold derives the other data. The answer of a helper is its explore submit. A subagent can fail before it
-answers. A run can end without a reply to its question. In these two cases, the failure is the answer. The
-events and the execution results tell which run waits for which message. Thus, a replay builds this data
-again, and the planner reads it to decide which run to wake.
+- The run that sent it.
+- The target: an existing subagent, or a new helper of an agent with its project and its result contract.
+- The text.
+- Whether the sender waits.
+
+A helper whose contract is `research` runs as a research task, and its document joins the research of the
+session. A target from a log before contracts has no contract. It was an `explore` helper, and the fold reads it
+in the same way. `AgentWaiting` records a run that paused and sent no message. `MessagesDelivered` records that
+Ostra gave a list of messages to one run, at a turn boundary or to wake it. It also records the notice that the
+run got when no message could come. A native run that pauses also records `ExecutionFinished` with status
+`waiting`.
+
+The fold derives the other data (`crates/ostra-engine/src/coord.rs`):
+
+- The subagent that receives a message.
+- The result message of a helper, from its submit or from its failure.
+- The runs that wait, and the run that each one waits for.
+- The messages that are still queued.
+- The senders to which a run owes a reply.
+
+All of these are functions of the events and the execution results. Thus, a replay builds them again, and the
+planner reads them to decide which run to wake or continue.
 [Subagents that talk to each other](agents.md#subagents-that-talk-to-each-other) shows the flow step by step.
+
+Logs from before messages still fold, because `on_coord_event` reads the old events into the same messages:
+
+- `AgentAsked` is a `MessageSent` with `wait` set. It keeps the ID of the question.
+- `AgentReplied` becomes a message from the run that replied back to the subagent that asked, with the ID
+  `<question>-reply`.
+- `MessageDelivered` of a question marks the question as delivered. `MessageDelivered` of an answer marks the
+  reply or the result of the helper (`<question>-result`) as delivered, and it ends the wait of the asker.
+- An execution with the old `Consult` purpose marks its question as delivered when it starts.
+
+A finished session from before the change folds to no open message and no waiting run. Thus, it stays complete.
 
 ## The tables beside the log
 
@@ -318,9 +386,13 @@ project, because it is part of the repository and lives longer than one workspac
 | --- | --- |
 | Event and gate types | `crates/ostra-core/src/event.rs` |
 | The fold and `SessionState` | `crates/ostra-engine/src/state.rs` |
-| `Inner::append`, `recover`, pause, stop | `crates/ostra-engine/src/runner.rs` |
+| The fold of the built-in stages and `OstraState` | `crates/ostra-default-plugin/src/fold/` (dispatchers), `crates/ostra-default-plugin/src/stages/<stage>/` (`fold.rs`, `runs.rs`, `gates.rs`, `judges.rs`), `crates/ostra-default-plugin/src/data.rs` |
+| Messages in the fold, and old coordination events | `crates/ostra-engine/src/coord.rs` |
+| Workflow and plugin stage fold | `crates/ostra-engine/src/workflow.rs`, `crates/ostra-engine/src/plugin_stage.rs` |
+| `Inner::append` | `crates/ostra-engine/src/runner/driver.rs` |
+| `recover`, pause, stop | `crates/ostra-engine/src/runner/sessions.rs`, `crates/ostra-engine/src/runner/control.rs` |
 | Storage of events | `crates/ostra-store/src/workspace/events.rs` |
 | WebSocket routing of events | `crates/ostra-server/src/ws.rs` |
-| Restart and pause tests | `crates/ostra-engine/tests/recover.rs`, `crates/ostra-engine/tests/pause.rs` |
+| Restart and pause tests | `crates/ostra-default-plugin/tests/recover.rs`, `crates/ostra-default-plugin/tests/pause.rs` |
 
 Next: [The planner](planner.md) tells how Ostra decides what to do with the state from the fold.

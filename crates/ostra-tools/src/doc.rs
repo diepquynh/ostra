@@ -4,11 +4,13 @@ use serde_json::Value;
 use std::fmt::Write;
 
 pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput {
-    let Some(kind) = DocKind::for_agent(env.config().agent) else {
+    // Rule CA6: an agent writes the documents its capabilities grant.
+    let kinds = &env.config().doc_kinds;
+    if kinds.is_empty() {
         return ToolOutput::err(
-            "Only explore, generate-spec, and plan write documents. Write your output where your prompt says.",
+            "This agent holds no document capability (`document_research`, `document_spec`, or `document_plan`). Write your output where your prompt says.",
         );
-    };
+    }
     let Some(raw) = str_arg(input, "path").filter(|p| !p.trim().is_empty()) else {
         return ToolOutput::err("Give `path`: the absolute path of the document's markdown file.");
     };
@@ -17,6 +19,20 @@ pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
+    let kind = match kinds.iter().find(|k| name.starts_with(k.prefix())) {
+        Some(k) => *k,
+        None if kinds.len() == 1 => kinds[0],
+        None => {
+            return ToolOutput::err(format!(
+                "Name the document after its kind, starting with {}: `{name}` matches none of the documents you may write.",
+                kinds
+                    .iter()
+                    .map(|k| format!("`{}`", k.prefix()))
+                    .collect::<Vec<_>>()
+                    .join(" or ")
+            ));
+        }
+    };
     if !name.starts_with(kind.prefix())
         || !name.ends_with(".md")
         || (kind == DocKind::Plan && name.contains("-phase-"))
@@ -167,6 +183,13 @@ mod tests {
         let base = env_in(dir);
         let mut cfg: ToolEnvConfig = base.config().clone();
         cfg.agent = agent;
+        // Rule CA6: the grants the standard agents hold for their documents.
+        cfg.doc_kinds = match agent {
+            AgentName::Explore => vec![ostra_core::doc::DocKind::Research],
+            AgentName::GenerateSpec => vec![ostra_core::doc::DocKind::Spec],
+            AgentName::Plan => vec![ostra_core::doc::DocKind::Plan],
+            _ => vec![],
+        };
         cfg.report_file = None;
         ToolEnv::new(cfg)
     }

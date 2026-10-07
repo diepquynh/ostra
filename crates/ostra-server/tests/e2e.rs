@@ -261,6 +261,7 @@ async fn boot_with(root: &Path, change: impl FnOnce(&mut GlobalConfig)) -> Serve
         exe: PathBuf::from("/nonexistent/ostra"),
         bind: None,
         allow_hosts: vec![],
+        plugins: ostra_sdk::Registry::new(),
     };
     let app = ostra_server::app::build(&opts, port).await.unwrap();
     app.shared.providers.register(
@@ -1764,7 +1765,7 @@ async fn setup_wizard_creates_a_workspace_in_one_call() {
         [None, None],
         "neither folder is a repository"
     );
-    assert_eq!(ws.agents.len(), 14);
+    assert_eq!(ws.agents.len(), 13);
     let plan = ws
         .agents
         .iter()
@@ -3495,6 +3496,7 @@ async fn a_loopback_server_lives_at_its_private_name() {
             exe: PathBuf::from("/nonexistent/ostra"),
             bind: None,
             allow_hosts: vec![],
+            plugins: ostra_sdk::Registry::new(),
         };
         let app = ostra_server::app::build(&opts, port).await.unwrap();
         let router = ostra_server::api::router(app.clone())
@@ -4306,8 +4308,9 @@ async fn an_approved_project_is_created_initialized_and_built() {
     );
 }
 
-/// A workspace saved before an agent existed has no route for it; the detail offers the fix and
-/// `settings/fix` applies it without touching anything else.
+/// A workspace saved before an agent existed has no route for it; the agent runs on its default
+/// tier (Rule CA4), the detail offers to write that down, and `settings/fix` applies it without
+/// touching anything else.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_missing_route_is_fixed_in_one_call() {
     let _serial = SERIAL.lock().await;
@@ -4342,8 +4345,9 @@ async fn a_missing_route_is_fixed_in_one_call() {
         .json()
         .await
         .unwrap();
+    // Rule CA4: the advisor still runs, on its default tier; the fix writes that down.
     assert!(
-        detail
+        !detail
             .validation
             .iter()
             .any(|i| i.path == "routing.model.byAgent.advisor"),
@@ -4378,7 +4382,9 @@ async fn a_missing_route_is_fixed_in_one_call() {
 #[tokio::test]
 async fn workspace_books_are_listed_read_and_deleted() {
     // Rule B5: the docs endpoints serve what the engine wrote under `.ostra/docs/`.
-    use ostra_core::book::{Book, BookSummary, BookUpdate, DocumentationSubmit};
+    use ostra_core::book::{
+        Book, BookSummary, BookUpdate, DocumentationSubmit, PageUpdate, PartUpdate,
+    };
     let _serial = SERIAL.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -4394,13 +4400,17 @@ async fn workspace_books_are_listed_read_and_deleted() {
         .unwrap();
     let part: DocumentationSubmit = serde_json::from_value(json!({
         "status": "ok", "summary": "s", "overview": "api serves orders.",
-        "sections": [{"id": "orders", "title": "Orders", "purpose": "Creates orders.", "assumptions": ["Auth is done upstream."]}]
+        "sections": [{"id": "orders", "title": "Orders", "summary": "Creates orders.", "body": "The gateway authenticates callers."}]
     }))
     .unwrap();
     let update = BookUpdate {
         session: "s1".into(),
-        parts: vec![("api".into(), part)],
-        ..Default::default()
+        parts: vec![PartUpdate {
+            project: "api".into(),
+            overview: part.overview,
+            pages: part.sections.into_iter().map(PageUpdate::Write).collect(),
+            ..Default::default()
+        }],
     };
     let book = ostra_core::book::merge(None, "api", &update, chrono::Utc::now());
     ostra_core::book::write(&root.join("ws"), &book).unwrap();

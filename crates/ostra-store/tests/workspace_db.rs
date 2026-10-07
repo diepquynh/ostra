@@ -189,6 +189,7 @@ fn events_are_sequenced_per_session() {
         uploads: vec![],
         pinned: vec![],
         docs_book: None,
+        workflow: None,
     };
     assert_eq!(db.append_event(&a, &ev).unwrap().seq, 1);
     assert_eq!(

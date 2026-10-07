@@ -12,7 +12,8 @@ Browser (React console)
         │  REST for reads and commands, one WebSocket for everything live
         ▼
 ostra (axum server on 127.0.0.1)
-  ├── engine          one per workspace: session state, planner, judges, runner
+  ├── engine          one per workspace: session state, planner, runner, gates, workflows
+  │     ├── pipeline      the built-in stages of the standard plugin `ostra`, in process
   │     ├── executors     native agent loop, or a harness CLI in a PTY
   │     ├── policy        every tool call passes here first
   │     └── store         SQLite event log per workspace
@@ -33,18 +34,21 @@ Then the engine waits. After this point, each change starts from an event:
 
 ## The crates
 
-Ostra has fifteen crates in one Cargo workspace. Each crate has one job.
+Ostra has 18 crates in one Cargo workspace. Each crate has one job.
 
 | Crate | What it owns |
 | --- | --- |
-| `ostra-core` | Ids, settings and route resolution, pipeline enums, submit schemas, the event types, API types, the `Executor` and `ExecutionHost` traits, every derived path |
+| `ostra-core` | Ids, settings and route resolution, pipeline enums, submit schemas, the event types, API types, the book format and its storage, the `Executor` and `ExecutionHost` traits, every derived path |
 | `ostra-sandbox` | The sandbox for agent commands and project programs: profiles, the bubblewrap and Seatbelt backends, the egress proxy, decoys, and one OS layer for each platform |
 | `ostra-store` | SQLite: the workspace database, the machine registry, each project's lesson memory |
 | `ostra-policy` | Guards and permissions over canonical tool calls, and the bash parser |
 | `ostra-tools` | Native tool implementations: Read, Write, Edit, Bash, Grep, Glob, Skill, WebFetch, and the other native tools |
 | `ostra-providers` | Streaming clients for Anthropic and OpenAI, retry, and a scripted provider for tests |
-| `ostra-agents` | The embedded prompts, skills, and refs, prompt rendering for each executor, typed spawn structs, and the repo brief |
-| `ostra-engine` | Event-sourced session state, the pure planner, judges, the runner, the spawn factory |
+| `ostra-sdk` | The plugin SDK: the `Plugin` trait's helpers, the typed result contracts, the workflow builders, and the stdio transport |
+| `ostra-standard` | The definitions of the standard plugin `ostra`: its agent files and its default workflows |
+| `ostra-agents` | The embedded prompts, skills, and refs, the agent catalog, prompt rendering for each executor, typed spawn structs, and the repo brief |
+| `ostra-engine` | Event-sourced session state, the pure planner, the runner, gates, workflows, messages, and the `Pipeline` trait |
+| `ostra-default-plugin` | The standard plugin's pipeline: one folder per built-in stage (`stages/<stage>/`) with its state, state changes, planning, judges, and board cards, plus the board assembly, the step effects, and the spawn factory |
 | `ostra-exec-native` | The native agent loop: a provider, the tools, and the policy in one loop |
 | `ostra-exec-harness` | Harness executors: the PTY, one adapter per CLI, the hook bridge, the MCP stdio shim |
 | `ostra-code` | A tokenizer, the code index of each project, a language server client, and the code providers for the Files view |
@@ -60,37 +64,47 @@ layer 0   ostra-core                     depends on no Ostra crate
 
 layer 1   ostra-store      → core
           ostra-policy     → core
-          ostra-agents     → core
           ostra-providers  → core
           ostra-sandbox    → core
           ostra-notify     → core
           ostra-mcp        → core
+          ostra-sdk        → core
 
 layer 2   ostra-tools        → core, store, sandbox
           ostra-code         → core, sandbox
-          ostra-engine       → core, store, agents, sandbox
+          ostra-exec-harness → core, sandbox
+          ostra-standard     → core, sdk
 
-layer 3   ostra-exec-native  → core, store, tools, policy, providers, sandbox
-          ostra-exec-harness → core, tools, code, sandbox
-          ostra-workspace    → core, store, engine, agents, policy, sandbox
+layer 3   ostra-agents       → core, sdk, standard
+          ostra-exec-native  → core, store, tools, policy, providers, sandbox
 
-layer 4   ostra-server       → every crate above
+layer 4   ostra-engine       → core, store, agents, sandbox
+
+layer 5   ostra-default-plugin → core, sdk, standard, agents, engine, store, sandbox
+
+layer 6   ostra-workspace    → core, store, engine, agents, default-plugin, policy, sandbox
+
+layer 7   ostra-server       → every crate above but ostra-standard, which it reaches through the plugin
 ```
 
 An arrow points to the crates that a crate depends on. No crate depends on a crate in a higher layer.
 
-Three rules keep this structure:
+Four rules keep this structure:
 
 1. `ostra-core` depends on no other Ostra crate. All other crates can use its types. Thus a type that two
    crates share is in `ostra-core`.
 2. `ostra-engine` knows no executor, no provider, and no server. From Ostra, it depends only on `ostra-core`,
    `ostra-store`, `ostra-agents`, and `ostra-sandbox`. It uses `ostra-sandbox` for the project commands that it
    runs itself.
-3. `ostra-server` is the only place where the real parts connect. It builds the providers, the executors, the
-   MCP gateway, and the notifier. It gives them to each engine through traits.
+3. `ostra-engine` knows no built-in stage. The standard plugin's pipeline in `ostra-default-plugin` depends on
+   the engine, and the engine reaches it only through its `Pipeline` trait.
+4. `ostra-server` is the only place where the real parts connect. It builds the providers, the executors, the
+   MCP gateway, the notifier, and the pipeline. It gives them to each engine through traits.
 
-`ostra-workspace` is in the same layer as the executors, for the same reason as the engine. It knows no
-provider, executor, or server. An open workspace needs these items from the process:
+`ostra-workspace` is above the engine and the standard plugin, because it reads the default workflows of the
+standard plugin for settings checks and new workspaces. It also gives each engine of an open workspace the
+standard pipeline (`ostra_default_plugin::pipeline()` in `runtime.rs`). It knows no provider, executor, or server. An open workspace needs these items from
+the process:
 
 - The registry.
 - The global config.
@@ -112,7 +126,7 @@ The engine decides the next action of a session. That decision must be the same 
 If the engine imports an executor, a provider, or the web server, that part changes the decision. Then a
 special behavior of a harness becomes a planner branch, and a test needs a real HTTP stack.
 
-Thus the engine gets all outside data through three traits, and the server implements them.
+Thus the engine gets all outside data through four traits, and the server implements them.
 
 **`Services`** (`crates/ostra-engine/src/services.rs`) holds all the requests that the engine makes to the
 outside:
@@ -121,6 +135,8 @@ outside:
   edit in Settings applies to the next execution without a restart.
 - `executor(kind)` returns the executor for `native` or `harness:<name>`.
 - `factory()` returns the spawn factory.
+- `pipeline()` returns the pipeline that runs the built-in stages. The server gives the standard plugin's
+  pipeline (`ostra_default_plugin::pipeline()`).
 - `judge(route, system, user, schema, effort)` makes one judge call. A judge call is one model request with a
   forced `decide` tool. The input of this tool must match the schema.
 - `notify(notice)` asks for a push notification. The server decides if push is on.
@@ -136,7 +152,24 @@ outside:
 - The effort.
 
 The engine decides which agent to spawn and with which inputs. The factory decides the form of the spawn for
-Claude Code, Codex, or the native loop.
+Claude Code, Codex, or the native loop. The standard plugin's factory is `AgentsFactory` in
+`crates/ostra-default-plugin/src/factory.rs`.
+
+**`Pipeline`** (`crates/ostra-engine/src/pipeline.rs`) holds the built-in stages: research, track, spec,
+stakes, plan, build, feedback, closing, and book. The engine holds only the generic parts: the event log, the
+runner, slots, the budget, gates, workflows, custom and plugin stages, and messages between subagents. The
+pipeline adds the rest in process:
+
+- Its own state in each session, which the engine keeps as an opaque box (`SessionState::ext`).
+- The state changes of the events that only the built-in stages read.
+- The planning of each built-in stage, and the effects of the steps that only it plans (`Step::Pipeline`).
+- The judges' inputs and schemas, the YOLO answers, and the checks of gate answers.
+- The checks of a submit at submit time, such as the docs stage's checks of a `documentation` submit.
+- The session views: the board, the run labels, and the artifacts.
+
+The fold stays a pure function of the log, because a pipeline is deterministic Rust code in the process. The
+engine never calls it over stdio. The standard plugin implements the trait as `OstraPipeline` in
+`crates/ostra-default-plugin/src/pipeline/`.
 
 **`Executor`** (`crates/ostra-core/src/exec.rs`) has one method:
 
@@ -155,9 +188,10 @@ When the execution runs, the executor calls back through `ExecutionHost`. The en
 - `ask_permission` asks for your answer when the policy needs it.
 - `record_message` records messages, so that Ostra can resume a native execution.
 - `yolo` reads the YOLO setting, because you can turn YOLO on during an execution.
+- `check_submit` runs the pipeline's checks of a submit, after the shape check.
 
-The tests show the result of this design. `crates/ostra-engine/tests/runner.rs` runs a real engine with fake
-services. `tests/conformance/main.rs` checks planner decisions with no executor. In production, the same engine
+The tests show the result of this design. `crates/ostra-default-plugin/tests/runner.rs` runs a real engine
+with the standard pipeline and fake services. `tests/conformance/main.rs` checks planner decisions with no executor. In production, the same engine
 code runs with the server's implementations in `crates/ostra-server/src/services.rs`.
 
 When the engine needs a new thing from outside, the thing becomes a new method on one of these traits. It
@@ -167,7 +201,7 @@ never becomes a dependency.
 
 The API types are in `ostra-core`, and they have the `#[ts(export)]` attribute from the `ts-rs` crate.
 `cargo test -p ostra-core` writes one TypeScript file for each type into `web/src/api/gen/`. The
-`TS_RS_EXPORT_DIR` setting in `.cargo/config.toml` sets this path. There are 335 files. They hold
+`TS_RS_EXPORT_DIR` setting in `.cargo/config.toml` sets this path. There are 373 files. They hold
 session views, gate payloads, execution deltas, WebSocket messages, settings, and validation issues.
 
 Thus the browser types always agree with the server types. If you rename a field in Rust, regenerate the

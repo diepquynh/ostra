@@ -146,10 +146,10 @@ pub enum StageKind {
     Epa,
     WriteTest,
     TestReview,
-    /// Logs and databases written before books say `module-docs`.
-    #[serde(alias = "module-docs")]
+    /// Logs and databases written before books say `module-docs`, and the retired architecture
+    /// run says `architecture`.
+    #[serde(alias = "module-docs", alias = "architecture")]
     Documentation,
-    Architecture,
     BookWrite,
     Verify,
     PromptGen,
@@ -162,6 +162,8 @@ pub enum StageKind {
     SkillApproval,
     GenerateSkill,
     GenerateInventory,
+    /// Rule WF4: a workflow node that runs a custom agent or a plugin stage.
+    Custom,
 }
 
 impl StageKind {
@@ -176,9 +178,9 @@ impl StageKind {
             Stakes | Plan | PlanApproval => Lane::Design,
             Implement | Autofix | Handoff | Rescue | Verify | PromptGen | GenerateSkill
             | GenerateInventory => Lane::Build,
-            Review | Staging | Format | ImplementationReview => Lane::Review,
+            Review | Staging | Format | ImplementationReview | Custom => Lane::Review,
             ClosingGate | Epa | WriteTest | TestReview => Lane::Test,
-            Documentation | Architecture | BookWrite => Lane::Docs,
+            Documentation | BookWrite => Lane::Docs,
             Completion => Lane::Done,
         }
     }
@@ -202,6 +204,24 @@ pub struct PhaseInfo {
     pub file: Option<std::path::PathBuf>,
     /// Plan's one-sentence reason for `Test policy: Skip`.
     pub test_rationale: Option<String>,
+    /// Rule WD2: the other projects the phase works in, after `project`. Logs written before
+    /// multi-project phases have none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub also: Vec<String>,
+}
+
+impl PhaseInfo {
+    /// Rule WD2: every project the phase works in, `project` first.
+    pub fn projects(&self) -> Vec<String> {
+        let mut all = vec![self.project.clone()];
+        for p in &self.also {
+            if !all.contains(p) {
+                all.push(p.clone());
+            }
+        }
+        all
+    }
 }
 
 /// An open question in AskUserQuestion shape. The recommended option is listed first.

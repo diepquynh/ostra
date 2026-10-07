@@ -4,9 +4,9 @@ use crate::brief::{
     stated_in,
 };
 use crate::spawn::*;
-use ostra_core::HarnessKind;
 use ostra_core::config::{Commands, ModuleRow, ProjectProfile, ReviewRule, SkillEntry, TestType};
 use ostra_core::pipeline::QuestionAnswer;
+use ostra_core::{Contract, HarnessKind};
 
 fn all_executors() -> Vec<ExecutorKind> {
     ExecutorKind::all()
@@ -31,7 +31,6 @@ fn every_agent_definition_loads_with_the_handover_tiers() {
         (AgentName::ExecutionPathAnalyzer, Tier::Balanced),
         (AgentName::WriteTest, Tier::Balanced),
         (AgentName::Documentation, Tier::Advanced),
-        (AgentName::SystemArchitecture, Tier::Advanced),
         (AgentName::PromptGeneration, Tier::Advanced),
         (AgentName::Initializer, Tier::Balanced),
         (AgentName::QuickAnswer, Tier::Balanced),
@@ -80,11 +79,13 @@ fn read_only_agents_have_no_edit_and_quick_answer_cannot_write() {
             "{a}"
         );
     }
-    // Explore, spec, and plan write their documents through the Document tool, never a file write.
+    // Explore, spec, and plan write their documents through the Document tool, never a file write,
+    // and each holds the grant for the document its contract names (Rule CA6).
     for a in [AgentName::Explore, AgentName::GenerateSpec, AgentName::Plan] {
-        let caps = &agent_def(a).capabilities;
+        let d = agent_def(a);
+        let kind = ostra_core::doc::DocKind::for_contract(d.returns).unwrap();
         assert!(
-            caps.contains(&Capability::Document) && !caps.iter().any(|c| c.writes()),
+            d.capabilities.contains(&kind.grant()) && !d.capabilities.iter().any(|c| c.writes()),
             "{a}"
         );
     }
@@ -148,24 +149,24 @@ fn native_prompts_use_claude_tool_names_and_harness_prompts_open_with_a_vocabula
 #[test]
 fn coordination_guide_names_the_tools_per_executor() {
     let native = render_prompt(AgentName::GenerateSpec, ExecutorKind::Native).unwrap();
-    assert!(native.contains("## Subagent coordination"));
-    assert!(native.contains("`SubagentAsk`") && native.contains("`SubagentReply`"));
+    assert!(native.contains("## Messages between subagents"));
+    assert!(native.contains("`SendMessage`") && native.contains("`WaitForMessage`"));
     let claude = render_prompt(
         AgentName::FactCheck,
         ExecutorKind::Harness(HarnessKind::Claude),
     )
     .unwrap();
-    assert!(claude.contains("`mcp__ostra__subagent_ask`"));
-    assert!(claude.contains("| coordinate | mcp__ostra__subagent_list, mcp__ostra__subagent_ask, mcp__ostra__subagent_reply |"));
+    assert!(claude.contains("`mcp__ostra__send_message`"));
+    assert!(claude.contains("| coordinate | mcp__ostra__list_agents, mcp__ostra__send_message, mcp__ostra__wait_for_message |"));
     let codex = render_prompt(
         AgentName::Implementer,
         ExecutorKind::Harness(HarnessKind::Codex),
     )
     .unwrap();
-    assert!(codex.contains("`subagent_reply`"));
-    // Agents outside the pipeline's pairs get no coordination tools.
+    assert!(codex.contains("`wait_for_message`"));
+    // Agents outside the pipeline's pairs get no messaging tools.
     let advisor = render_prompt(AgentName::Advisor, ExecutorKind::Native).unwrap();
-    assert!(!advisor.contains("Subagent coordination"));
+    assert!(!advisor.contains("Messages between subagents"));
 }
 
 #[test]
@@ -363,13 +364,14 @@ fn common() -> Common {
         workspace_root: "/ws".into(),
         repo_root: "/ws/backend".into(),
         session_dir: "/ws/.ostra/sessions/s1/backend".into(),
+        work_dirs: vec![],
         repo_key: "backend".into(),
     }
 }
 
 fn roundtrip(p: &dyn SpawnParams) -> std::collections::BTreeMap<String, String> {
     let block = p.render();
-    parse_block(p.agent(), &block).unwrap_or_else(|e| panic!("{}: {e}\n{block}", p.agent()))
+    parse_block(p.contract(), &block).unwrap_or_else(|e| panic!("{}: {e}\n{block}", p.contract()))
 }
 
 #[test]
@@ -410,6 +412,7 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
             "`src/a.rs` in backend: changed since ostra-research-1.md was written".into(),
         ]),
         code_facts: None,
+        stage_limits: vec![],
     };
     assert_eq!(roundtrip(&fc)["source_check"], "refetch");
     assert!(fc.render().contains(
@@ -424,6 +427,7 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         findings: Some("HIGH, phase 3: c i".into()),
         phases_to_revise: vec![1, 3],
         master_plan: Some("/ws/s/ostra-plan-1.md".into()),
+        stage_limits: vec![],
     };
     assert_eq!(
         roundtrip(&plan)["projects_in_scope"],
@@ -484,42 +488,83 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         common: common(),
         implementer_reports: vec!["/r/i1.md".into(), "/r/i2.md".into()],
         existing_book: Some("/ws/.ostra/docs/api_web/book.json".into()),
-        area: None,
+        mode: DocsMode::Part,
+        reference: Some("/s/ostra-docs-drafts/api/reference.md".into()),
+        book_parts: vec![],
         extra: Extras::default(),
     };
     roundtrip(&md);
-    let area = DocumentationParams {
-        area: Some(DocsAreaScope {
-            id: "server-and-1-more".into(),
-            title: "server, other files".into(),
-            paths: vec!["server/**".into()],
-            rest: true,
-            others: vec![("engine".into(), vec!["engine/**".into()])],
-        }),
+    // Rule B11: a session-wide run names the parts of the book.
+    let wide = DocumentationParams {
+        mode: DocsMode::Survey,
+        book_parts: vec!["api".into(), "web".into()],
         ..md.clone()
     };
-    roundtrip(&area);
-    let text = area.render();
-    assert!(
-        text.contains("Area: server, other files (server-and-1-more)"),
-        "{text}"
-    );
-    assert!(
-        text.contains("Area paths: server/**, and every file no other area covers"),
-        "{text}"
-    );
-    assert!(text.contains("Other areas: engine (engine/**)"), "{text}");
-    let arch = ArchitectureParams {
-        common: common(),
-        book_parts: "/r/ostra-docs-parts.json".into(),
-        projects: vec![
-            ("api".into(), "/ws/api".into()),
-            ("web".into(), "/ws/web".into()),
-        ],
-        existing_book: None,
-        extra: Extras::default(),
+    roundtrip(&wide);
+    assert!(wide.render().contains("Book parts: api, web"));
+    let survey = DocumentationParams {
+        mode: DocsMode::Survey,
+        ..md.clone()
     };
-    roundtrip(&arch);
+    roundtrip(&survey);
+    assert!(survey.render().contains("Docs mode: survey"));
+    assert!(
+        survey
+            .render()
+            .contains("Reference: /s/ostra-docs-drafts/api/reference.md")
+    );
+    let synthesis = DocumentationParams {
+        mode: DocsMode::Synthesis {
+            round: 2,
+            drafts: "/s/ostra-docs-drafts/api".into(),
+            findings: vec!["slots: Fail, HIGH, ...".into()],
+        },
+        ..md.clone()
+    };
+    roundtrip(&synthesis);
+    let text = synthesis.render();
+    for line in [
+        "Docs mode: synthesis",
+        "Round: 2",
+        "Drafts: /s/ostra-docs-drafts/api",
+        "Findings: - slots: Fail, HIGH, ...",
+    ] {
+        assert!(text.contains(line), "{line}: {text}");
+    }
+    let page = DocumentationParams {
+        mode: DocsMode::Page(Box::new(DocsPageScope {
+            id: "executors".into(),
+            title: "Executors".into(),
+            part: Some("api".into()),
+            group: "How it works".into(),
+            covers: "Native and harness runs.".into(),
+            sources: vec!["crates/ostra-exec-native/".into()],
+            inventory: vec!["Turn loop (crates/ostra-exec-native/src/lib.rs)".into()],
+            others: vec![(
+                "limits".into(),
+                "Spend and limits".into(),
+                "Slots and budgets.".into(),
+            )],
+            drafts: "/s/ostra-docs-drafts/api".into(),
+            draft: Some("/s/ostra-docs-drafts/api/executors.md".into()),
+            instructions: vec!["Move the slot rules to `limits.md`.".into()],
+        })),
+        ..md.clone()
+    };
+    roundtrip(&page);
+    let text = page.render();
+    for line in [
+        "Docs mode: page",
+        "Page: Executors (executors)",
+        "Page part: api",
+        "Page group: How it works",
+        "Page inventory: Turn loop (crates/ostra-exec-native/src/lib.rs)",
+        "Other pages: `limits` Spend and limits: Slots and budgets.",
+        "Draft: /s/ostra-docs-drafts/api/executors.md",
+        "Revise: - Move the slot rules to `limits.md`.",
+    ] {
+        assert!(text.contains(line), "{line}: {text}");
+    }
     let pg = PromptGenParams {
         common: common(),
         task: "Write a skill".into(),
@@ -604,70 +649,64 @@ fn initializer_modes_render_their_mode_and_required_lines() {
 #[test]
 fn parse_block_refuses_bad_blocks() {
     let ok = "Task: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n";
-    assert!(parse_block(AgentName::Explore, ok).is_ok());
+    assert!(parse_block(Contract::Research, ok).is_ok());
     let missing = "Task: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\n";
     assert!(
-        parse_block(AgentName::Explore, missing)
+        parse_block(Contract::Research, missing)
             .unwrap_err()
             .contains("Repo key")
     );
     let bad_key = ok.replace("Repo key: a", "Repo key: Backend");
     assert!(
-        parse_block(AgentName::Explore, &bad_key)
+        parse_block(Contract::Research, &bad_key)
             .unwrap_err()
             .contains("slug")
     );
     let relative = ok.replace("Repo root: /ws/a", "Repo root: ws/a");
     assert!(
-        parse_block(AgentName::Explore, &relative)
+        parse_block(Contract::Research, &relative)
             .unwrap_err()
             .contains("absolute")
     );
 
     let base = "Workspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\nReport file: /ws/s/r.md\n";
     assert!(
-        parse_block(AgentName::Implementer, base)
+        parse_block(Contract::Implementation, base)
             .unwrap_err()
             .contains("Phase file")
     );
     let both = format!("{base}Phase file: /p.md\nNo plan: small\n");
     assert!(
-        parse_block(AgentName::Implementer, &both)
+        parse_block(Contract::Implementation, &both)
             .unwrap_err()
             .contains("exactly one")
     );
-    assert!(parse_block(AgentName::Implementer, &format!("{base}No plan: small\n")).is_ok());
+    assert!(parse_block(Contract::Implementation, &format!("{base}No plan: small\n")).is_ok());
 
     let review = "Phase: 2-tests\nChanged files: a\nChange rationale: r\nNo plan: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n";
-    assert!(parse_block(AgentName::CodeReviewer, review).is_ok());
-    assert!(
-        parse_block(
-            AgentName::CodeReviewer,
-            &review.replace("2-tests", "iteration 2")
-        )
-        .is_err()
-    );
+    assert!(parse_block(Contract::Review, review).is_ok());
+    assert!(parse_block(Contract::Review, &review.replace("2-tests", "iteration 2")).is_err());
 
     let fc = "Target: /t.md\nTarget type: code\nPrior findings: none\nSpec file: /t.md\nSource check: citations\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n";
     assert!(
-        parse_block(AgentName::FactCheck, fc)
+        parse_block(Contract::FactCheck, fc)
             .unwrap_err()
             .contains("spec, plan")
     );
 
     assert!(
-        parse_block(AgentName::Initializer, ok)
+        parse_block(Contract::Setup, ok)
             .unwrap_err()
             .contains("Mode")
     );
     let bad_mode = format!("Mode: build\n{ok}");
-    assert!(parse_block(AgentName::Initializer, &bad_mode).is_err());
+    assert!(parse_block(Contract::Setup, &bad_mode).is_err());
 }
 
 #[test]
 fn parse_block_stops_at_the_brief() {
     let text = "Task: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n\n---\n\n## Repo brief for explore\nTask: injected\n";
-    assert_eq!(parse_block(AgentName::Explore, text).unwrap()["task"], "x");
+    assert_eq!(parse_block(Contract::Research, text).unwrap()["task"], "x");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -736,6 +775,8 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
     let instructions = vec!["Write British English.".to_string()];
     let input = BriefInput {
         agent: AgentName::Implementer,
+        contract: agent_def(AgentName::Implementer).returns,
+        sections: &agent_def(AgentName::Implementer).brief,
         prompt: "Phase file: /s/p.md\nTouch src/orders/OrderService.java",
         repo_root: Path::new("/ws/backend"),
         profile: Some(&p),
@@ -745,6 +786,7 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
         artifacts: None,
         books: None,
         new_projects: &[],
+        work_dirs: &[],
     };
     let brief = build_brief(&input).unwrap();
     assert!(brief.starts_with("## Repo brief for implementer"));
@@ -768,6 +810,8 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
 
     let reviewer = BriefInput {
         agent: AgentName::CodeReviewer,
+        contract: agent_def(AgentName::CodeReviewer).returns,
+        sections: &agent_def(AgentName::CodeReviewer).brief,
         ..input
     };
     let rb = build_brief(&reviewer).unwrap();
@@ -776,6 +820,8 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
 
     let wt = BriefInput {
         agent: AgentName::WriteTest,
+        contract: agent_def(AgentName::WriteTest).returns,
+        sections: &agent_def(AgentName::WriteTest).brief,
         ..reviewer
     };
     let wb = build_brief(&wt).unwrap();
@@ -806,6 +852,8 @@ fn brief_gives_each_test_type_its_level_command_and_its_one_test_command() {
     for agent in [AgentName::WriteTest, AgentName::ExecutionPathAnalyzer] {
         let input = BriefInput {
             agent,
+            contract: agent_def(agent).returns,
+            sections: &agent_def(agent).brief,
             prompt: "",
             repo_root: Path::new("/ws/backend"),
             profile: Some(&p),
@@ -815,6 +863,7 @@ fn brief_gives_each_test_type_its_level_command_and_its_one_test_command() {
             artifacts: None,
             books: None,
             new_projects: &[],
+            work_dirs: &[],
         };
         let brief = build_brief(&input).unwrap();
         assert!(
@@ -837,6 +886,8 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
     let p = profile();
     let input = BriefInput {
         agent: AgentName::Explore,
+        contract: agent_def(AgentName::Explore).returns,
+        sections: &agent_def(AgentName::Explore).brief,
         prompt: "Task: x",
         repo_root: Path::new("/r"),
         profile: Some(&p),
@@ -846,6 +897,7 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
         artifacts: None,
         books: None,
         new_projects: &[],
+        work_dirs: &[],
     };
     let once = augment("Task: x", &input);
     assert_eq!(augment(&once, &input), once);
@@ -856,6 +908,8 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
     assert_eq!(augment("Task: x", &none), "Task: x");
     let init = BriefInput {
         agent: AgentName::Initializer,
+        contract: agent_def(AgentName::Initializer).returns,
+        sections: &agent_def(AgentName::Initializer).brief,
         profile: Some(&p),
         ..none
     };
@@ -893,6 +947,7 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
     }];
     let with_new = BriefInput {
         new_projects: &created,
+        work_dirs: &[],
         ..init_docs
     };
     let brief = build_brief(&with_new).unwrap();
@@ -914,7 +969,6 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
             projects: vec!["api".into(), "web".into()],
             updated_at: chrono::DateTime::UNIX_EPOCH,
             sections: 7,
-            has_architecture: true,
         }],
         search_tool: None,
     };
@@ -924,9 +978,7 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
     };
     let brief = build_brief(&with_books).unwrap();
     assert!(brief.contains("## Workspace documentation"));
-    assert!(brief.contains(
-        "- `/ws/.ostra/docs/api_web/index.md`: api, web (7 sections, with the system architecture)"
-    ));
+    assert!(brief.contains("- `/ws/.ostra/docs/api_web/index.md`: api, web (7 sections)"));
     assert!(brief.contains("Read the sections that bear on your task."));
     let searchable = BooksBrief {
         search_tool: Some("mcp__ostra__docs_search".into()),
@@ -981,4 +1033,185 @@ fn classify_judge_names_attached_files_in_research_tasks() {
     let p = crate::judge_prompt("classify").unwrap();
     assert!(p.contains("every attached file, attached folder, and upload"));
     assert!(p.contains("Rules C1, C3"));
+}
+
+// Rule WD1: a run in several projects names each folder. A run in one project keeps the old block.
+#[test]
+fn spawn_lists_work_dirs_only_for_several_projects() {
+    let one = ImplementerParams {
+        common: common(),
+        report_file: "/ws/s/backend/ostra-implementer-phase-1.md".into(),
+        work: WorkSource::PhaseFile("/ws/s/ostra-plan-1-phase-1-data.md".into()),
+        unblock: None,
+        extra: Extras::default(),
+    };
+    assert!(!one.render().contains("Work dirs"), "{}", one.render());
+    assert!(!roundtrip(&one).contains_key("work_dirs"));
+
+    let mut c = common();
+    c.work_dirs = vec![
+        ("backend".into(), "/ws/backend".into()),
+        ("web".into(), "/elsewhere/web".into()),
+    ];
+    let two = ImplementerParams { common: c, ..one };
+    let block = two.render();
+    assert!(
+        block.contains("\nWork dirs:\n  backend: /ws/backend\n  web: /elsewhere/web\n"),
+        "{block}"
+    );
+    assert!(block.contains("\nRepo root: /ws/backend\n"), "{block}");
+    assert_eq!(
+        roundtrip(&two)["work_dirs"],
+        "backend: /ws/backend\nweb: /elsewhere/web"
+    );
+    assert_eq!(
+        two.to_json()["common"]["work_dirs"][1],
+        serde_json::json!(["web", "/elsewhere/web"])
+    );
+}
+
+// Rule WD3: the plan and its fact-check get the later stages' limits, and an empty list renders
+// nothing.
+#[test]
+fn plan_spawn_carries_the_stage_limits() {
+    let limits = vec![
+        "build: implementer (harness:codex) one project".to_string(),
+        "review: code-reviewer (native) several projects".to_string(),
+    ];
+    let plan = PlanParams {
+        common: common(),
+        spec_file: "/ws/s/ostra-spec-1.md".into(),
+        projects_in_scope: vec![],
+        code_facts: None,
+        findings: None,
+        phases_to_revise: vec![],
+        master_plan: None,
+        stage_limits: limits.clone(),
+    };
+    let block = plan.render();
+    assert!(
+        block.contains(
+            "\nStage limits:\n  build: implementer (harness:codex) one project\n  review: code-reviewer (native) several projects\n"
+        ),
+        "{block}"
+    );
+    assert_eq!(roundtrip(&plan)["stage_limits"], limits.join("\n"));
+    let bare = PlanParams {
+        stage_limits: vec![],
+        ..plan
+    };
+    assert!(!bare.render().contains("Stage limits"));
+
+    let fc = FactCheckParams {
+        common: common(),
+        target: "/ws/s/ostra-plan-1.md".into(),
+        target_type: TargetType::Plan,
+        prior_findings: "none".into(),
+        spec_file: "/ws/s/ostra-spec-1.md".into(),
+        source_check: SourceCheck::Citations,
+        research_docs: vec![],
+        changed_since_research: None,
+        code_facts: None,
+        stage_limits: limits.clone(),
+    };
+    assert_eq!(roundtrip(&fc)["stage_limits"], limits.join("\n"));
+}
+
+// Rule WD1: the brief gives each other work dir its folder, commands, skills, and instruction
+// files, and a re-render adds nothing.
+#[test]
+fn brief_lists_the_other_work_dirs() {
+    let p = profile();
+    let web = crate::brief::WorkDirBrief {
+        key: "web".into(),
+        path: "/elsewhere/web".into(),
+        profile: Some(ProjectProfile {
+            commands: Commands {
+                build: Some("npm run build".into()),
+                ..Default::default()
+            },
+            skills: vec![SkillEntry {
+                name: "web-page".into(),
+                kind: "creation".into(),
+                path: ".agents/skills/web-page/SKILL.md".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        inventory: Some("inventory".into()),
+        project_docs: vec![ProjectDoc {
+            path: "/elsewhere/web/AGENTS.md".into(),
+            content: format!("Run npm test.\n{}", "x".repeat(13000)),
+        }],
+    };
+    let dirs = [web];
+    let input = BriefInput {
+        agent: AgentName::Implementer,
+        contract: agent_def(AgentName::Implementer).returns,
+        sections: &agent_def(AgentName::Implementer).brief,
+        prompt: "Task: x",
+        repo_root: Path::new("/ws/backend"),
+        profile: Some(&p),
+        inventory: None,
+        instructions: &[],
+        project_docs: &[],
+        artifacts: None,
+        books: None,
+        new_projects: &[],
+        work_dirs: &dirs,
+    };
+    let brief = build_brief(&input).unwrap();
+    assert!(brief.contains(crate::brief::WORK_DIRS_HEADING), "{brief}");
+    assert!(brief.contains("### `web` at `/elsewhere/web`"), "{brief}");
+    assert!(brief.contains("- **build**: `npm run build`"), "{brief}");
+    assert!(
+        brief.contains("`web-page` at `/elsewhere/web/.agents/skills/web-page/SKILL.md`"),
+        "{brief}"
+    );
+    assert!(
+        brief.contains(&format!(
+            "Inventory: `{}`",
+            ostra_core::paths::project_inventory(Path::new("/elsewhere/web")).display()
+        )),
+        "{brief}"
+    );
+    assert!(brief.contains("#### `/elsewhere/web/AGENTS.md`"), "{brief}");
+    assert!(brief.contains("Run npm test."), "{brief}");
+    assert!(
+        brief.contains("(truncated; read the file for the rest)"),
+        "{brief}"
+    );
+    let once = augment("Task: x", &input);
+    assert_eq!(augment(&once, &input), once);
+}
+
+// Rules WD1 and WD3: every agent that reads or writes project code learns `Work dirs:`, and the
+// plan and its fact-check split phases by `Stage limits:`.
+#[test]
+fn prompts_describe_work_dirs_and_stage_limits() {
+    for agent in [
+        "code-reviewer",
+        "documentation",
+        "execution-path-analyzer",
+        "explore",
+        "fact-check",
+        "generate-spec",
+        "implementer",
+        "plan",
+        "prompt-generation",
+        "write-test",
+    ] {
+        let text = asset_text(&format!("agents/{agent}/prompt.md")).unwrap();
+        assert!(
+            text.contains("| **work dirs** |")
+                && text.contains("the folders listed in `Work dirs:`"),
+            "{agent} does not describe `Work dirs:`"
+        );
+    }
+    let plan = asset_text("agents/plan/prompt.md").unwrap();
+    for needle in ["P8a", "Rule WD3", "`Stage limits:`", "`api, web`"] {
+        assert!(plan.contains(needle), "plan prompt lacks {needle}");
+    }
+    let fc = asset_text("agents/fact-check/prompt.md").unwrap();
+    assert!(fc.contains("Rule WD3") && fc.contains("`Stage limits:`"));
 }
