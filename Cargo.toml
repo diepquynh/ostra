@@ -92,7 +92,7 @@ http = "1"
 libc = "0.2"
 vt100 = "0.16"
 windows-sys = "0.61"
-junction = "1"
+junction = "2"
 dunce = "1"
 
 [profile.dev]
