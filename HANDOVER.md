@@ -1418,7 +1418,7 @@ Each workspace opens as one console, laid out like a code editor:
   banner.
 - **Left dock with three tabs.** Sessions is a tree: each session, its execution groups (one agent on one
   project, or one agent across the session for spec, plan, their fact-checks,
-  and quick answers, which cover every project in scope and carry no project tag), the runs of each group with their live one-line summary, and the session's artifacts. `tree_patch`
+  quick answers, and the session-wide docs runs, which cover every project in scope and carry no project tag), the runs of each group with their live one-line summary, and the session's artifacts. `tree_patch`
   messages keep it current without a refetch. Files shows one project: a lazy folder tree with git
   marks, dotfiles on request, "Find a file", New file and New folder, and "Changed by sessions", which names
   the execution that last changed each file. New file and New folder open a name field in the last folder

@@ -277,17 +277,22 @@ pub enum ExecPurpose {
 }
 
 impl ExecPurpose {
-    /// A run that covers every project in the session's scope. It still works in the primary
-    /// project's folder, but belongs to no single project.
+    /// A run that covers every project in the session's scope, so it belongs to no single project
+    /// and the console shows no project tag for it.
     pub fn spans_session(&self) -> bool {
-        matches!(
-            self,
+        match self {
             ExecPurpose::Spec { .. }
-                | ExecPurpose::FactCheck { .. }
-                | ExecPurpose::Plan { .. }
-                | ExecPurpose::Architecture
-                | ExecPurpose::QuickAnswer
-        )
+            | ExecPurpose::FactCheck { .. }
+            | ExecPurpose::Plan { .. }
+            | ExecPurpose::Architecture
+            | ExecPurpose::QuickAnswer => true,
+            // Rule B10: a session-wide docs run documents every documented project.
+            ExecPurpose::Docs { project, .. }
+            | ExecPurpose::DocsSurvey { project }
+            | ExecPurpose::DocsCheck { project, .. }
+            | ExecPurpose::DocsSynthesis { project, .. } => project == crate::book::SESSION_DOCS,
+            _ => false,
+        }
     }
 
     /// The label of one run within its execution group, before a pass number is added.
@@ -1215,6 +1220,21 @@ impl GatePayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_wide_docs_runs_span_the_session() {
+        let survey = |project: &str| ExecPurpose::DocsSurvey {
+            project: project.into(),
+        };
+        assert!(survey(crate::book::SESSION_DOCS).spans_session());
+        assert!(!survey("api").spans_session());
+        let page = ExecPurpose::Docs {
+            project: crate::book::SESSION_DOCS.into(),
+            page: Some("flow".into()),
+            round: 0,
+        };
+        assert!(page.spans_session());
+    }
 
     #[test]
     fn run_labels() {
