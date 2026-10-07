@@ -1033,8 +1033,9 @@ on two pages that did not link to each other.
   project key: `docs-survey _session`, `docs _session/<page>`, and one `docs_rounds` gate for the session. Each run
   works in every documented project (Rule WD1). Its session dir is the session root, and its drafts folder is
   `ostra-docs-drafts/_session/`.
-- **Book parts.** Each run gets `Book parts:`, a list of each documented project and then `_cross`
-  (`book::CROSS_PART`), the part across projects (Rule B11). The survey gives each page a `part`. It puts each
+- **Book parts.** Each run gets `Book parts:`, a list of each documented project. The book also has the part
+  across projects, `_cross` (`book::CROSS_PART`), which the line does not list because every book has it (Rule
+  B11). The survey gives each page a `part`. It puts each
   flow, contract, and setup that two or more projects take part in, such as an end-to-end test, on a page in
   `_cross`. It writes one overview for each part with a page in `part_overviews`, and the introduction of the
   whole book in `overview`.

@@ -497,11 +497,11 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
     // Rule B11: a session-wide run names the parts of the book.
     let wide = DocumentationParams {
         mode: DocsMode::Survey,
-        book_parts: vec!["api".into(), "web".into(), "_cross".into()],
+        book_parts: vec!["api".into(), "web".into()],
         ..md.clone()
     };
     roundtrip(&wide);
-    assert!(wide.render().contains("Book parts: api, web, _cross"));
+    assert!(wide.render().contains("Book parts: api, web"));
     let survey = DocumentationParams {
         mode: DocsMode::Survey,
         ..md.clone()

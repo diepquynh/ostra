@@ -6730,7 +6730,11 @@ fn b10_one_pipeline_documents_every_project_of_the_session() {
     let r = h.spawn_step("spawn documentation docs-survey _session");
     assert_eq!(r.projects(), ["a", "b"], "Rule WD1: it works in both");
     assert_eq!(r.session_dir, root());
-    assert_eq!(r.inputs.ox().docs_parts, ["a", "b", "_cross"]);
+    assert_eq!(
+        r.inputs.ox().docs_parts,
+        ["a", "b"],
+        "the part across projects is implied"
+    );
     assert_eq!(
         r.inputs.ox().docs_reference,
         Some(root().join("ostra-docs-drafts/_session/reference.md"))

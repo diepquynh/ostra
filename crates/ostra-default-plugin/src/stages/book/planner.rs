@@ -163,10 +163,9 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                 }
             }
         }
-        // Rule B11: each documented project is a part, and the part across projects comes last.
-        let mut parts = projects.to_vec();
-        parts.push(ostra_core::book::CROSS_PART.into());
-        let base = docs_base(s, &passed, parts);
+        // Rule B11: each documented project is a part. The part across projects is always there,
+        // so the spawn does not list it.
+        let base = docs_base(s, &passed, projects.to_vec());
         let at = RunAt {
             key: ostra_core::book::SESSION_DOCS.into(),
             main: main.clone(),

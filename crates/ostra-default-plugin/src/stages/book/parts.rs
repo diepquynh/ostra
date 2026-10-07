@@ -15,12 +15,16 @@ pub fn check_with_params(v: &serde_json::Value, params: &serde_json::Value) -> V
         Err(e) => return vec![e.to_string()],
     };
     let mut issues = check_documentation(&s);
-    let parts: Vec<String> = params
+    let mut parts: Vec<String> = params
         .get("book_parts")
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
     if parts.is_empty() || s.status != SubmitStatus::Ok {
         return issues;
+    }
+    // Every session-wide book has the part across projects. Runs from before this listed it.
+    if !parts.iter().any(|p| p == CROSS_PART) {
+        parts.push(CROSS_PART.into());
     }
     let projects: Vec<&str> = parts
         .iter()
@@ -143,6 +147,9 @@ mod tests {
             "{:?}",
             check_with_params(&ok, &params)
         );
+        // The spawn lists only the projects, and the part across projects is always there.
+        let projects_only = serde_json::json!({"book_parts": ["a", "b"]});
+        assert!(check_with_params(&ok, &projects_only).is_empty());
         let bad = wide(
             serde_json::json!([
                 page("flow", Some("c")),
