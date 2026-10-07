@@ -1,7 +1,7 @@
 //! Rules D4, D5, and D10: the plan, its fact-check, and its approval.
 
-use super::*;
 use crate::inputs::OstraInputs;
+use crate::planner::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use ostra_core::Contract;

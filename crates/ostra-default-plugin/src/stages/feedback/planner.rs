@@ -1,6 +1,6 @@
 //! Rule F1: feedback rounds until the user accepts the implementation.
 
-use super::*;
+use crate::planner::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use ostra_core::event::{GatePayload, JudgeKind};

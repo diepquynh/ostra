@@ -3,6 +3,9 @@
 //! from the update this writer hands it (Rules B5 and B6).
 
 pub mod checks;
+pub mod fold;
+pub mod planner;
+pub mod scan;
 pub mod track;
 
 use ostra_core::Contract;
@@ -13,6 +16,8 @@ use ostra_core::book::{
 use ostra_core::submit::SubmitStatus;
 
 pub use checks::{check_documentation, mechanical_issues, unmentioned_refs};
+pub use fold::*;
+pub use planner::*;
 pub use track::DocsTrack;
 
 /// Rule B10: pages one survey may plan, each written by its own writer.

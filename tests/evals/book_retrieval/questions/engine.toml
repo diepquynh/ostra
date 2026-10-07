@@ -130,13 +130,13 @@ gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/state.rs"]
 id = "engine-022"
 kind = "paraphrase"
 question = "Which review findings does the engine fix by itself without sending them back to the implementer?"
-gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-default-plugin/src/autofix.rs"]
+gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-default-plugin/src/stages/build/autofix.rs"]
 
 [[case]]
 id = "engine-023"
 kind = "lexical"
 question = "What text shapes can parse_fix turn into an automatic edit?"
-gold = ["crates/ostra-default-plugin/src/autofix.rs"]
+gold = ["crates/ostra-default-plugin/src/stages/build/autofix.rs"]
 
 [[case]]
 id = "engine-024"
@@ -172,7 +172,7 @@ gold = ["crates/ostra-engine/src/state.rs"]
 id = "engine-029"
 kind = "paraphrase"
 question = "After the user stops one agent by hand, can autopilot or the advisor retry that step?"
-gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-default-plugin/src/init.rs"]
+gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-default-plugin/src/stages/init/planner.rs"]
 
 [[case]]
 id = "engine-030"
@@ -238,19 +238,19 @@ gold = ["crates/ostra-engine/src/plan.rs"]
 id = "engine-040"
 kind = "paraphrase"
 question = "What happens to a project that an agent creates in the middle of a build before its phases can continue?"
-gold = ["crates/ostra-default-plugin/src/init.rs", "crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner/mod.rs"]
+gold = ["crates/ostra-default-plugin/src/stages/init/planner.rs", "crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-041"
 kind = "paraphrase"
 question = "How many times does the advisor look at a failed setup step of a new project before the user is asked?"
-gold = ["crates/ostra-default-plugin/src/init.rs"]
+gold = ["crates/ostra-default-plugin/src/stages/init/planner.rs"]
 
 [[case]]
 id = "engine-042"
 kind = "lexical"
 question = "What are MAX_SCOUTS and MAX_DEFAULT_GENERATE, and what do they limit during project setup?"
-gold = ["crates/ostra-default-plugin/src/init.rs"]
+gold = ["crates/ostra-default-plugin/src/stages/init/planner.rs"]
 
 [[case]]
 id = "engine-043"

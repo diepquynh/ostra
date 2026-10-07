@@ -5,23 +5,23 @@
 
 pub use ostra_standard::*;
 
-pub mod autofix;
-pub mod book;
 pub mod context;
 pub mod data;
-pub mod docs_scan;
 pub mod factory;
 pub mod fold;
-pub mod init;
 pub mod inputs;
 pub mod judge;
 pub mod judge_input;
 mod pipeline;
 pub mod planner;
+pub mod stages;
 pub mod steps;
 pub mod view;
 
 pub use pipeline::{FORMAT_NOT_APPROVED, OstraPipeline};
+pub use stages::book::scan as docs_scan;
+pub use stages::build::autofix;
+pub use stages::{book, init};
 
 /// The extension traits that hold the built-in stages' logic over the engine's types.
 pub mod prelude {

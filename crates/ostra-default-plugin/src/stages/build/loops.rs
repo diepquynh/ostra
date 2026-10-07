@@ -1,6 +1,6 @@
 //! Rules M2 to M6 and Step 4: the work loops of the build and the tests, and their rescue.
 
-use super::*;
+use crate::fold::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use ostra_core::event::{ExecPurpose, WorkKind};

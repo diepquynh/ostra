@@ -1,9 +1,9 @@
 //! Rules B5 to B10: the docs stage and the book write.
 
-use super::*;
 use crate::book::{DOCS_ROUNDS, DocsTrack};
 use crate::inputs::OstraInputs;
 use crate::judge::NoteStage;
+use crate::planner::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::steps::OstraStep;

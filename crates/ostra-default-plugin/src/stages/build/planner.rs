@@ -1,8 +1,8 @@
 //! Rules D6, D7, D9, M2 to M6, and Step 4: the phases and their work and review loops.
 
-use super::*;
 use crate::inputs::{OstraInputs, OstraInputsExt};
 use crate::judge::NoteStage;
+use crate::planner::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::steps::OstraStep;

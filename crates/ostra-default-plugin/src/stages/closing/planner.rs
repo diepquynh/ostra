@@ -1,8 +1,8 @@
 //! Rules D8 and T1 to T7: format, the closing gate, and the tests.
 
-use super::*;
 use crate::book::DocsTrack;
 use crate::judge::NoteStage;
+use crate::planner::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::steps::OstraStep;

@@ -1,7 +1,7 @@
 //! Rules B5, B6, and B10: the docs stage's paths and what a session adds to its book.
 
-use super::*;
 use crate::book::DocsTrack;
+use crate::fold::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use ostra_core::paths;

@@ -1,6 +1,6 @@
 //! Rules D1, D2, and M1: research tasks and the sufficiency check.
 
-use super::*;
+use crate::planner::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use ostra_core::Contract;

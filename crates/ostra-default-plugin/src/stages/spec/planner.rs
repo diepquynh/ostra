@@ -1,7 +1,7 @@
 //! Rules D1, D3, D3a, D3b, and D10: the spec, its fact-check, and its approval.
 
-use super::*;
 use crate::inputs::OstraInputs;
+use crate::planner::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use ostra_core::Contract;

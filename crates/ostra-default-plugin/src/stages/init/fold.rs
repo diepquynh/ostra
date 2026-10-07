@@ -1,6 +1,6 @@
 //! HANDOVER 8.4 and Rules O4 and O5: the init flow's state changes.
 
-use super::*;
+use crate::fold::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use ostra_core::event::ExecPurpose;
