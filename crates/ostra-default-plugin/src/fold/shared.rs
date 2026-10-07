@@ -4,7 +4,6 @@ use super::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use ostra_core::agent::AgentName;
-use ostra_core::book::DocsStep;
 use ostra_core::event::{ExecPurpose, GateAnswer, GatePayload, JudgeKind, SessionKind};
 use ostra_core::exec::{ExecutionResult, ExecutionStatus};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId};
@@ -92,50 +91,6 @@ pub fn blocker_instructions(findings: &[ReviewFinding], ledger: &str) -> String 
         "\nRecord each removal in the review ledger at {ledger}."
     ));
     s
-}
-
-/// A docs-stage run ends done only with a submit the engine can read, because the book is built
-/// from it.
-pub fn stage_run<T>(
-    status: ExecutionStatus,
-    submit: Option<T>,
-    exec: &ExecutionId,
-    error: String,
-) -> StageRun<T> {
-    match (status, submit) {
-        (ExecutionStatus::Ok, Some(t)) => StageRun::Done(Box::new(t)),
-        (ExecutionStatus::Interrupted, _) => StageRun::NotStarted,
-        (ExecutionStatus::Ok, None) => StageRun::Failed {
-            exec: exec.clone(),
-            error: "The run ended without a readable submit call, so there is nothing to put in the book.".into(),
-            gate: None,
-            retries: 1,
-        },
-        _ => StageRun::Failed {
-            exec: exec.clone(),
-            error,
-            gate: None,
-            retries: 1,
-        },
-    }
-}
-
-/// Rule B10: a docs run that answered another step of the pipeline failed.
-pub fn expect_step(run: DocsState, step: DocsStep, exec: &ExecutionId) -> DocsState {
-    match run {
-        DocsState::Done(d) if d.step != step => DocsState::Failed {
-            exec: exec.clone(),
-            error: format!(
-                "The run answered the `{}` step, but it was started for the `{}` step. Call the submit tool again with `step: {}` and the fields of that step.",
-                d.step.as_str(),
-                step.as_str(),
-                step.as_str()
-            ),
-            gate: None,
-            retries: 1,
-        },
-        other => other,
-    }
 }
 
 pub fn is_instruction_file(path: &str) -> bool {

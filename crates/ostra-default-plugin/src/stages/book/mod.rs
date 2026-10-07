@@ -4,7 +4,9 @@
 
 pub mod checks;
 pub mod fold;
+pub mod gates;
 pub mod planner;
+pub mod runs;
 pub mod scan;
 pub mod track;
 
@@ -17,7 +19,9 @@ use ostra_core::submit::SubmitStatus;
 
 pub use checks::{check_documentation, mechanical_issues, unmentioned_refs};
 pub use fold::*;
+pub use gates::*;
 pub use planner::*;
+pub use runs::*;
 pub use track::DocsTrack;
 
 /// Rule B10: pages one survey may plan, each written by its own writer.

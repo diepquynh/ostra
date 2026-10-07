@@ -7,5 +7,8 @@ pub mod closing;
 pub mod feedback;
 pub mod init;
 pub mod plan;
+pub mod quick;
 pub mod research;
 pub mod spec;
+pub mod stakes;
+pub mod track;

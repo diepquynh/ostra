@@ -1,7 +1,13 @@
 //! The research stage (Rules D1, D2): the explore tasks, the sufficiency check, and Classify.
 
 pub mod fold;
+pub mod gates;
+pub mod judges;
 pub mod planner;
+pub mod runs;
 
 pub use fold::*;
+pub use gates::*;
+pub use judges::*;
 pub use planner::*;
+pub use runs::*;

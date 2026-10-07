@@ -1,10 +1,9 @@
 //! The built-in stages' planning entry points and the helpers several stages share.
 
 use super::*;
-use crate::inputs::OstraInputs;
 #[allow(unused_imports)]
 use crate::prelude::*;
-use ostra_core::Contract;
+use crate::stages::{quick::PlannerQuick, stakes::PlannerStakes, track::PlannerTrack};
 use ostra_core::event::{ExecPurpose, GatePayload, JudgeKind, SessionKind};
 use ostra_core::exec::ExecutionStatus;
 use ostra_core::ids::ExecutionId;
@@ -134,8 +133,6 @@ pub trait OstraPlanner<'a> {
 
     fn completion(&mut self);
 
-    fn quick_answer(&mut self);
-
     fn init_flow(&mut self);
 }
 
@@ -146,29 +143,9 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         let light = implement && s.ext.os().track == Some(Track::Light);
         match b {
             BuiltinStage::Research => self.explore_complete(),
-            // Light by default: the Track judge escalates to the full track on evidence.
-            BuiltinStage::Track => {
-                if s.ext.os().track.is_none() {
-                    self.push(Step::Judge {
-                        judge: JudgeKind::Track,
-                        subject: None,
-                    });
-                }
-                s.ext.os().track.is_some()
-            }
+            BuiltinStage::Track => self.track_stage(),
             BuiltinStage::Spec => light || self.spec_flow(wf.base != Category::Spec),
-            BuiltinStage::Stakes => {
-                if light {
-                    return true;
-                }
-                if s.ext.os().stakes.is_none() {
-                    self.push(Step::Judge {
-                        judge: JudgeKind::Stakes,
-                        subject: None,
-                    });
-                }
-                s.ext.os().stakes.is_some()
-            }
+            BuiltinStage::Stakes => self.stakes_stage(light),
             BuiltinStage::Plan if implement => {
                 if light {
                     return true;
@@ -235,64 +212,6 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                     report_markdown: md,
                 });
             }
-        }
-    }
-
-    fn quick_answer(&mut self) {
-        let s = self.s;
-        let q = &s.ext.os().quick;
-        if let Some(a) = &q.answer {
-            self.push(Step::Complete {
-                report_markdown: Some(a.answer.clone()),
-            });
-            return;
-        }
-        if q.running {
-            return;
-        }
-        if let Some(err) = &q.failed {
-            // Either failure gate counts: a harness that cannot run opens HarnessFailure.
-            let failure_gate = |g: &ostra_engine::state::GateRecord, exec: &ExecutionId| {
-                matches!(&g.payload,
-                    GatePayload::ExecutionFailed { execution, .. }
-                    | GatePayload::HarnessFailure { execution, .. } if execution == exec)
-            };
-            if let Some(exec) = &q.exec
-                && !s
-                    .gates
-                    .values()
-                    .any(|g| failure_gate(g, exec) && g.answer.is_none())
-            {
-                if s.gates.values().any(|g| failure_gate(g, exec)) {
-                    self.push(Step::Fail { error: err.clone() });
-                } else {
-                    self.exec_failed_gate(
-                        exec,
-                        s.default_agent(Contract::Answer),
-                        &s.primary(),
-                        err,
-                    );
-                }
-            }
-            return;
-        }
-        if q.exec.is_none() {
-            let primary = s.primary();
-            let inputs = SpawnInputs {
-                extra: OstraInputs {
-                    question: Some(s.full_request()),
-                    ..Default::default()
-                }
-                .into_value(),
-                ..Default::default()
-            };
-            self.spawn(
-                s.default_agent(Contract::Answer),
-                ExecPurpose::QuickAnswer,
-                &primary,
-                s.session_root.clone(),
-                inputs,
-            );
         }
     }
 
