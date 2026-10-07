@@ -3,6 +3,7 @@
 
 mod effects;
 mod hooks;
+pub(crate) mod partners;
 
 pub use effects::*;
 pub use hooks::*;

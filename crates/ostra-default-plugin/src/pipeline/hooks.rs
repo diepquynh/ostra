@@ -10,12 +10,11 @@ use crate::prelude::*;
 use crate::steps::OstraStep;
 use crate::view;
 use ostra_core::config::ProjectProfile;
+use ostra_core::event::FactTarget;
 use ostra_core::event::{
     ExecPurpose, GateAnswer, GatePayload, JudgeKind, SessionEvent, SessionKind, StoredEvent,
 };
-use ostra_core::event::{FactTarget, WorkKind};
 use ostra_core::exec::ExecutionResult;
-use ostra_core::exec::ExecutionStatus;
 use ostra_core::ids::MessageId;
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
 use ostra_core::manage::CreatedProject;
@@ -316,31 +315,11 @@ impl Pipeline for OstraPipeline {
         asker: &str,
         text: &str,
     ) -> Option<u32> {
-        // Rule SM7: a research helper runs as a research task, whose document joins the
-        // session's research. Logs from before contracts name only `explore`.
-        if !contract.map_or(agent == AgentName::Explore, |c| c == Contract::Research) {
-            return None;
-        }
-        let task = format!("{asker} asks for this research and waits for your findings:\n{text}");
-        let t = s.push_explore(
-            project.to_string(),
-            task,
-            ExploreOrigin::Ask { ask: ask.clone() },
-        );
-        if let Some(x) = s.ext.os_mut().explore.get_mut(t as usize) {
-            x.agent = Some(agent);
-        }
-        Some(t)
+        crate::stages::research::helpers::helper_task(s, ask, agent, contract, project, asker, text)
     }
 
     fn helper_ask(&self, s: &SessionState, purpose: &ExecPurpose) -> Option<MessageId> {
-        let ExecPurpose::Explore { task } = purpose else {
-            return None;
-        };
-        match &s.ext.os().explore.get(*task as usize)?.origin {
-            ExploreOrigin::Ask { ask } => Some(ask.clone()),
-            _ => None,
-        }
+        crate::stages::research::helpers::helper_ask(s, purpose)
     }
 
     fn helper_result(
@@ -349,161 +328,23 @@ impl Pipeline for OstraPipeline {
         rec: &ExecRecord,
         result: &ExecutionResult,
     ) -> Option<HelperResult> {
-        let ExecPurpose::Explore { task } = &rec.purpose else {
-            return None;
-        };
-        let t = s.ext.os().explore.get(*task as usize);
-        match result.status {
-            ExecutionStatus::Ok => {
-                let Some(sub) = t.and_then(|t| t.result.as_ref()) else {
-                    return Some(HelperResult::NotYet);
-                };
-                let mut text = format!(
-                    "{}\n\nResearch document: {}",
-                    sub.findings_summary, sub.research_path
-                );
-                if !sub.not_covered.is_empty() {
-                    text.push_str(&format!("\nNot covered: {}", sub.not_covered.join("; ")));
-                }
-                Some(HelperResult::Text(text))
-            }
-            // Interrupted or waiting for its own message: the helper is not done yet.
-            ExecutionStatus::Interrupted | ExecutionStatus::Waiting => Some(HelperResult::NotYet),
-            // An explore that errors is retried once before it counts as failed.
-            _ if t.is_some_and(|t| t.failed.is_none() && !t.abandoned) => {
-                Some(HelperResult::NotYet)
-            }
-            _ => None,
-        }
+        crate::stages::research::helpers::helper_result(s, rec, result)
     }
 
     fn previous_run(&self, s: &SessionState, purpose: &ExecPurpose) -> Option<ExecutionId> {
-        let last = |f: &dyn Fn(&ExecPurpose) -> bool| {
-            s.executions
-                .values()
-                .filter(|r| f(&r.purpose))
-                .max_by_key(|r| r.id.clone())
-                .map(|r| r.id.clone())
-        };
-        let os = s.ext.os();
-        match purpose {
-            ExecPurpose::Spec { .. } if os.spec.current.is_some() => {
-                last(&|p| matches!(p, ExecPurpose::Spec { .. }))
-            }
-            ExecPurpose::Plan { .. } if os.plan.current.is_some() => {
-                last(&|p| matches!(p, ExecPurpose::Plan { .. }))
-            }
-            ExecPurpose::FactCheck { target, .. } => {
-                let t = *target;
-                last(&|p| matches!(p, ExecPurpose::FactCheck { target, .. } if *target == t))
-            }
-            ExecPurpose::Review { phase, tests, .. } => {
-                let (ph, te) = (*phase, *tests);
-                last(
-                    &|p| matches!(p, ExecPurpose::Review { phase, tests, .. } if *phase == ph && *tests == te),
-                )
-            }
-            ExecPurpose::Implement { phase, work } | ExecPurpose::WriteTest { phase, work }
-                if matches!(
-                    work,
-                    WorkKind::Fix | WorkKind::BlockerFix | WorkKind::Rescue | WorkKind::Resume
-                ) =>
-            {
-                let (ph, test) = (*phase, matches!(purpose, ExecPurpose::WriteTest { .. }));
-                last(&|p| match p {
-                    ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
-                        !test && *phase == ph
-                    }
-                    ExecPurpose::WriteTest { phase, .. } => test && *phase == ph,
-                    _ => false,
-                })
-            }
-            _ => None,
-        }
+        partners::previous_run(s, purpose)
     }
 
     fn partners(&self, s: &SessionState, rec: &ExecRecord) -> Vec<(ExecutionId, String)> {
-        let latest = |f: &dyn Fn(&ExecRecord) -> bool| {
-            s.executions
-                .values()
-                .filter(|r| f(r))
-                .max_by_key(|r| r.id.clone())
-                .map(|r| s.subagent_of(&r.id))
-        };
-        let mut out: Vec<(ExecutionId, String)> = vec![];
-        let checked = |target: FactTarget| -> Option<ExecutionId> {
-            latest(
-                &|r| matches!(&r.purpose, ExecPurpose::FactCheck { target: t, .. } if *t == target),
-            )
-        };
-        match &rec.purpose {
-            ExecPurpose::Spec { .. } => {
-                out.extend(checked(FactTarget::Spec).map(|c| (c, "your fact checker".to_string())))
-            }
-            ExecPurpose::Plan { .. } => {
-                out.extend(checked(FactTarget::Plan).map(|c| (c, "your fact checker".to_string())))
-            }
-            ExecPurpose::FactCheck { target, .. } => {
-                let author = match target {
-                    FactTarget::Spec => latest(&|r| matches!(r.purpose, ExecPurpose::Spec { .. })),
-                    FactTarget::Plan => latest(&|r| matches!(r.purpose, ExecPurpose::Plan { .. })),
-                };
-                out.extend(author.map(|a| (a, "the author of the document you check".to_string())));
-            }
-            _ if rec.loop_key.is_some() => {
-                let key = rec.loop_key;
-                let review = matches!(rec.purpose, ExecPurpose::Review { .. });
-                let other = latest(&|r| {
-                    r.loop_key == key && matches!(r.purpose, ExecPurpose::Review { .. }) != review
-                });
-                out.extend(other.map(|o| {
-                    (
-                        o,
-                        if review {
-                            "the implementer of the phase you review"
-                        } else {
-                            "the reviewer of your phase"
-                        }
-                        .to_string(),
-                    )
-                }));
-            }
-            _ => {}
-        }
-        out
+        partners::partners(s, rec)
     }
 
     fn stage_partners(&self, s: &SessionState, stage: BuiltinStage) -> Vec<(ExecutionId, String)> {
-        let (purpose, role): (fn(&ExecPurpose) -> bool, &str) = match stage {
-            BuiltinStage::Spec => (
-                |p| matches!(p, ExecPurpose::Spec { .. }),
-                "the author of the spec",
-            ),
-            BuiltinStage::Plan => (
-                |p| matches!(p, ExecPurpose::Plan { .. }),
-                "the author of the plan",
-            ),
-            _ => return vec![],
-        };
-        latest_subagent(s, |r| purpose(&r.purpose))
-            .map(|x| (x, role.to_string()))
-            .into_iter()
-            .collect()
+        partners::stage_partners(s, stage)
     }
 
     fn work_partners(&self, s: &SessionState, scope: Option<&str>) -> Vec<(ExecutionId, String)> {
-        let phase = scope
-            .and_then(|s| s.strip_prefix("phase:"))
-            .and_then(|p| p.parse::<u32>().ok());
-        let project = scope.and_then(|s| s.strip_prefix("project:"));
-        latest_subagent(s, |r| match (&r.purpose, phase, project) {
-            (ExecPurpose::Implement { phase: p, .. }, Some(want), _) => *p == want,
-            (ExecPurpose::Implement { .. }, None, Some(key)) => r.project == key,
-            _ => false,
-        })
-        .map(|x| (x, "the implementer of the work you check".to_string()))
-        .into_iter()
-        .collect()
+        partners::work_partners(s, scope)
     }
 
     fn routes_amendments(&self, s: &SessionState) -> bool {
@@ -839,16 +680,4 @@ impl Pipeline for OstraPipeline {
     ) {
         view::decorate(s, labels, view)
     }
-}
-
-/// The subagent of the latest run that `f` picks.
-pub(crate) fn latest_subagent(
-    s: &SessionState,
-    f: impl Fn(&ExecRecord) -> bool,
-) -> Option<ExecutionId> {
-    s.executions
-        .values()
-        .filter(|r| f(r))
-        .max_by_key(|r| r.id.clone())
-        .map(|r| s.subagent_of(&r.id))
 }

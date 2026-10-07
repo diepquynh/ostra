@@ -3,6 +3,7 @@
 //! from the update this writer hands it (Rules B5 and B6).
 
 pub mod checks;
+pub mod data;
 pub mod fold;
 pub mod gates;
 pub mod planner;
@@ -18,6 +19,7 @@ use ostra_core::book::{
 use ostra_core::submit::SubmitStatus;
 
 pub use checks::{check_documentation, mechanical_issues, unmentioned_refs};
+pub use data::*;
 pub use fold::*;
 pub use gates::*;
 pub use planner::*;
