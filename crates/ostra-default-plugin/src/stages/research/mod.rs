@@ -4,6 +4,7 @@ pub mod data;
 pub mod fold;
 pub mod gates;
 pub mod helpers;
+pub mod hooks;
 pub mod judge_input;
 pub mod judges;
 pub mod planner;

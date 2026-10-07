@@ -2,6 +2,7 @@
 
 pub mod data;
 pub mod gates;
+pub mod hooks;
 pub mod planner;
 pub mod runs;
 pub mod view;

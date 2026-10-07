@@ -6,6 +6,7 @@ pub mod checks;
 pub mod data;
 pub mod fold;
 pub mod gates;
+pub mod hooks;
 pub mod planner;
 pub mod runs;
 pub mod scan;

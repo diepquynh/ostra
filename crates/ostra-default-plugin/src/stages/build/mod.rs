@@ -3,6 +3,7 @@
 pub mod autofix;
 pub mod data;
 pub mod gates;
+pub mod hooks;
 pub mod judge_input;
 pub mod judges;
 pub mod loops;

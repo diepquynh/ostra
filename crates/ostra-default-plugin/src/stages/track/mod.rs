@@ -1,5 +1,6 @@
 //! The Track judge: the light or the full track of an `IMPLEMENT` request.
 
+pub mod hooks;
 pub mod judge_input;
 pub mod view;
 
