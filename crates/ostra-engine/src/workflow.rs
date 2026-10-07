@@ -118,14 +118,6 @@ fn render_findings(c: &CustomSubmit) -> String {
     out
 }
 
-/// Rule CA5: the contract of a run logged before contracts: the standard agent's own, else the
-/// custom stage contract, the only one custom agents had then.
-pub fn legacy_contract(agent: AgentName) -> Contract {
-    ostra_agents::builtin_def(agent)
-        .map(|d| d.returns)
-        .unwrap_or(Contract::Stage)
-}
-
 impl SessionState {
     /// Rule WF8: the agent that fills `contract` in built-in stage `stage`: the workflow's
     /// binding, else the standard plugin's agent for that contract (Rule PL4).
@@ -684,19 +676,9 @@ impl SessionState {
         for a in wf.ancestors(node) {
             let Some(d) = wf.stage(&a) else { continue };
             match &d.run {
-                StageRun::Builtin {
-                    stage: BuiltinStage::Spec,
-                } => out.extend(
-                    latest(&|r| matches!(r.purpose, ExecPurpose::Spec { .. }))
-                        .map(|x| (x, "the author of the spec".to_string())),
-                ),
-                StageRun::Builtin {
-                    stage: BuiltinStage::Plan,
-                } => out.extend(
-                    latest(&|r| matches!(r.purpose, ExecPurpose::Plan { .. }))
-                        .map(|x| (x, "the author of the plan".to_string())),
-                ),
-                StageRun::Builtin { .. } => {}
+                StageRun::Builtin { stage } => {
+                    out.extend(self.pipeline.stage_partners(self, *stage))
+                }
                 _ => {
                     let other = a.clone();
                     out.extend(
@@ -708,19 +690,7 @@ impl SessionState {
                 }
             }
         }
-        let phase = scope
-            .as_deref()
-            .and_then(|s| s.strip_prefix("phase:"))
-            .and_then(|p| p.parse::<u32>().ok());
-        let project = scope.as_deref().and_then(|s| s.strip_prefix("project:"));
-        out.extend(
-            latest(&|r| match (&r.purpose, phase, project) {
-                (ExecPurpose::Implement { phase: p, .. }, Some(want), _) => *p == want,
-                (ExecPurpose::Implement { .. }, None, Some(key)) => r.project == key,
-                _ => false,
-            })
-            .map(|x| (x, "the implementer of the work you check".to_string())),
-        );
+        out.extend(self.pipeline.work_partners(self, scope.as_deref()));
         out
     }
 
@@ -972,25 +942,7 @@ pub fn node_shape(
     }
     let d = wf.stage(node)?;
     let value = match &d.run {
-        StageRun::Builtin { stage } => {
-            return Some(match stage {
-                BuiltinStage::Research => json!({"type": "object", "properties": {
-                    "research_docs": {"type": "array", "items": text}}}),
-                BuiltinStage::Track => json!({"type": "object", "properties": {"track": text}}),
-                BuiltinStage::Spec => json!({"type": "object", "properties": {"spec_file": text}}),
-                BuiltinStage::Stakes => json!({"type": "object", "properties": {"stakes": text}}),
-                BuiltinStage::Plan => json!({"type": "object", "properties": {
-                    "master_plan": text, "phases": {"type": "number"}}}),
-                BuiltinStage::Build => {
-                    json!({"type": "object", "properties": {"phases": {"type": "number"}}})
-                }
-                BuiltinStage::Feedback => json!({"type": "object", "properties": {}}),
-                // Rule B10: per project, whether the closing gate chose docs; across projects,
-                // the projects it chose them for.
-                BuiltinStage::Closing => json!({"type": "object", "properties": {"docs": {}}}),
-                BuiltinStage::Book => json!({"type": "object", "properties": {"book": text}}),
-            });
-        }
+        StageRun::Builtin { stage } => return Some(stage.value_shape()),
         StageRun::Agent { agent } => submit_shape(
             agents
                 .def(*agent)
@@ -1370,87 +1322,5 @@ pub fn stage_request(
         inputs,
         resumes: None,
         continues: None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ostra_core::workflow::{WorkflowFile, WorkflowSet};
-
-    fn resolve(text: &str) -> WorkflowDef {
-        let file: WorkflowFile = toml::from_str(text).unwrap();
-        WorkflowSet {
-            files: [("w".to_string(), file)].into_iter().collect(),
-            ..ostra_standard::workflow_set()
-        }
-        .resolve("w")
-        .unwrap()
-    }
-
-    /// Rules CA5 and WF8: stages take agents by contract, never by name.
-    #[test]
-    fn stages_check_agents_by_contract() {
-        let agents = ostra_agents::AgentCatalog::builtin();
-        // A standard agent with the stage's contract may be bound, whatever its name.
-        let ok = resolve("extends = \"implement\"\n[agents]\nreview = \"code-reviewer\"\n");
-        assert!(check_runnable(&ok, &agents, &[]).is_ok());
-        // An agent bound to a contract it does not return is refused.
-        let wrong = resolve("extends = \"implement\"\n[agents]\nreview = \"plan\"\n");
-        let e = check_runnable(&wrong, &agents, &[]).unwrap_err();
-        assert!(e.contains("returns `plan`"), "{e}");
-        // A custom stage reads a verdict, so a standard agent that returns `spec` cannot run it.
-        let custom =
-            resolve("extends = \"research\"\n[[stage]]\nid = \"x\"\nagent = \"generate-spec\"\n");
-        let e = check_runnable(&custom, &agents, &[]).unwrap_err();
-        assert!(e.contains("returns `spec`"), "{e}");
-    }
-
-    /// Rule WB6: references are followed through each node's shape before anything runs.
-    #[test]
-    fn wb6_references_read_fields_of_the_right_kind() {
-        let def = ostra_agents::catalog::parse_markdown(
-            std::path::Path::new("/w/.ostra/agents/auditor.md"),
-            "+++\ndescription = \"Audits.\"\n[data_schema]\ntype = \"object\"\n[data_schema.properties.risk]\ntype = \"string\"\n+++\nAudit.\n",
-        )
-        .unwrap();
-        let agents = ostra_agents::AgentCatalog::builtin()
-            .with_workspace_def(def.name, Some(def))
-            .unwrap();
-        let check = |stages: &str| {
-            let wf = resolve(&format!(
-                "extends = \"research\"\n[[stage]]\nid = \"audit\"\nagent = \"auditor\"\n{stages}"
-            ));
-            check_types(&wf, &agents).join(" ")
-        };
-        assert_eq!(
-            check(
-                "[[stage]]\nid = \"n\"\ntransform = \"count\"\nafter = [\"audit\"]\ninputs = { items = \"audit.findings\" }\n[[stage]]\nid = \"r\"\ntransform = \"compare\"\nafter = [\"audit\"]\ninputs = { value = \"audit.data.risk\" }\nargs = { op = \"eq\", to = \"high\" }\n"
-            ),
-            ""
-        );
-        let e = check(
-            "[[stage]]\nid = \"r\"\ntransform = \"compare\"\nafter = [\"audit\"]\ninputs = { value = \"audit.data.riks\" }\nargs = { op = \"eq\", to = \"high\" }\n",
-        );
-        assert!(
-            e.contains("`audit.data` has no field `riks`; it has `risk`"),
-            "{e}"
-        );
-        let e = check(
-            "[[stage]]\nid = \"n\"\ntransform = \"count\"\nafter = [\"audit\"]\ninputs = { items = \"audit.findings\" }\n[[stage]]\nid = \"f\"\ntransform = \"filter\"\nafter = [\"n\"]\ninputs = { items = \"n.output\" }\nargs = { op = \"truthy\" }\n",
-        );
-        assert!(
-            e.contains("Wire a list into input `items` of node `f`: `n.output` is a number"),
-            "{e}"
-        );
-        let e = check(
-            "[[stage]]\nid = \"x\"\nagent = \"auditor\"\nafter = [\"audit\"]\nwhen = [{ ref = \"audit.findings.file\", op = \"exists\" }]\n",
-        );
-        assert!(e.contains("is a list, so read an item by its index"), "{e}");
-        // A filter keeps the shape of its items, so a later reference into them is checked too.
-        let e = check(
-            "[[stage]]\nid = \"f\"\ntransform = \"filter\"\nafter = [\"audit\"]\ninputs = { items = \"audit.findings\" }\nargs = { op = \"truthy\" }\n[[stage]]\nid = \"x\"\nagent = \"auditor\"\nafter = [\"f\"]\ninputs = { first = \"f.output.0.line\" }\n",
-        );
-        assert!(e.contains("has no field `line`"), "{e}");
     }
 }

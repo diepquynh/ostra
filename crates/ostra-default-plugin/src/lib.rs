@@ -13,13 +13,15 @@ pub mod docs_scan;
 pub mod factory;
 pub mod fold;
 pub mod init;
+pub mod inputs;
 pub mod judge;
 pub mod judge_input;
 mod pipeline;
 pub mod planner;
+pub mod steps;
 pub mod view;
 
-pub use pipeline::OstraPipeline;
+pub use pipeline::{FORMAT_NOT_APPROVED, OstraPipeline};
 
 /// The extension traits that hold the built-in stages' logic over the engine's types.
 pub mod prelude {
@@ -41,8 +43,8 @@ pub fn fold_session(
     ostra_engine::state::SessionState::fold(pipeline().into(), id, events)
 }
 
-/// Install the standard plugin's submit checks. Call it at startup, before any submit is checked.
-/// A second call changes nothing.
+/// Install the docs stage's check for the deprecated `ostra_core::book::check_documentation`.
+/// Submit tools reach the same check through the pipeline, so nothing else needs this call.
 pub fn install() {
     book::install_checks();
 }

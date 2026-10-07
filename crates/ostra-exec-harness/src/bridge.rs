@@ -232,6 +232,13 @@ impl HarnessBridge {
                     "Fix the arguments and call `{name}` again: {message}. Nothing was recorded."
                 ));
             }
+            let issues = live.check_submit(&args);
+            if !issues.is_empty() {
+                return tool_error(&format!(
+                    "Fix the arguments and call `{name}` again: {}. Nothing was recorded.",
+                    issues.join("\n")
+                ));
+            }
             if let Err(message) = ostra_core::doc::check_submit(live.contract(), &args) {
                 return tool_error(&format!("{message} Nothing was recorded."));
             }

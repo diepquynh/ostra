@@ -1001,6 +1001,194 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+impl ExecPurpose {
+    /// The compact form of a spawn in a conformance fixture's step list.
+    pub fn summary(&self) -> String {
+        match self {
+            ExecPurpose::Explore { task } => format!("explore#{task}"),
+            ExecPurpose::Advise { project, round, .. } => format!("advise {project} #{round}"),
+            ExecPurpose::Unblock {
+                phase,
+                tests,
+                round,
+                ..
+            } => format!(
+                "unblock phase {phase}{} #{round}",
+                if *tests { " tests" } else { "" }
+            ),
+            ExecPurpose::Consult { .. } => "consult".into(),
+            ExecPurpose::Message { .. } => "messages".into(),
+            ExecPurpose::Helper { .. } => "helper".into(),
+            ExecPurpose::Stage { node, scope, round } => format!(
+                "stage {node}{}#{round}",
+                scope.as_ref().map(|s| format!(" {s} ")).unwrap_or_default()
+            ),
+            ExecPurpose::Spec { round } => format!("spec#{round}"),
+            ExecPurpose::FactCheck { target, pass } => {
+                format!("fact-check-{}#{pass}", target.as_str())
+            }
+            ExecPurpose::Plan { round } => format!("plan#{round}"),
+            ExecPurpose::Implement { phase, work } => {
+                format!("phase {phase} {work:?}").to_lowercase()
+            }
+            ExecPurpose::Review {
+                phase,
+                tests,
+                iteration,
+            } => format!(
+                "review phase {phase}{} #{iteration}",
+                if *tests { " tests" } else { "" }
+            ),
+            ExecPurpose::Epa { phase } => format!("epa phase {phase}"),
+            ExecPurpose::WriteTest { phase, work } => {
+                format!("write-test phase {phase} {work:?}").to_lowercase()
+            }
+            ExecPurpose::Docs {
+                project,
+                page: None,
+                ..
+            } => format!("docs {project}"),
+            ExecPurpose::Docs {
+                project,
+                page: Some(p),
+                round: 0,
+            } => format!("docs {project}/{p}"),
+            ExecPurpose::Docs {
+                project,
+                page: Some(p),
+                round,
+            } => format!("docs-revise {project}/{p} round {round}"),
+            ExecPurpose::DocsSurvey { project } => format!("docs-survey {project}"),
+            ExecPurpose::DocsCheck {
+                project,
+                page,
+                round,
+            } => format!("docs-check {project}/{page} round {round}"),
+            ExecPurpose::DocsSynthesis { project, round } => {
+                format!("docs-synthesis {project} round {round}")
+            }
+            ExecPurpose::Architecture => "architecture".into(),
+            ExecPurpose::Inspect { of } => format!("inspect {of}"),
+            ExecPurpose::PromptGen { handoff_for } => {
+                if handoff_for.is_some() {
+                    "handoff".into()
+                } else {
+                    "prompt".into()
+                }
+            }
+            ExecPurpose::Verify { phase } => format!("verify phase {phase}"),
+            ExecPurpose::QuickAnswer => "quick-answer".into(),
+            ExecPurpose::Init { mode, item } => format!(
+                "init {mode}{}",
+                item.as_ref().map(|i| format!(" {i}")).unwrap_or_default()
+            ),
+        }
+    }
+
+    /// The key of the loop, review loop, or stage a run serves, which a paused run resumes under
+    /// (Rule P2).
+    pub fn resume_key(&self) -> String {
+        match self {
+            ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
+                format!("work:{phase}:false")
+            }
+            ExecPurpose::WriteTest { phase, .. } => format!("work:{phase}:true"),
+            ExecPurpose::Review { phase, tests, .. } => format!("review:{phase}:{tests}"),
+            ExecPurpose::Spec { .. } => "spec".into(),
+            ExecPurpose::Plan { .. } => "plan".into(),
+            ExecPurpose::FactCheck { target, .. } => format!("fact-check:{}", target.as_str()),
+            ExecPurpose::Stage { node, scope, .. } => {
+                format!("stage:{node}:{}", scope.as_deref().unwrap_or_default())
+            }
+            other => serde_json::to_string(other).unwrap_or_default(),
+        }
+    }
+
+    /// The board lane of a run.
+    pub fn stage_kind(&self) -> StageKind {
+        match self {
+            ExecPurpose::Advise { .. } | ExecPurpose::Unblock { .. } => StageKind::Rescue,
+            ExecPurpose::Consult { .. } | ExecPurpose::Message { .. } => StageKind::Handoff,
+            ExecPurpose::Helper { .. } => StageKind::Explore,
+            ExecPurpose::Stage { .. } => StageKind::Custom,
+            ExecPurpose::Explore { .. } => StageKind::Explore,
+            ExecPurpose::Spec { .. } => StageKind::Spec,
+            ExecPurpose::FactCheck {
+                target: FactTarget::Spec,
+                ..
+            } => StageKind::FactCheckSpec,
+            ExecPurpose::FactCheck {
+                target: FactTarget::Plan,
+                ..
+            } => StageKind::FactCheckPlan,
+            ExecPurpose::Plan { .. } => StageKind::Plan,
+            ExecPurpose::Implement { .. } => StageKind::Implement,
+            ExecPurpose::Review { tests: false, .. } => StageKind::Review,
+            ExecPurpose::Review { tests: true, .. } => StageKind::TestReview,
+            ExecPurpose::Epa { .. } => StageKind::Epa,
+            ExecPurpose::WriteTest { .. } => StageKind::WriteTest,
+            ExecPurpose::Docs { .. }
+            | ExecPurpose::DocsSurvey { .. }
+            | ExecPurpose::DocsCheck { .. }
+            | ExecPurpose::DocsSynthesis { .. }
+            | ExecPurpose::Architecture => StageKind::Documentation,
+            ExecPurpose::PromptGen {
+                handoff_for: Some(_),
+            } => StageKind::Handoff,
+            ExecPurpose::PromptGen { handoff_for: None } => StageKind::PromptGen,
+            ExecPurpose::Verify { .. } => StageKind::Verify,
+            ExecPurpose::QuickAnswer | ExecPurpose::Inspect { .. } => StageKind::QuickAnswer,
+            ExecPurpose::Init { mode, .. } => match mode {
+                InitializerMode::Detect | InitializerMode::Adopt => StageKind::Detect,
+                InitializerMode::Scout => StageKind::Scout,
+                InitializerMode::Propose => StageKind::Propose,
+                InitializerMode::GenerateSkill => StageKind::GenerateSkill,
+                InitializerMode::GenerateInventory => StageKind::GenerateInventory,
+            },
+        }
+    }
+
+    /// The initializer mode of an init run.
+    pub fn initializer_mode(&self) -> Option<InitializerMode> {
+        match self {
+            ExecPurpose::Init { mode, .. } => Some(*mode),
+            _ => None,
+        }
+    }
+}
+
+impl GatePayload {
+    /// What a gate of its kind is about, so one open gate per subject is planned.
+    pub fn owner(&self) -> String {
+        match self {
+            GatePayload::OpenQuestions { artifact, .. } => artifact.clone(),
+            GatePayload::FactCheckRecurring { target, .. } => target.as_str().into(),
+            GatePayload::ReviewCap { phase, tests, .. } => format!("{phase}:{tests}"),
+            GatePayload::Stuck { execution, .. }
+            | GatePayload::ExecutionFailed { execution, .. }
+            | GatePayload::HarnessFailure { execution, .. }
+            | GatePayload::Permission { execution, .. } => execution.to_string(),
+            GatePayload::PhaseBlocked { phase, .. } => phase.to_string(),
+            GatePayload::ClosingGate { items } => items
+                .iter()
+                .map(|i| i.project.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            GatePayload::SkillApproval { project, .. } => project.clone(),
+            GatePayload::SpecApproval { .. }
+            | GatePayload::PlanApproval { .. }
+            | GatePayload::BudgetReached { .. } => String::new(),
+            GatePayload::ImplementationReview { round, .. } => round.to_string(),
+            GatePayload::DocsRounds {
+                project, rounds, ..
+            } => format!("{project}:{rounds}"),
+            GatePayload::StageReview { stage, scope, .. } => {
+                format!("{stage}|{}", scope.as_deref().unwrap_or_default())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

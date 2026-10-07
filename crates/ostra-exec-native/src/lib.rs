@@ -979,6 +979,13 @@ impl Run {
                 "The {name} input is invalid: {e}. Fix it and call {name} again."
             )));
         }
+        let issues = self.host.check_submit(self.spec.ctx.contract, input);
+        if !issues.is_empty() {
+            return Err(err(format!(
+                "The {name} input is invalid: {}. Fix it and call {name} again.",
+                issues.join("\n")
+            )));
+        }
         if let Err(e) = ostra_core::doc::check_submit(self.spec.ctx.contract, input) {
             return Err(err(format!("{e} Nothing was recorded.")));
         }

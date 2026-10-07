@@ -367,6 +367,13 @@ pub trait ExecutionHost: Send + Sync {
         None
     }
 
+    /// The checks the run's pipeline adds to its contract's submit, after the shape check, such
+    /// as the docs stage's checks of a `documentation` submit (Rule B10). Each issue states the
+    /// correction first.
+    fn check_submit(&self, _contract: crate::Contract, _input: &serde_json::Value) -> Vec<String> {
+        vec![]
+    }
+
     /// Rule PL8: plugin `plugin`'s checkpoints in this run's session.
     fn checkpoints(&self, _plugin: &str) -> Arc<dyn crate::plugin::Checkpoints> {
         Arc::new(crate::plugin::NoCheckpoints)

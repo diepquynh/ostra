@@ -335,7 +335,7 @@ fn graph_views_for_the_ui() {
                 .iter()
                 .any(|e| e.from == "crates/ostra-engine/src/runner.rs"
                     && e.to == "crates/ostra-engine/src/plan.rs"
-                    && e.names.iter().any(|n| n == "Command"))
+                    && e.names.iter().any(|n| n == "DecideStage"))
         );
 
         let s = ix

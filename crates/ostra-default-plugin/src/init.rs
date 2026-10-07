@@ -3,8 +3,10 @@
 //! existing skills cover the project), propose, skill approval gate, generate-skill ×N (parallel,
 //! advanced tier), generate-inventory.
 
-#[allow(unused_imports)]
+use crate::inputs::OstraInputs;
 use crate::prelude::*;
+#[allow(unused_imports)]
+use crate::steps::OstraStep;
 
 use crate::data::InitTrack;
 use ostra_core::Contract;
@@ -52,8 +54,12 @@ fn spawn(
         project: project.clone(),
         session_dir: s.project_session_dir(&project),
         inputs: SpawnInputs {
-            init,
-            init_item: item,
+            extra: OstraInputs {
+                init,
+                init_item: item,
+                ..Default::default()
+            }
+            .into_value(),
             ..Default::default()
         },
         resumes: None,
@@ -200,11 +206,11 @@ impl Ending {
     /// A step finished but left nothing to build on. `exec` is the step to run again.
     fn fail(self, project: &str, exec: Option<&ExecutionId>, error: &str) -> Step {
         match (self, exec) {
-            (Ending::CreatedProject, Some(exec)) => Step::RecordInitProblem {
+            (Ending::CreatedProject, Some(exec)) => Step::from(OstraStep::RecordInitProblem {
                 project: project.into(),
                 execution: exec.clone(),
                 error: error.into(),
-            },
+            }),
             _ => Step::Fail {
                 error: error.into(),
             },
@@ -291,7 +297,11 @@ pub fn advisor_request(a: AdviceInputs) -> SpawnRequest {
         project: a.project,
         session_dir: a.session_dir,
         inputs: SpawnInputs {
-            init,
+            extra: OstraInputs {
+                init,
+                ..Default::default()
+            }
+            .into_value(),
             ..Default::default()
         },
         resumes: None,
@@ -517,7 +527,7 @@ fn plan_track(
         return;
     };
     if ending == Ending::CreatedProject {
-        push(Step::FinishInit { project });
+        push(Step::from(OstraStep::FinishInit { project }));
         return;
     }
     let md = format!(

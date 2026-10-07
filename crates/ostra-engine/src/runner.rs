@@ -13,8 +13,8 @@ use ostra_core::api::{
 use ostra_core::artifacts;
 use ostra_core::config::{PermissionRules, ProjectProfile, RouteQuery, load_toml, resolve_route};
 use ostra_core::event::{
-    AnswerSource, CommandPurpose, ContextDelivery, ContextFile, ExecPurpose, GateAnswer,
-    GatePayload, JudgeKind, ProjectRef, SessionEvent, SessionKind, SessionOptions, StoredEvent,
+    AnswerSource, ContextDelivery, ContextFile, ExecPurpose, GateAnswer, GatePayload, JudgeKind,
+    ProjectRef, SessionEvent, SessionKind, SessionOptions, StoredEvent,
 };
 use ostra_core::exec::{
     CancellationToken, ExecContext, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
@@ -116,9 +116,6 @@ impl Drop for Slot {
     }
 }
 
-/// The output of a format step skipped because its command waits for approval.
-pub const FORMAT_NOT_APPROVED: &str = "The format command in project.toml changed outside Ostra, so format was skipped. Approve it in the project's settings to run it next time.";
-
 #[derive(Clone)]
 pub struct Engine {
     inner: Arc<Inner>,
@@ -143,6 +140,10 @@ impl StepHost {
 
     pub fn pipeline(&self) -> &PipelineRef {
         &self.0.pipeline
+    }
+
+    pub fn services(&self) -> &Arc<dyn Services> {
+        &self.0.services
     }
 
     pub fn db(&self) -> &WorkspaceDb {
@@ -1770,15 +1771,11 @@ impl Inner {
                 Ok(())
             }
             Step::YoloAnswer { gate } => self.perform_yolo(session, gate).await,
-            Step::Command {
-                purpose,
-                project,
-                command,
-                files,
-            } => {
-                self.perform_command(session, purpose, &project, command, files)
-                    .await
-            }
+            Step::WriteBook { book } => self.perform_write_book(session, book),
+            Step::Pipeline(p) => Err(EngineError::Invalid(format!(
+                "The pipeline did not perform its step `{}`.",
+                p.summary
+            ))),
             Step::Complete { report_markdown } => {
                 let st = self.snapshot(session)?;
                 let path = st.session_root.join(paths::report::completion());
@@ -1959,10 +1956,6 @@ impl Inner {
                 self.append(session, event)?;
                 Ok(())
             }
-            other => Err(EngineError::Invalid(format!(
-                "The pipeline did not perform step `{}`.",
-                other.summary()
-            ))),
         }
     }
 
@@ -2150,26 +2143,22 @@ impl Inner {
             .await
         {
             // Rule U1: research the decision skipped stops now.
-            Ok(_) if kind == JudgeKind::RouteAnswer => self.interrupt(session, Interrupt::Skipped),
+            Ok(_) if self.pipeline().judge_skips_work(kind) => {
+                self.interrupt(session, Interrupt::Skipped)
+            }
             Ok(_) => Ok(()),
             Err(e) => {
-                if kind == JudgeKind::Completion {
-                    // The session's work is done; a report without prose beats no report.
-                    let md = format!(
-                        "# Session complete\n\nThe completion judge failed ({e}), so this report lists the state only.\n\n{}",
-                        self.pipeline()
-                            .judge_input(&st, JudgeKind::Completion, None, &[])
-                            .0
-                    );
+                if let Some(output) = self.pipeline().judge_fallback(&st, kind, &e.to_string()) {
+                    let reason = self.pipeline().judge_reason(&output);
                     self.append(
                         session,
                         SessionEvent::DecisionMade {
                             id: DecisionId::new(),
-                            judge: JudgeKind::Completion,
+                            judge: kind,
                             subject: None,
                             input_summary: "Fallback after a failed judge call".into(),
-                            output: serde_json::json!({"report_markdown": md, "reason": "The completion judge failed."}),
-                            reason: "The completion judge failed.".into(),
+                            output,
+                            reason,
                         },
                     )?;
                     return Ok(());
@@ -2277,100 +2266,27 @@ impl Inner {
         Ok(())
     }
 
-    async fn perform_command(
-        self: &Arc<Self>,
-        session: &SessionId,
-        purpose: CommandPurpose,
-        project: &str,
-        command: Option<String>,
-        files: Vec<String>,
-    ) -> Result<(), EngineError> {
-        let root = self
-            .snapshot(session)?
-            .project_path(project)
-            .unwrap_or_default();
-        let (cmd_text, exit, tail) = match purpose {
-            CommandPurpose::Format => match command {
-                None => (
-                    String::new(),
-                    None,
-                    "No format command in project.toml, so format was skipped.".to_string(),
-                ),
-                // Rule A1: a format command runs only once the user approved it.
-                Some(cmd) if !self.services.command_approved(&root, &cmd) => {
-                    (cmd, None, FORMAT_NOT_APPROVED.to_string())
-                }
-                Some(cmd) => {
-                    self.append_command_started(session, purpose, project, &cmd)?;
-                    // The project's own program, so it runs under the agent sandbox.
-                    let (code, out) = match ostra_sandbox::host_command(
-                        "bash",
-                        &["-c".into(), cmd.clone()],
-                        &root,
-                        &[&root],
-                        &self.services.workspace().sandbox(),
-                    ) {
-                        Ok(hc) => run_host(&root, &hc, 600).await,
-                        Err(e) => (None, e),
-                    };
-                    (cmd, code, out)
-                }
-            },
-            CommandPurpose::Stage => {
-                if files.is_empty() {
-                    (String::new(), Some(0), "No files to stage.".to_string())
-                } else {
-                    // Staging keeps each review focused on the unstaged diff (Step 2).
-                    for p in ostra_sandbox::repair_git_dirs(&ostra_sandbox::git_repos(&[&root])) {
-                        tracing::warn!("removed a planted {} before staging", p.display());
-                    }
-                    let mut args: Vec<String> = ostra_core::git::AUTOMATIC
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                    args.extend(ostra_core::git::filter_overrides(&root).await);
-                    args.extend([
-                        "-C".into(),
-                        root.display().to_string(),
-                        "add".into(),
-                        "-A".into(),
-                        "--".into(),
-                    ]);
-                    args.extend(files.iter().cloned());
-                    let text = format!("git {}", args.join(" "));
-                    self.append_command_started(session, purpose, project, &text)?;
-                    let (code, out) = run_shell(&root, "git", &args, 60).await;
-                    (text, code, out)
-                }
-            }
-            CommandPurpose::Autofix => (String::new(), Some(0), String::new()),
-        };
+    /// Rule B5: merge the session's parts into its book and record the write. A failed write is
+    /// recorded with its error, and the session goes on.
+    fn perform_write_book(&self, session: &SessionId, book: String) -> Result<(), EngineError> {
+        let st = self.snapshot(session)?;
+        let update = self.pipeline().book_update(&st);
+        let projects = update.parts.iter().map(|p| p.project.clone()).collect();
+        let ws = &st.workspace_root;
+        let error = ostra_core::book::apply(ws, &book, &update, chrono::Utc::now())
+            .err()
+            .map(|e| {
+                format!(
+                    "The book could not be written to {}: {e}",
+                    ostra_core::book::book_dir(ws, &book).display()
+                )
+            });
         self.append(
             session,
-            SessionEvent::CommandRan {
-                purpose,
-                project: project.into(),
-                command: cmd_text,
-                exit_code: exit,
-                output_tail: tail,
-            },
-        )?;
-        Ok(())
-    }
-
-    fn append_command_started(
-        &self,
-        session: &SessionId,
-        purpose: CommandPurpose,
-        project: &str,
-        command: &str,
-    ) -> Result<(), EngineError> {
-        self.append(
-            session,
-            SessionEvent::CommandStarted {
-                purpose,
-                project: project.into(),
-                command: command.into(),
+            SessionEvent::BookWritten {
+                book,
+                projects,
+                error,
             },
         )?;
         Ok(())
@@ -2709,10 +2625,7 @@ impl Inner {
             execution_id: id.clone(),
             session_id: Some(session.clone()),
             agent: req.agent,
-            initializer_mode: match &req.purpose {
-                ExecPurpose::Init { mode, .. } => Some(*mode),
-                _ => None,
-            },
+            initializer_mode: req.purpose.initializer_mode(),
             executor: route.executor,
             workspace_root: self.workspace_root.clone(),
             repo_root: repo_root.clone(),
@@ -2989,7 +2902,7 @@ fn uuid_v4() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-async fn run_shell(
+pub async fn run_shell(
     cwd: &Path,
     program: &str,
     args: &[String],
@@ -3000,7 +2913,7 @@ async fn run_shell(
     run_command(cmd, cwd, program, timeout_secs).await
 }
 
-async fn run_host(
+pub async fn run_host(
     cwd: &Path,
     hc: &ostra_sandbox::HostCommand,
     timeout_secs: u64,
@@ -3352,6 +3265,10 @@ impl ExecutionHost for EngineHost {
             .snapshot(self.session.as_ref()?)
             .ok()?
             .submit_blocked(&self.execution)
+    }
+
+    fn check_submit(&self, contract: ostra_core::Contract, input: &Value) -> Vec<String> {
+        self.inner.pipeline.check_submit(contract, input)
     }
 }
 

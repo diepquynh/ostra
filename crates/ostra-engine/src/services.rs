@@ -75,7 +75,7 @@ pub trait Services: Send + Sync {
     fn workspace(&self) -> WorkspaceSettings;
     /// Rule CA1: the workspace's agents, built-in and custom, re-read like the settings.
     fn agents(&self) -> AgentCatalog {
-        AgentCatalog::builtin()
+        self.pipeline().agents()
     }
     /// Rule WF1: the workspace's workflow files, re-read like the settings.
     fn workflows(&self) -> ostra_core::workflow::WorkflowSet {

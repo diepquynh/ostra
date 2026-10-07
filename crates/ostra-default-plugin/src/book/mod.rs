@@ -20,8 +20,8 @@ pub const MAX_DOCS_PAGES: usize = 30;
 /// Rule B10: synthesis rounds before a gate asks whether to go on.
 pub const DOCS_ROUNDS: u32 = 3;
 
-/// Rule B10: install the docs stage's check of the `documentation` contract into the core, so a
-/// writer's submit is checked step by step when it calls the submit tool.
+/// Rule B10: install the docs stage's check of the `documentation` contract for the deprecated
+/// `ostra_core::book::check_documentation`. Submit tools run it through the pipeline.
 pub fn install_checks() {
     ostra_core::submit::install_check(Contract::Documentation, checks::check_value);
 }

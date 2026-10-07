@@ -105,6 +105,12 @@ pub trait Pipeline: Send + Sync {
         answer: &GateAnswer,
         routed: bool,
     );
+    /// Rule C2: whether context the user adds goes through the Route answer judge.
+    fn routes_amendments(&self, s: &SessionState) -> bool;
+    /// Rule U1: a decision of `kind` can skip running work, so the engine stops what it skipped.
+    fn judge_skips_work(&self, kind: JudgeKind) -> bool;
+    /// The output a failed judge call of `kind` records instead, or `None` to fail the session.
+    fn judge_fallback(&self, s: &SessionState, kind: JudgeKind, error: &str) -> Option<Value>;
     /// Rule C2: context the user added reached the session unrouted.
     fn amended(&self, s: &mut SessionState, text: &str);
 
@@ -118,9 +124,16 @@ pub trait Pipeline: Send + Sync {
     fn completion(&self, p: &mut Planner<'_>);
     /// Rule O4: a created project whose init has not ended, so its other steps wait.
     fn awaiting_init(&self, s: &SessionState, project: &str) -> bool;
+    /// Rule O4: a step that must wait, such as one in a created project whose init has not ended.
+    fn holds(&self, s: &SessionState, step: &Step) -> bool;
 
     // Facts that generic code reads.
 
+    /// Rule PL4: the pipeline's own agents, the catalog a workspace without custom agents has.
+    fn agents(&self) -> ostra_agents::AgentCatalog;
+    /// Rule CA5: the contract of a run logged before contracts: the pipeline agent's own, else
+    /// the custom stage contract, the only one custom agents had then.
+    fn legacy_contract(&self, agent: AgentName) -> Contract;
     /// Rule PL4: the standard agent for a contract no built-in stage binds.
     fn default_agent(&self, contract: Contract) -> AgentName;
     /// Rule WF9: the default workflows.
@@ -153,6 +166,8 @@ pub trait Pipeline: Send + Sync {
     fn workflow_resolved(&self, s: &mut SessionState, wf: &WorkflowDef);
     /// Research documents, oldest first (Rule D2).
     fn research_docs(&self, s: &SessionState) -> Vec<PathBuf>;
+    /// Rule B5: what this session adds to its book, from the log.
+    fn book_update(&self, s: &SessionState) -> ostra_core::book::BookUpdate;
     /// The current spec, once one exists.
     fn spec_file(&self, s: &SessionState) -> Option<PathBuf>;
     /// The current master plan, once one exists.
@@ -202,6 +217,12 @@ pub trait Pipeline: Send + Sync {
     fn previous_run(&self, s: &SessionState, purpose: &ExecPurpose) -> Option<ExecutionId>;
     /// Rule SM2: the subagents a run of the pipeline works with, and their role toward it.
     fn partners(&self, s: &SessionState, rec: &ExecRecord) -> Vec<(ExecutionId, String)>;
+    /// Rule WF6: the subagents of built-in stage `stage` that a later stage's agent works with,
+    /// such as the author of the spec.
+    fn stage_partners(&self, s: &SessionState, stage: BuiltinStage) -> Vec<(ExecutionId, String)>;
+    /// Rule WF6: the subagents whose work a stage instance in `scope` checks, such as the
+    /// implementer of its phase.
+    fn work_partners(&self, s: &SessionState, scope: Option<&str>) -> Vec<(ExecutionId, String)>;
     /// The session dir of a run that works for the whole session, not for its project.
     fn session_wide(&self, purpose: &ExecPurpose) -> bool;
 
@@ -237,6 +258,9 @@ pub trait Pipeline: Send + Sync {
     fn answer_needs_route(&self, payload: &GatePayload, answer: &GateAnswer) -> bool;
     /// Whether a user's override of a decision has the decision's output shape.
     fn override_ok(&self, judge: JudgeKind, output: &Value) -> bool;
+
+    /// The pipeline's checks of a contract's submit at submit time, after its shape check.
+    fn check_submit(&self, contract: Contract, input: &Value) -> Vec<String>;
 
     // Effects.
 

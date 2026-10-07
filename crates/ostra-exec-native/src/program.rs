@@ -135,6 +135,13 @@ pub(crate) async fn execute(
             "The plugin's agent returned an invalid result: {e}"
         ));
     }
+    let issues = run.host.check_submit(spec.ctx.contract, &submit);
+    if !issues.is_empty() {
+        return run.fail(format!(
+            "The plugin's agent returned an invalid result: {}",
+            issues.join("\n")
+        ));
+    }
     if let Some(report) = &spec.ctx.report_file
         && spec.ctx.contract.report_required()
         && !report.exists()

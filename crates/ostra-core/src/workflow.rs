@@ -40,6 +40,40 @@ pub enum BuiltinStage {
 }
 
 impl BuiltinStage {
+    /// Rule WB6: the shape of the facts a reference to the stage's node reads (Rule WB4).
+    pub fn value_shape(self) -> serde_json::Value {
+        let text = serde_json::json!({"type": "string"});
+        match self {
+            BuiltinStage::Research => serde_json::json!({"type": "object", "properties": {
+                "research_docs": {"type": "array", "items": text}}}),
+            BuiltinStage::Track => {
+                serde_json::json!({"type": "object", "properties": {"track": text}})
+            }
+            BuiltinStage::Spec => {
+                serde_json::json!({"type": "object", "properties": {"spec_file": text}})
+            }
+            BuiltinStage::Stakes => {
+                serde_json::json!({"type": "object", "properties": {"stakes": text}})
+            }
+            BuiltinStage::Plan => serde_json::json!({"type": "object", "properties": {
+                "master_plan": text, "phases": {"type": "number"}}}),
+            BuiltinStage::Build => {
+                serde_json::json!({"type": "object", "properties": {"phases": {"type": "number"}}})
+            }
+            BuiltinStage::Feedback => serde_json::json!({"type": "object", "properties": {}}),
+            // Rule B10: per project, whether the closing gate chose docs; across projects, the
+            // projects it chose them for.
+            BuiltinStage::Closing => {
+                serde_json::json!({"type": "object", "properties": {"docs": {}}})
+            }
+            BuiltinStage::Book => {
+                serde_json::json!({"type": "object", "properties": {"book": text}})
+            }
+        }
+    }
+}
+
+impl BuiltinStage {
     pub const ALL: [BuiltinStage; 9] = [
         BuiltinStage::Research,
         BuiltinStage::Track,

@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use ostra_core::agent::AgentName;
 use ostra_core::containment::{ContainmentSignal, PAUSE_AFTER};
 use ostra_core::event::{
-    AnswerSource, ContextDelivery, ContextFile, ExecPurpose, FactTarget, GateAnswer, GatePayload,
-    JudgeKind, ProjectRef, SessionEvent, SessionKind, SessionOptions, StoredEvent, UploadedFile,
+    AnswerSource, ContextDelivery, ContextFile, ExecPurpose, GateAnswer, GatePayload, JudgeKind,
+    ProjectRef, SessionEvent, SessionKind, SessionOptions, StoredEvent, UploadedFile,
 };
 use ostra_core::exec::{ExecutionResult, ExecutionStatus};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
@@ -149,20 +149,7 @@ pub fn upload_list(heading: &str, uploads: &[UploadedFile]) -> String {
 
 /// The resume-map key of an execution purpose: one work loop, review loop, or stage.
 pub fn purpose_key(p: &ExecPurpose) -> String {
-    match p {
-        ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
-            format!("work:{phase}:false")
-        }
-        ExecPurpose::WriteTest { phase, .. } => format!("work:{phase}:true"),
-        ExecPurpose::Review { phase, tests, .. } => format!("review:{phase}:{tests}"),
-        ExecPurpose::Spec { .. } => "spec".into(),
-        ExecPurpose::Plan { .. } => "plan".into(),
-        ExecPurpose::FactCheck { target, .. } => format!("fact-check:{}", target.as_str()),
-        ExecPurpose::Stage { node, scope, .. } => {
-            format!("stage:{node}:{}", scope.as_deref().unwrap_or_default())
-        }
-        other => serde_json::to_string(other).unwrap_or_default(),
-    }
+    p.resume_key()
 }
 
 #[derive(Debug, Clone)]
@@ -258,48 +245,7 @@ pub fn parse<T: serde::de::DeserializeOwned>(v: &Option<Value>) -> Option<T> {
 }
 
 pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
-    match purpose {
-        ExecPurpose::Advise { .. } | ExecPurpose::Unblock { .. } => StageKind::Rescue,
-        ExecPurpose::Consult { .. } | ExecPurpose::Message { .. } => StageKind::Handoff,
-        ExecPurpose::Helper { .. } => StageKind::Explore,
-        ExecPurpose::Stage { .. } => StageKind::Custom,
-        ExecPurpose::Explore { .. } => StageKind::Explore,
-        ExecPurpose::Spec { .. } => StageKind::Spec,
-        ExecPurpose::FactCheck {
-            target: FactTarget::Spec,
-            ..
-        } => StageKind::FactCheckSpec,
-        ExecPurpose::FactCheck {
-            target: FactTarget::Plan,
-            ..
-        } => StageKind::FactCheckPlan,
-        ExecPurpose::Plan { .. } => StageKind::Plan,
-        ExecPurpose::Implement { .. } => StageKind::Implement,
-        ExecPurpose::Review { tests: false, .. } => StageKind::Review,
-        ExecPurpose::Review { tests: true, .. } => StageKind::TestReview,
-        ExecPurpose::Epa { .. } => StageKind::Epa,
-        ExecPurpose::WriteTest { .. } => StageKind::WriteTest,
-        ExecPurpose::Docs { .. }
-        | ExecPurpose::DocsSurvey { .. }
-        | ExecPurpose::DocsCheck { .. }
-        | ExecPurpose::DocsSynthesis { .. } => StageKind::Documentation,
-        ExecPurpose::Architecture => StageKind::Documentation,
-        ExecPurpose::PromptGen {
-            handoff_for: Some(_),
-        } => StageKind::Handoff,
-        ExecPurpose::PromptGen { handoff_for: None } => StageKind::PromptGen,
-        ExecPurpose::Verify { .. } => StageKind::Verify,
-        ExecPurpose::QuickAnswer | ExecPurpose::Inspect { .. } => StageKind::QuickAnswer,
-        ExecPurpose::Init { mode, .. } => match mode {
-            ostra_core::InitializerMode::Detect | ostra_core::InitializerMode::Adopt => {
-                StageKind::Detect
-            }
-            ostra_core::InitializerMode::Scout => StageKind::Scout,
-            ostra_core::InitializerMode::Propose => StageKind::Propose,
-            ostra_core::InitializerMode::GenerateSkill => StageKind::GenerateSkill,
-            ostra_core::InitializerMode::GenerateInventory => StageKind::GenerateInventory,
-        },
-    }
+    purpose.stage_kind()
 }
 
 impl SessionState {
@@ -595,9 +541,6 @@ impl SessionState {
                         .insert(project.execution.clone(), Interrupt::ProjectCreated);
                 }
             }
-            SessionEvent::ProjectInitFinished { .. } | SessionEvent::InitStepFailed { .. } => {
-                self.pipeline.clone().event(self, stored)
-            }
             SessionEvent::RequestAmended {
                 text,
                 files,
@@ -707,7 +650,7 @@ impl SessionState {
                 contract,
             } => {
                 // Rule CA5: logs from before contracts ran the standard agents.
-                let contract = contract.unwrap_or_else(|| crate::workflow::legacy_contract(*agent));
+                let contract = contract.unwrap_or_else(|| self.pipeline.legacy_contract(*agent));
                 let loop_key = self.pipeline.clone().loop_key(self, purpose);
                 self.executions.insert(
                     id.clone(),
@@ -892,13 +835,6 @@ impl SessionState {
                     .clone()
                     .gate_answered(self, id, &payload, answer, *routed);
             }
-            SessionEvent::CommandStarted { .. }
-            | SessionEvent::DocsPlanned { .. }
-            | SessionEvent::DocsScanned { .. }
-            | SessionEvent::CommandRan { .. }
-            | SessionEvent::AutofixApplied { .. }
-            | SessionEvent::SecurityBlock { .. }
-            | SessionEvent::PhaseBlocked { .. } => self.pipeline.clone().event(self, stored),
             SessionEvent::BookWritten {
                 book,
                 projects,
@@ -918,6 +854,8 @@ impl SessionState {
                 self.completed = Some((report_path.clone(), summary.clone()));
             }
             SessionEvent::SessionFailed { error } => self.failed = Some(error.clone()),
+            // The events only the built-in stages read.
+            _ => self.pipeline.clone().event(self, stored),
         }
     }
 
@@ -928,11 +866,7 @@ impl SessionState {
     /// Rule C2: a classified session with research or later stages routes added context through
     /// the judge. Before classification the Classify judge reads it with the request.
     pub fn routes_amendments(&self) -> bool {
-        self.classify.is_some()
-            && matches!(
-                self.category,
-                Some(Category::Research | Category::Spec | Category::Plan | Category::Implement)
-            )
+        self.pipeline.routes_amendments(self)
     }
 
     /// Rule C2: queued context joins the session, to be routed or delivered. A resumed conversation

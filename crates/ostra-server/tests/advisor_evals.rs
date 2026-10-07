@@ -36,9 +36,10 @@ use ostra_core::submit::AdvisorSubmit;
 use ostra_default_plugin::data::InitTrack;
 use ostra_default_plugin::factory::AgentsFactory;
 use ostra_default_plugin::init::{AdviceInputs, advisor_request, failed_step_label};
+use ostra_default_plugin::inputs::OstraInputs;
 use ostra_engine::plan::{SpawnInputs, SpawnRequest};
 use ostra_engine::services::{BuiltSpawn, SpawnEnv, SpawnFactory};
-use ostra_engine::state::{SessionState, stage_of};
+use ostra_engine::state::stage_of;
 use ostra_exec_native::NativeExecutor;
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -293,8 +294,12 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
         project: spec.key.clone(),
         session_dir: session.clone(),
         inputs: SpawnInputs {
-            init,
-            init_item: case.item.clone(),
+            extra: OstraInputs {
+                init,
+                init_item: case.item.clone(),
+                ..Default::default()
+            }
+            .into_value(),
             ..Default::default()
         },
         resumes: None,

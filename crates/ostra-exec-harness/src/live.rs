@@ -126,6 +126,13 @@ impl LiveExecution {
         self.host()?.submit_blocked()
     }
 
+    /// The pipeline's checks of the run's submit, after its shape check.
+    pub fn check_submit(&self, input: &serde_json::Value) -> Vec<String> {
+        self.host()
+            .map(|h| h.check_submit(self.contract(), input))
+            .unwrap_or_default()
+    }
+
     pub fn set_inspect(&self) {
         self.inspect.store(true, Ordering::SeqCst);
     }

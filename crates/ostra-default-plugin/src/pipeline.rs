@@ -3,10 +3,13 @@
 
 use crate::book::DocsTrack;
 use crate::data::{AUTO_FIXABLE_PARAM, InitTrack};
+use crate::inputs::OstraInputs;
 use crate::judge;
 use crate::judge_input;
+use crate::steps::OstraStep;
 use crate::view;
 use ostra_core::config::{ProjectProfile, load_toml};
+use ostra_core::event::CommandPurpose;
 use ostra_core::event::{
     ExecPurpose, GateAnswer, GatePayload, JudgeKind, SessionEvent, SessionKind, StoredEvent,
 };
@@ -24,7 +27,7 @@ use ostra_engine::pipeline::{
     HelperResult, PhaseFacts, Pipeline, PipelineBox, ProjectFacts, YoloPlan,
 };
 use ostra_engine::plan::{Planner, SpawnRequest, Step};
-use ostra_engine::runner::{EngineError, StepHost};
+use ostra_engine::runner::{EngineError, StepHost, run_host, run_shell};
 use ostra_engine::state::{ExecRecord, SessionState};
 use ostra_store::WorkspaceDb;
 use serde_json::Value;
@@ -148,6 +151,40 @@ impl Pipeline for OstraPipeline {
         s.awaiting_init(project)
     }
 
+    fn holds(&self, s: &SessionState, step: &Step) -> bool {
+        // Rule O4: nothing but its init and the advisor runs in a created project until the init
+        // ends, because every other agent routes its work by the project's inventory and profile.
+        match step {
+            Step::Spawn(r) => {
+                !matches!(
+                    r.purpose,
+                    ExecPurpose::Init { .. } | ExecPurpose::Advise { .. }
+                ) && s.awaiting_init(&r.project)
+            }
+            _ => OstraStep::of(step)
+                .and_then(|o| o.project().map(|p| s.awaiting_init(p)))
+                .unwrap_or(false),
+        }
+    }
+
+    fn check_submit(&self, contract: Contract, input: &Value) -> Vec<String> {
+        match contract {
+            // Rule B10: each docs step's own shape, with the correction first.
+            Contract::Documentation => crate::book::checks::check_value(input),
+            _ => vec![],
+        }
+    }
+
+    fn agents(&self) -> ostra_agents::AgentCatalog {
+        ostra_agents::AgentCatalog::builtin()
+    }
+
+    fn legacy_contract(&self, agent: AgentName) -> Contract {
+        ostra_agents::builtin_def(agent)
+            .map(|d| d.returns)
+            .unwrap_or(Contract::Stage)
+    }
+
     fn default_agent(&self, contract: Contract) -> AgentName {
         crate::Standard::default_for(contract)
             .expect("the standard plugin returns every built-in contract")
@@ -207,6 +244,10 @@ impl Pipeline for OstraPipeline {
         if os.track.is_none() {
             os.track = wf.track;
         }
+    }
+
+    fn book_update(&self, s: &SessionState) -> ostra_core::book::BookUpdate {
+        s.book_update()
     }
 
     fn research_docs(&self, s: &SessionState) -> Vec<PathBuf> {
@@ -436,6 +477,64 @@ impl Pipeline for OstraPipeline {
         out
     }
 
+    fn stage_partners(&self, s: &SessionState, stage: BuiltinStage) -> Vec<(ExecutionId, String)> {
+        let (purpose, role): (fn(&ExecPurpose) -> bool, &str) = match stage {
+            BuiltinStage::Spec => (
+                |p| matches!(p, ExecPurpose::Spec { .. }),
+                "the author of the spec",
+            ),
+            BuiltinStage::Plan => (
+                |p| matches!(p, ExecPurpose::Plan { .. }),
+                "the author of the plan",
+            ),
+            _ => return vec![],
+        };
+        latest_subagent(s, |r| purpose(&r.purpose))
+            .map(|x| (x, role.to_string()))
+            .into_iter()
+            .collect()
+    }
+
+    fn work_partners(&self, s: &SessionState, scope: Option<&str>) -> Vec<(ExecutionId, String)> {
+        let phase = scope
+            .and_then(|s| s.strip_prefix("phase:"))
+            .and_then(|p| p.parse::<u32>().ok());
+        let project = scope.and_then(|s| s.strip_prefix("project:"));
+        latest_subagent(s, |r| match (&r.purpose, phase, project) {
+            (ExecPurpose::Implement { phase: p, .. }, Some(want), _) => *p == want,
+            (ExecPurpose::Implement { .. }, None, Some(key)) => r.project == key,
+            _ => false,
+        })
+        .map(|x| (x, "the implementer of the work you check".to_string()))
+        .into_iter()
+        .collect()
+    }
+
+    fn routes_amendments(&self, s: &SessionState) -> bool {
+        s.classify.is_some()
+            && matches!(
+                s.category,
+                Some(Category::Research | Category::Spec | Category::Plan | Category::Implement)
+            )
+    }
+
+    fn judge_skips_work(&self, kind: JudgeKind) -> bool {
+        // Rule U1: research the decision skipped stops now.
+        kind == JudgeKind::RouteAnswer
+    }
+
+    fn judge_fallback(&self, s: &SessionState, kind: JudgeKind, error: &str) -> Option<Value> {
+        if kind != JudgeKind::Completion {
+            return None;
+        }
+        // The session's work is done; a report without prose beats no report.
+        let md = format!(
+            "# Session complete\n\nThe completion judge failed ({error}), so this report lists the state only.\n\n{}",
+            judge_input::judge_input(s, JudgeKind::Completion, None, &[]).0
+        );
+        Some(serde_json::json!({"report_markdown": md, "reason": "The completion judge failed."}))
+    }
+
     fn session_wide(&self, purpose: &ExecPurpose) -> bool {
         matches!(
             purpose,
@@ -540,13 +639,10 @@ impl Pipeline for OstraPipeline {
         session: &SessionId,
         step: Step,
     ) -> Result<Result<(), EngineError>, Step> {
+        if let Some(own) = OstraStep::of(&step) {
+            return Ok(perform_own(host, session, own).await);
+        }
         match step {
-            Step::Autofix { .. }
-            | Step::AnnounceBlocked { .. }
-            | Step::FinishInit { .. }
-            | Step::RecordInitProblem { .. }
-            | Step::ScanDocs { .. }
-            | Step::WriteBook { .. } => Ok(perform_own(host, session, step).await),
             Step::OpenGate {
                 payload: GatePayload::ImplementationReview { .. },
                 ..
@@ -594,21 +690,15 @@ impl Pipeline for OstraPipeline {
     }
 
     fn before_spawn(&self, st: &SessionState, req: &SpawnRequest) -> Result<(), String> {
-        if req
-            .inputs
-            .context_files
-            .contains(&st.session_context_path())
-        {
+        let x = OstraInputs::of(&req.inputs);
+        if x.context_files.contains(&st.session_context_path()) {
             write_session_context(st).map_err(|e| e.to_string())?;
         }
         // Rule D4a: rendered for each spawn, so every mark reflects the files as they are now.
-        if req.inputs.wants_code_facts_file() {
+        if x.wants_code_facts_file(&req.inputs) {
             let path = st.code_facts_path();
-            std::fs::write(
-                &path,
-                ostra_core::doc::render_code_facts(&req.inputs.code_facts),
-            )
-            .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+            std::fs::write(&path, ostra_core::doc::render_code_facts(&x.code_facts))
+                .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
         }
         Ok(())
     }
@@ -627,8 +717,7 @@ impl Pipeline for OstraPipeline {
             );
         }
         if st.category == Some(Category::Docs) {
-            for p in req
-                .inputs
+            for p in OstraInputs::of(&req.inputs)
                 .implementer_reports
                 .iter()
                 .filter(|p| !p.exists())
@@ -756,6 +845,15 @@ impl Pipeline for OstraPipeline {
     }
 }
 
+/// The subagent of the latest run that `f` picks.
+fn latest_subagent(s: &SessionState, f: impl Fn(&ExecRecord) -> bool) -> Option<ExecutionId> {
+    s.executions
+        .values()
+        .filter(|r| f(r))
+        .max_by_key(|r| r.id.clone())
+        .map(|r| s.subagent_of(&r.id))
+}
+
 /// Rule F2: the session context file is rewritten from the fold before anything reads it.
 fn write_session_context(st: &SessionState) -> Result<(), EngineError> {
     let path = st.session_context_path();
@@ -763,9 +861,13 @@ fn write_session_context(st: &SessionState) -> Result<(), EngineError> {
         .map_err(|e| EngineError::Invalid(format!("Could not write {}: {e}", path.display())))
 }
 
-async fn perform_own(host: &StepHost, session: &SessionId, step: Step) -> Result<(), EngineError> {
+async fn perform_own(
+    host: &StepHost,
+    session: &SessionId,
+    step: OstraStep,
+) -> Result<(), EngineError> {
     match step {
-        Step::Autofix {
+        OstraStep::Autofix {
             project,
             phase,
             tests,
@@ -792,7 +894,7 @@ async fn perform_own(host: &StepHost, session: &SessionId, step: Step) -> Result
             )?;
             Ok(())
         }
-        Step::AnnounceBlocked {
+        OstraStep::AnnounceBlocked {
             project,
             phase,
             tests,
@@ -809,7 +911,7 @@ async fn perform_own(host: &StepHost, session: &SessionId, step: Step) -> Result
             )?;
             Ok(())
         }
-        Step::FinishInit { project } => {
+        OstraStep::FinishInit { project } => {
             let st = host.snapshot(session)?;
             let root = st.project_path(&project).unwrap_or_default();
             let inventory = st
@@ -840,7 +942,7 @@ async fn perform_own(host: &StepHost, session: &SessionId, step: Step) -> Result
             }
             Ok(())
         }
-        Step::RecordInitProblem {
+        OstraStep::RecordInitProblem {
             project,
             execution,
             error,
@@ -855,7 +957,7 @@ async fn perform_own(host: &StepHost, session: &SessionId, step: Step) -> Result
             )?;
             Ok(())
         }
-        Step::ScanDocs { project } => {
+        OstraStep::ScanDocs { project } => {
             let st = host.snapshot(session)?;
             let path = st.project_path(&project).ok_or_else(|| {
                 EngineError::Invalid(format!("Project `{project}` is not in this workspace."))
@@ -877,31 +979,110 @@ async fn perform_own(host: &StepHost, session: &SessionId, step: Step) -> Result
             )?;
             Ok(())
         }
-        Step::WriteBook { book } => {
-            let st = host.snapshot(session)?;
-            let update = st.book_update();
-            let projects = update.parts.iter().map(|p| p.project.clone()).collect();
-            let ws = &st.workspace_root;
-            let error = ostra_core::book::apply(ws, &book, &update, chrono::Utc::now())
-                .err()
-                .map(|e| {
-                    format!(
-                        "The book could not be written to {}: {e}",
-                        ostra_core::book::book_dir(ws, &book).display()
-                    )
-                });
-            host.append(
-                session,
-                SessionEvent::BookWritten {
-                    book,
-                    projects,
-                    error,
-                },
-            )?;
-            Ok(())
-        }
-        _ => Ok(()),
+        OstraStep::Command {
+            purpose,
+            project,
+            command,
+            files,
+        } => perform_command(host, session, purpose, &project, command, files).await,
     }
+}
+
+/// The output of a format step skipped because its command waits for approval.
+pub const FORMAT_NOT_APPROVED: &str = "The format command in project.toml changed outside Ostra, so format was skipped. Approve it in the project's settings to run it next time.";
+
+/// Rule D8 and Step 2: run the project's format command, or stage the files a loop changed, and
+/// record what ran.
+async fn perform_command(
+    host: &StepHost,
+    session: &SessionId,
+    purpose: CommandPurpose,
+    project: &str,
+    command: Option<String>,
+    files: Vec<String>,
+) -> Result<(), EngineError> {
+    let root = host
+        .snapshot(session)?
+        .project_path(project)
+        .unwrap_or_default();
+    let started = |command: &str| {
+        host.append(
+            session,
+            SessionEvent::CommandStarted {
+                purpose,
+                project: project.into(),
+                command: command.into(),
+            },
+        )
+        .map(|_| ())
+    };
+    let (cmd_text, exit, tail) = match purpose {
+        CommandPurpose::Format => match command {
+            None => (
+                String::new(),
+                None,
+                "No format command in project.toml, so format was skipped.".to_string(),
+            ),
+            // Rule A1: a format command runs only once the user approved it.
+            Some(cmd) if !host.services().command_approved(&root, &cmd) => {
+                (cmd, None, FORMAT_NOT_APPROVED.to_string())
+            }
+            Some(cmd) => {
+                started(&cmd)?;
+                // The project's own program, so it runs under the agent sandbox.
+                let (code, out) = match ostra_sandbox::host_command(
+                    "bash",
+                    &["-c".into(), cmd.clone()],
+                    &root,
+                    &[&root],
+                    &host.services().workspace().sandbox(),
+                ) {
+                    Ok(hc) => run_host(&root, &hc, 600).await,
+                    Err(e) => (None, e),
+                };
+                (cmd, code, out)
+            }
+        },
+        CommandPurpose::Stage => {
+            if files.is_empty() {
+                (String::new(), Some(0), "No files to stage.".to_string())
+            } else {
+                // Staging keeps each review focused on the unstaged diff (Step 2).
+                for p in ostra_sandbox::repair_git_dirs(&ostra_sandbox::git_repos(&[&root])) {
+                    tracing::warn!("removed a planted {} before staging", p.display());
+                }
+                let mut args: Vec<String> = ostra_core::git::AUTOMATIC
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
+                args.extend(ostra_core::git::filter_overrides(&root).await);
+                args.extend([
+                    "-C".into(),
+                    root.display().to_string(),
+                    "add".into(),
+                    "-A".into(),
+                    "--".into(),
+                ]);
+                args.extend(files.iter().cloned());
+                let text = format!("git {}", args.join(" "));
+                started(&text)?;
+                let (code, out) = run_shell(&root, "git", &args, 60).await;
+                (text, code, out)
+            }
+        }
+        CommandPurpose::Autofix => (String::new(), Some(0), String::new()),
+    };
+    host.append(
+        session,
+        SessionEvent::CommandRan {
+            purpose,
+            project: project.into(),
+            command: cmd_text,
+            exit_code: exit,
+            output_tail: tail,
+        },
+    )?;
+    Ok(())
 }
 
 /// Why an init left the project without a usable inventory or profile.

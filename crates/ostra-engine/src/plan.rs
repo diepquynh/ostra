@@ -4,14 +4,10 @@
 
 use crate::state::*;
 use ostra_core::agent::AgentName;
-use ostra_core::book::DocsStep;
-use ostra_core::event::{
-    CommandPurpose, ExecPurpose, FactTarget, GatePayload, JudgeKind, WorkKind,
-};
+use ostra_core::event::{ExecPurpose, GatePayload, JudgeKind};
 use ostra_core::ids::{ExecutionId, GateId};
 use ostra_core::model::Complexity;
-use ostra_core::pipeline::{Category, PhaseInfo, QuestionAnswer, StageKind};
-use ostra_core::submit::ReviewFinding;
+use ostra_core::pipeline::{Category, PhaseInfo, StageKind};
 use ostra_core::workflow::{StageDef, StageRun, StageScope, WorkflowDef};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,60 +27,17 @@ pub struct PlanCtx {
 pub struct SpawnInputs {
     pub task: Option<String>,
     pub research_docs: Vec<PathBuf>,
-    /// On a spec revision, the research documents the current spec was written without.
-    pub new_research_docs: Vec<PathBuf>,
-    pub projects_in_scope: Vec<(String, PathBuf)>,
-    pub answers: Vec<QuestionAnswer>,
-    pub changes: Vec<String>,
-    /// Rules D2a and D4a: the research documents whose code facts the agent gets. One that reads
-    /// the documents gets the files that changed since; one that may not gets the facts file.
-    pub code_facts: Vec<PathBuf>,
-    /// Fact-check findings a generator must resolve, or fix instructions.
-    pub findings: Option<String>,
-    /// Rule D4b: the plan phases a failed fact-check's findings name.
-    pub revise_phases: Vec<u32>,
     pub target: Option<PathBuf>,
-    pub target_type: Option<FactTarget>,
     pub prior_findings: Option<String>,
     pub spec_file: Option<PathBuf>,
-    pub source_check: Option<String>,
     pub phase: Option<PhaseInfo>,
-    pub work: Option<WorkKind>,
     pub instructions: Option<String>,
-    pub changed_files: Vec<String>,
-    pub rationale: Option<String>,
     /// `Phase:` value for reviews: `N` or `N-tests`.
     pub phase_value: Option<String>,
     pub implementer_report: Option<PathBuf>,
-    pub implementer_reports: Vec<PathBuf>,
-    pub epa_report: Option<PathBuf>,
     pub report_file: Option<PathBuf>,
-    pub ledger_file: Option<PathBuf>,
-    pub target_files: Option<String>,
-    pub question: Option<String>,
-    /// Earlier implementer reports a revision builds on.
-    pub prior_reports: Vec<PathBuf>,
-    /// Files the agent reads first, such as the session context.
-    pub context_files: Vec<PathBuf>,
-    /// The feedback round a revision phase builds.
-    pub revision: Option<u32>,
     /// Rule J1: answers the judge kept for this stage.
     pub user_notes: Vec<String>,
-    /// Initializer inputs, by spawn label.
-    pub init: BTreeMap<String, String>,
-    /// Rule B10: the reference sheet of modules and constants.
-    pub docs_reference: Option<PathBuf>,
-    /// Rule B10: the docs step a documentation run answers, the page a writer writes with the
-    /// whole page plan, the inventory items it owns, its revision instructions or the round's
-    /// findings, the synthesis round, and a fact-check of a draft page.
-    pub docs_step: Option<DocsStep>,
-    pub docs_page: Option<ostra_core::book::PlannedPage>,
-    pub docs_pages: Vec<ostra_core::book::PlannedPage>,
-    pub docs_inventory: Vec<String>,
-    pub docs_instructions: Vec<String>,
-    pub docs_round: u32,
-    pub docs_check: bool,
-    pub init_item: Option<String>,
     /// Rule WF4: the workflow node a custom agent's run serves.
     pub stage_id: Option<String>,
     pub stage_round: Option<u32>,
@@ -92,14 +45,8 @@ pub struct SpawnInputs {
     pub earlier_stages: Vec<String>,
     /// Rule WB4: the node's inputs, one `name = <json>` line each.
     pub stage_inputs: Vec<String>,
-}
-
-impl SpawnInputs {
-    /// Rules D2a and D4a: an agent that may not read the research documents gets their code
-    /// facts as a file the runner writes; one that reads them gets only what changed since.
-    pub fn wants_code_facts_file(&self) -> bool {
-        !self.code_facts.is_empty() && self.research_docs.is_empty()
-    }
+    /// The pipeline's own inputs for its contracts' spawns, which only the pipeline reads.
+    pub extra: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -129,6 +76,15 @@ impl SpawnRequest {
     }
 }
 
+/// A step only the pipeline knows: its identity, its form in a fixture, and the data its
+/// `perform` reads back.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PipelineStep {
+    pub key: String,
+    pub summary: String,
+    pub data: serde_json::Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "step", rename_all = "snake_case")]
 pub enum Step {
@@ -145,40 +101,8 @@ pub enum Step {
     YoloAnswer {
         gate: GateId,
     },
-    Command {
-        purpose: CommandPurpose,
-        project: String,
-        command: Option<String>,
-        files: Vec<String>,
-    },
-    Autofix {
-        project: String,
-        phase: u32,
-        tests: bool,
-        findings: Vec<ReviewFinding>,
-    },
-    AnnounceBlocked {
-        project: String,
-        phase: u32,
-        tests: bool,
-        reason: String,
-    },
-    /// Rule O4: end a created project's init. The runner checks the inventory and profile first,
-    /// and records a failed step instead when either is missing or broken.
-    FinishInit {
-        project: String,
-    },
-    /// Rule O5: record that a step of a created project's init left nothing usable, so the advisor
-    /// looks at it.
-    RecordInitProblem {
-        project: String,
-        execution: ExecutionId,
-        error: String,
-    },
-    /// Rule B10: read the project's modules and named constants from disk and record them.
-    ScanDocs {
-        project: String,
-    },
+    /// A step of the pipeline's own, which only the pipeline performs.
+    Pipeline(PipelineStep),
     /// Rule B5: write the session's documentation into the workspace book `book`.
     WriteBook {
         book: String,
@@ -229,33 +153,17 @@ impl Step {
                 judge.as_str(),
                 subject.clone().unwrap_or_default()
             ),
-            // Created projects each run an init in one session, so init spawns carry the project.
-            Step::Spawn(s) if matches!(s.purpose, ExecPurpose::Init { .. }) => format!(
+            // A purpose can repeat across projects, such as one init per created project.
+            Step::Spawn(s) => format!(
                 "spawn:{}:{}",
                 s.project,
                 serde_json::to_string(&s.purpose).unwrap_or_default()
             ),
-            Step::Spawn(s) => format!(
-                "spawn:{}",
-                serde_json::to_string(&s.purpose).unwrap_or_default()
-            ),
             Step::OpenGate { payload, .. } => {
-                format!("gate:{}:{}", payload.kind_str(), gate_owner(payload))
+                format!("gate:{}:{}", payload.kind_str(), payload.owner())
             }
             Step::YoloAnswer { gate } => format!("yolo:{gate}"),
-            Step::Command {
-                purpose, project, ..
-            } => format!("cmd:{purpose:?}:{project}"),
-            Step::Autofix {
-                project,
-                phase,
-                tests,
-                ..
-            } => format!("autofix:{project}:{phase}:{tests}"),
-            Step::AnnounceBlocked { phase, tests, .. } => format!("blocked:{phase}:{tests}"),
-            Step::FinishInit { project } => format!("finish-init:{project}"),
-            Step::RecordInitProblem { project, .. } => format!("init-problem:{project}"),
-            Step::ScanDocs { project } => format!("scan-docs:{project}"),
+            Step::Pipeline(p) => format!("pipeline:{}", p.key),
             Step::WriteBook { book } => format!("book:{book}"),
             Step::ResolveWorkflow { .. } => "resolve-workflow".into(),
             Step::HandleResult { execution } => format!("handle:{execution}"),
@@ -288,7 +196,7 @@ impl Step {
             Step::Spawn(s) => format!(
                 "spawn {} {}{}",
                 s.agent,
-                purpose_summary(&s.purpose),
+                s.purpose.summary(),
                 if s.continues.is_some() {
                     " (continues)"
                 } else {
@@ -297,17 +205,7 @@ impl Step {
             ),
             Step::OpenGate { payload, .. } => format!("gate {}", payload.kind_str()),
             Step::YoloAnswer { .. } => "yolo-answer".into(),
-            Step::Command {
-                purpose, project, ..
-            } => format!("command {purpose:?} {project}").to_lowercase(),
-            Step::Autofix { phase, tests, .. } => format!(
-                "autofix phase {phase}{}",
-                if *tests { " tests" } else { "" }
-            ),
-            Step::AnnounceBlocked { phase, .. } => format!("blocked phase {phase}"),
-            Step::FinishInit { project } => format!("finish-init {project}"),
-            Step::RecordInitProblem { project, .. } => format!("init-problem {project}"),
-            Step::ScanDocs { project } => format!("scan-docs {project}"),
+            Step::Pipeline(p) => p.summary.clone(),
             Step::WriteBook { book } => format!("write-book {book}"),
             Step::HandleResult { .. } => "handle-result".into(),
             Step::DecideStage { node, scope, .. } => match scope {
@@ -331,115 +229,6 @@ impl Step {
             },
             Step::Complete { .. } => "complete".into(),
             Step::Fail { .. } => "fail".into(),
-        }
-    }
-}
-
-fn purpose_summary(p: &ExecPurpose) -> String {
-    match p {
-        ExecPurpose::Explore { task } => format!("explore#{task}"),
-        ExecPurpose::Advise { project, round, .. } => format!("advise {project} #{round}"),
-        ExecPurpose::Unblock {
-            phase,
-            tests,
-            round,
-            ..
-        } => format!(
-            "unblock phase {phase}{} #{round}",
-            if *tests { " tests" } else { "" }
-        ),
-        ExecPurpose::Consult { .. } => "consult".into(),
-        ExecPurpose::Message { .. } => "messages".into(),
-        ExecPurpose::Helper { .. } => "helper".into(),
-        ExecPurpose::Stage { node, scope, round } => format!(
-            "stage {node}{}#{round}",
-            scope.as_ref().map(|s| format!(" {s} ")).unwrap_or_default()
-        ),
-        ExecPurpose::Spec { round } => format!("spec#{round}"),
-        ExecPurpose::FactCheck { target, pass } => format!("fact-check-{}#{pass}", target.as_str()),
-        ExecPurpose::Plan { round } => format!("plan#{round}"),
-        ExecPurpose::Implement { phase, work } => format!("phase {phase} {work:?}").to_lowercase(),
-        ExecPurpose::Review {
-            phase,
-            tests,
-            iteration,
-        } => {
-            format!(
-                "review phase {phase}{} #{iteration}",
-                if *tests { " tests" } else { "" }
-            )
-        }
-        ExecPurpose::Epa { phase } => format!("epa phase {phase}"),
-        ExecPurpose::WriteTest { phase, work } => {
-            format!("write-test phase {phase} {work:?}").to_lowercase()
-        }
-        ExecPurpose::Docs {
-            project,
-            page: None,
-            ..
-        } => format!("docs {project}"),
-        ExecPurpose::Docs {
-            project,
-            page: Some(p),
-            round: 0,
-        } => format!("docs {project}/{p}"),
-        ExecPurpose::Docs {
-            project,
-            page: Some(p),
-            round,
-        } => format!("docs-revise {project}/{p} round {round}"),
-        ExecPurpose::DocsSurvey { project } => format!("docs-survey {project}"),
-        ExecPurpose::DocsCheck {
-            project,
-            page,
-            round,
-        } => format!("docs-check {project}/{page} round {round}"),
-        ExecPurpose::DocsSynthesis { project, round } => {
-            format!("docs-synthesis {project} round {round}")
-        }
-        ExecPurpose::Architecture => "architecture".into(),
-        ExecPurpose::Inspect { of } => format!("inspect {of}"),
-        ExecPurpose::PromptGen { handoff_for } => {
-            if handoff_for.is_some() {
-                "handoff".into()
-            } else {
-                "prompt".into()
-            }
-        }
-        ExecPurpose::Verify { phase } => format!("verify phase {phase}"),
-        ExecPurpose::QuickAnswer => "quick-answer".into(),
-        ExecPurpose::Init { mode, item } => format!(
-            "init {mode}{}",
-            item.as_ref().map(|i| format!(" {i}")).unwrap_or_default()
-        ),
-    }
-}
-
-fn gate_owner(p: &GatePayload) -> String {
-    match p {
-        GatePayload::OpenQuestions { artifact, .. } => artifact.clone(),
-        GatePayload::FactCheckRecurring { target, .. } => target.as_str().into(),
-        GatePayload::ReviewCap { phase, tests, .. } => format!("{phase}:{tests}"),
-        GatePayload::Stuck { execution, .. }
-        | GatePayload::ExecutionFailed { execution, .. }
-        | GatePayload::HarnessFailure { execution, .. }
-        | GatePayload::Permission { execution, .. } => execution.to_string(),
-        GatePayload::PhaseBlocked { phase, .. } => phase.to_string(),
-        GatePayload::ClosingGate { items } => items
-            .iter()
-            .map(|i| i.project.as_str())
-            .collect::<Vec<_>>()
-            .join(","),
-        GatePayload::SkillApproval { project, .. } => project.clone(),
-        GatePayload::SpecApproval { .. }
-        | GatePayload::PlanApproval { .. }
-        | GatePayload::BudgetReached { .. } => String::new(),
-        GatePayload::ImplementationReview { round, .. } => round.to_string(),
-        GatePayload::DocsRounds {
-            project, rounds, ..
-        } => format!("{project}:{rounds}"),
-        GatePayload::StageReview { stage, scope, .. } => {
-            crate::workflow::stage_key(stage, scope.as_deref())
         }
     }
 }
@@ -473,19 +262,7 @@ impl<'a> Planner<'a> {
     pub fn push(&mut self, mut step: Step) {
         // Rule O4: nothing but its init and the advisor runs in a created project until the init
         // ends, because every other agent routes its work by the project's inventory and profile.
-        let held = match &step {
-            Step::Spawn(r) => {
-                !matches!(
-                    r.purpose,
-                    ExecPurpose::Init { .. } | ExecPurpose::Advise { .. }
-                ) && self.s.pipeline.awaiting_init(self.s, &r.project)
-            }
-            Step::Command { project, .. } | Step::Autofix { project, .. } => {
-                self.s.pipeline.awaiting_init(self.s, project)
-            }
-            _ => false,
-        };
-        if held {
+        if self.s.pipeline.holds(self.s, &step) {
             return;
         }
         if let Step::Spawn(req) = &mut step {

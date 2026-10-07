@@ -4,9 +4,11 @@
 //! `Pipeline`; it stays a pure function of the session state.
 
 use crate::book::{DOCS_ROUNDS, DocsTrack};
+use crate::inputs::{OstraInputs, OstraInputsExt};
 use crate::judge::NoteStage;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::steps::OstraStep;
 use ostra_core::Contract;
 use ostra_core::agent::AgentName;
 use ostra_core::book::DocsStep;
@@ -609,25 +611,29 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             let inputs = SpawnInputs {
                 task: Some(s.full_request()),
                 research_docs: s.research_docs(),
-                // Rule D2a: the spec learns which cited files changed since research.
-                code_facts: s.research_docs(),
-                projects_in_scope: self.scope_paths(),
-                // A revision gets only the input its spec does not reflect yet, so it edits
-                // instead of rewriting.
-                answers: t.pending_answers(),
-                changes: t.pending_changes(),
-                new_research_docs: match t.current {
-                    Some(_) => s
-                        .research_docs()
-                        .into_iter()
-                        .filter(|d| !t.applied.docs.contains(d))
-                        .collect(),
-                    None => vec![],
-                },
-                findings: t.pending_findings.clone(),
                 // Rewriting in place keeps the file name, so a fact-check re-pass compares
                 // against its snapshot by name (Rule D3a).
                 spec_file: t.current.as_ref().map(|c| PathBuf::from(&c.spec_path)),
+                extra: OstraInputs {
+                    // Rule D2a: the spec learns which cited files changed since research.
+                    code_facts: s.research_docs(),
+                    projects_in_scope: self.scope_paths(),
+                    // A revision gets only the input its spec does not reflect yet, so it edits
+                    // instead of rewriting.
+                    answers: t.pending_answers(),
+                    changes: t.pending_changes(),
+                    new_research_docs: match t.current {
+                        Some(_) => s
+                            .research_docs()
+                            .into_iter()
+                            .filter(|d| !t.applied.docs.contains(d))
+                            .collect(),
+                        None => vec![],
+                    },
+                    findings: t.pending_findings.clone(),
+                    ..Default::default()
+                }
+                .into_value(),
                 ..Default::default()
             };
             let round = t.runs.len() as u32 + 1;
@@ -667,12 +673,16 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                 let pass = t.checks.len() as u32 + 1;
                 let inputs = SpawnInputs {
                     target: Some(spec_path.clone()),
-                    target_type: Some(FactTarget::Spec),
                     prior_findings: Some(t.prior_findings()),
                     spec_file: Some(spec_path),
-                    source_check: Some(source_check.into()),
                     research_docs: s.research_docs(),
-                    code_facts: s.research_docs(),
+                    extra: OstraInputs {
+                        target_type: Some(FactTarget::Spec),
+                        source_check: Some(source_check.into()),
+                        code_facts: s.research_docs(),
+                        ..Default::default()
+                    }
+                    .into_value(),
                     ..Default::default()
                 };
                 self.spawn(
@@ -794,14 +804,18 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             };
             let inputs = SpawnInputs {
                 spec_file: Some(spec_path),
-                projects_in_scope: self.scope_paths(),
-                code_facts: s.research_docs(),
-                findings,
-                revise_phases,
                 target: t
                     .current
                     .as_ref()
                     .map(|c| PathBuf::from(&c.master_plan_path)),
+                extra: OstraInputs {
+                    projects_in_scope: self.scope_paths(),
+                    code_facts: s.research_docs(),
+                    findings,
+                    revise_phases,
+                    ..Default::default()
+                }
+                .into_value(),
                 ..Default::default()
             };
             let round = t.runs.len() as u32 + 1;
@@ -831,11 +845,15 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                 // and the code facts the plan had (Rule D4a).
                 let inputs = SpawnInputs {
                     target: Some(plan_path),
-                    target_type: Some(FactTarget::Plan),
                     prior_findings: Some(t.prior_findings()),
                     spec_file: Some(spec_path),
-                    source_check: Some("citations".into()),
-                    code_facts: s.research_docs(),
+                    extra: OstraInputs {
+                        target_type: Some(FactTarget::Plan),
+                        source_check: Some("citations".into()),
+                        code_facts: s.research_docs(),
+                        ..Default::default()
+                    }
+                    .into_value(),
                     ..Default::default()
                 };
                 self.spawn(
@@ -920,33 +938,38 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         let phase_str = phase.to_string();
         let mut inputs = SpawnInputs {
             phase: Some(p.info.clone()),
-            work: Some(kind),
             instructions: instructions.clone(),
-            ledger_file: if matches!(kind, WorkKind::Fix | WorkKind::BlockerFix) {
-                Some(s.ledger_path(&project, phase, tests))
-            } else {
-                None
-            },
             user_notes: match contract {
                 Contract::Implementation => s.notes_for(NoteStage::Implement),
                 Contract::Tests => s.notes_for(NoteStage::Tests),
                 _ => vec![],
             },
+            extra: OstraInputs {
+                work: Some(kind),
+                ledger_file: if matches!(kind, WorkKind::Fix | WorkKind::BlockerFix) {
+                    Some(s.ledger_path(&project, phase, tests))
+                } else {
+                    None
+                },
+                ..Default::default()
+            }
+            .into_value(),
             ..Default::default()
         };
         let purpose = match contract {
             Contract::Tests => {
                 inputs.implementer_report = p.implementer_report.clone();
-                inputs.epa_report = match &p.epa {
+                let epa = match &p.epa {
                     EpaState::Done(path) => Some(path.clone()),
                     _ => None,
                 };
+                inputs.set_ox(|x| x.epa_report = epa);
                 inputs.report_file = Some(dir.join(report::write_test(&phase_str)));
                 ExecPurpose::WriteTest { phase, work: kind }
             }
             Contract::Prompt => {
                 inputs.task = Some(s.full_request());
-                inputs.target_files = Some("Determine them from the task.".into());
+                inputs.set_ox(|x| x.target_files = Some("Determine them from the task.".into()));
                 inputs.report_file = Some(dir.join(report::prompt_gen(s.ext.os().prompt_gens + 1)));
                 ExecPurpose::PromptGen { handoff_for: None }
             }
@@ -969,10 +992,8 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                     }
                     if let Some(r) = &p.revision {
                         // Rule F2: a revision reads the session context file, not a conversation.
-                        inputs.revision = Some(r.round);
                         inputs.task = Some(revision_task(r, &s.full_request()));
-                        inputs.context_files = vec![s.session_context_path()];
-                        inputs.prior_reports = s
+                        let prior: Vec<PathBuf> = s
                             .ext
                             .os()
                             .phases
@@ -980,6 +1001,11 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                             .filter(|q| q.info.project == project && q.info.id != phase)
                             .filter_map(|q| q.implementer_report.clone())
                             .collect();
+                        inputs.set_ox(|x| {
+                            x.revision = Some(r.round);
+                            x.context_files = vec![s.session_context_path()];
+                            x.prior_reports = prior;
+                        });
                     }
                     ExecPurpose::Implement { phase, work: kind }
                 }
@@ -1078,8 +1104,12 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                     phase: Some(p.info.clone()),
                     instructions: Some(unblock),
                     report_file: Some(dir.join(report::unblock(&phase_str, round))),
-                    context_files: p.info.file.iter().cloned().collect(),
                     user_notes: s.notes_for(NoteStage::Implement),
+                    extra: OstraInputs {
+                        context_files: p.info.file.iter().cloned().collect(),
+                        ..Default::default()
+                    }
+                    .into_value(),
                     ..Default::default()
                 };
                 self.spawn(
@@ -1115,18 +1145,22 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                         });
                 let inputs = SpawnInputs {
                     phase: Some(p.info.clone()),
-                    changed_files: l.changed.iter().cloned().collect(),
-                    rationale: Some(rationale),
                     phase_value: Some(phase_value),
-                    ledger_file: Some(s.ledger_path(&project, phase, tests)),
-                    epa_report: if tests {
-                        match &p.epa {
-                            EpaState::Done(path) => Some(path.clone()),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    },
+                    extra: OstraInputs {
+                        changed_files: l.changed.iter().cloned().collect(),
+                        rationale: Some(rationale),
+                        ledger_file: Some(s.ledger_path(&project, phase, tests)),
+                        epa_report: if tests {
+                            match &p.epa {
+                                EpaState::Done(path) => Some(path.clone()),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        },
+                        ..Default::default()
+                    }
+                    .into_value(),
                     ..Default::default()
                 };
                 self.spawn(
@@ -1142,12 +1176,12 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                 );
             }
             LoopNext::Autofix { apply, .. } => {
-                self.push(Step::Autofix {
+                self.push(Step::from(OstraStep::Autofix {
                     project,
                     phase,
                     tests,
                     findings: apply.clone(),
-                });
+                }));
             }
             LoopNext::Rescue { exec, .. } => {
                 self.push(Step::Judge {
@@ -1184,12 +1218,16 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             LoopNext::Handoff { exec, handoff } => {
                 let inputs = SpawnInputs {
                     task: Some(handoff.request.clone()),
-                    target_files: Some(if handoff.target_files.is_empty() {
-                        "Determine them from the task.".into()
-                    } else {
-                        handoff.target_files.join("\n")
-                    }),
                     report_file: Some(dir.join(report::prompt_gen(s.ext.os().prompt_gens + 1))),
+                    extra: OstraInputs {
+                        target_files: Some(if handoff.target_files.is_empty() {
+                            "Determine them from the task.".into()
+                        } else {
+                            handoff.target_files.join("\n")
+                        }),
+                        ..Default::default()
+                    }
+                    .into_value(),
                     ..Default::default()
                 };
                 self.spawn(
@@ -1236,12 +1274,12 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             }
             LoopNext::Stage => {
                 let files: Vec<String> = l.changed.iter().cloned().collect();
-                self.push(Step::Command {
+                self.push(Step::from(OstraStep::Command {
                     purpose: CommandPurpose::Stage,
                     project,
                     command: None,
                     files,
-                });
+                }));
             }
             LoopNext::Failed { exec, error } => {
                 let agent = s
@@ -1253,12 +1291,12 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             }
             LoopNext::Blocked { reason } => {
                 if !l.announced_block {
-                    self.push(Step::AnnounceBlocked {
+                    self.push(Step::from(OstraStep::AnnounceBlocked {
                         project: project.clone(),
                         phase,
                         tests,
                         reason: reason.clone(),
-                    });
+                    }));
                 } else if !s.yolo && !l.block_gate_answered && p.blocked_gate.is_none() {
                     // Rule D9: report the blocked phase and ask how to proceed.
                     self.gate(
@@ -1365,12 +1403,12 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             // Rule D8: format runs once per project after its last phase, not gated.
             if track.format.is_none() {
                 let command = self.ctx.format_commands.get(key).cloned().flatten();
-                self.push(Step::Command {
+                self.push(Step::from(OstraStep::Command {
                     purpose: CommandPurpose::Format,
                     project: key.clone(),
                     command,
                     files: vec![],
-                });
+                }));
                 continue;
             }
             let closing = match track.closing {
@@ -1504,11 +1542,15 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             return;
         }
         let base = SpawnInputs {
-            implementer_reports: passed
-                .iter()
-                .filter_map(|p| p.implementer_report.clone())
-                .collect(),
             user_notes: s.notes_for(NoteStage::Docs),
+            extra: OstraInputs {
+                implementer_reports: passed
+                    .iter()
+                    .filter_map(|p| p.implementer_report.clone())
+                    .collect(),
+                ..Default::default()
+            }
+            .into_value(),
             ..Default::default()
         };
         let stage = if book_node(s) {
@@ -1530,21 +1572,29 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         // Rule B10: scan the modules and constants, survey, write a first draft of each page, then
         // synthesis rounds until done. A log whose survey started before the scan keeps going.
         if track.docs_scan.is_none() && matches!(track.survey, DocsState::NotStarted) {
-            self.push(Step::ScanDocs {
+            self.push(Step::from(OstraStep::ScanDocs {
                 project: project.to_string(),
-            });
+            }));
             return;
         }
         let base = SpawnInputs {
-            docs_reference: track
-                .docs_scan
-                .as_ref()
-                .map(|_| s.docs_drafts_dir(project).join("reference.md")),
+            extra: OstraInputs {
+                docs_reference: track
+                    .docs_scan
+                    .as_ref()
+                    .map(|_| s.docs_drafts_dir(project).join("reference.md")),
+                ..OstraInputs::of(&base)
+            }
+            .into_value(),
             ..base
         };
         let Some(survey) = track.survey_plan() else {
             let inputs = SpawnInputs {
-                docs_step: Some(DocsStep::Survey),
+                extra: OstraInputs {
+                    docs_step: Some(DocsStep::Survey),
+                    ..OstraInputs::of(&base)
+                }
+                .into_value(),
                 ..base
             };
             let purpose = ExecPurpose::DocsSurvey {
@@ -1557,21 +1607,25 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         let inventory = track.current_inventory();
         let page_inputs =
             |page: &ostra_core::book::PlannedPage, instructions: Vec<String>| SpawnInputs {
-                docs_step: Some(DocsStep::Page),
-                docs_page: Some(page.clone()),
-                docs_pages: survey.pages.clone(),
-                docs_inventory: inventory
-                    .iter()
-                    .filter(|i| i.owner == page.id)
-                    .map(|i| {
-                        let mut line = format!("{} ({})", i.name, i.sources.join(", "));
-                        if !i.settings.is_empty() {
-                            line.push_str(&format!(", settings: {}", i.settings.join(", ")));
-                        }
-                        line
-                    })
-                    .collect(),
-                docs_instructions: instructions,
+                extra: OstraInputs {
+                    docs_step: Some(DocsStep::Page),
+                    docs_page: Some(page.clone()),
+                    docs_pages: survey.pages.clone(),
+                    docs_inventory: inventory
+                        .iter()
+                        .filter(|i| i.owner == page.id)
+                        .map(|i| {
+                            let mut line = format!("{} ({})", i.name, i.sources.join(", "));
+                            if !i.settings.is_empty() {
+                                line.push_str(&format!(", settings: {}", i.settings.join(", ")));
+                            }
+                            line
+                        })
+                        .collect(),
+                    docs_instructions: instructions,
+                    ..OstraInputs::of(&base.clone())
+                }
+                .into_value(),
                 ..base.clone()
             };
         for page in &planned {
@@ -1625,11 +1679,15 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                 )
                 .unwrap_or_else(|| "none".into());
             let inputs = SpawnInputs {
-                docs_check: true,
                 target: Some(s.docs_draft_path(project, page)),
                 spec_file: Some(s.docs_inventory_path(project)),
                 prior_findings: Some(prior),
-                source_check: Some("citations".into()),
+                extra: OstraInputs {
+                    docs_check: true,
+                    source_check: Some("citations".into()),
+                    ..Default::default()
+                }
+                .into_value(),
                 ..Default::default()
             };
             let purpose = ExecPurpose::DocsCheck {
@@ -1688,10 +1746,14 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                 }
             }
             let inputs = SpawnInputs {
-                docs_step: Some(DocsStep::Synthesis),
-                docs_pages: survey.pages.clone(),
-                docs_instructions: findings,
-                docs_round: round,
+                extra: OstraInputs {
+                    docs_step: Some(DocsStep::Synthesis),
+                    docs_pages: survey.pages.clone(),
+                    docs_instructions: findings,
+                    docs_round: round,
+                    ..OstraInputs::of(&base)
+                }
+                .into_value(),
                 ..base
             };
             let purpose = ExecPurpose::DocsSynthesis {
@@ -1987,7 +2049,11 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         if q.exec.is_none() {
             let primary = s.primary();
             let inputs = SpawnInputs {
-                question: Some(s.full_request()),
+                extra: OstraInputs {
+                    question: Some(s.full_request()),
+                    ..Default::default()
+                }
+                .into_value(),
                 ..Default::default()
             };
             self.spawn(
