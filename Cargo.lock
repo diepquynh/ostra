@@ -2393,7 +2393,6 @@ dependencies = [
  "ostra-agents",
  "ostra-core",
  "ostra-sandbox",
- "ostra-standard",
  "ostra-store",
  "regex",
  "serde",
