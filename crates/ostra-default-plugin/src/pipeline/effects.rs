@@ -13,7 +13,7 @@ pub(crate) async fn perform(
     host: &StepHost,
     session: &SessionId,
     step: Step,
-) -> Result<Result<(), EngineError>, Step> {
+) -> Result<Result<(), EngineError>, Box<Step>> {
     if let Some(own) = OstraStep::of(&step) {
         return Ok(perform_own(host, session, own).await);
     }

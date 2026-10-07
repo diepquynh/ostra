@@ -366,7 +366,7 @@ impl Pipeline for OstraPipeline {
         session: &SessionId,
         step: Step,
     ) -> Result<Result<(), EngineError>, Step> {
-        effects::perform(host, session, step).await
+        effects::perform(host, session, step).await.map_err(|s| *s)
     }
 
     fn completing(

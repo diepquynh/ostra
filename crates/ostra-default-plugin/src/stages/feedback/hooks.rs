@@ -19,7 +19,7 @@ pub(crate) fn perform(
     host: &StepHost,
     session: &SessionId,
     step: Step,
-) -> Result<Result<(), EngineError>, Step> {
+) -> Result<Result<(), EngineError>, Box<Step>> {
     match step {
         Step::OpenGate {
             payload: GatePayload::ImplementationReview { .. },
@@ -28,9 +28,9 @@ pub(crate) fn perform(
             .snapshot(session)
             .and_then(|st| write_session_context(&st))
         {
-            Ok(()) => Err(step),
+            Ok(()) => Err(Box::new(step)),
             Err(e) => Ok(Err(e)),
         },
-        other => Err(other),
+        other => Err(Box::new(other)),
     }
 }
