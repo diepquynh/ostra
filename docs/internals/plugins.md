@@ -170,8 +170,8 @@ runs in the process instead. It folds its own state and plans its own steps, the
 
 - The code of each built-in stage is in its own folder,
   [`stages/<stage>/`](../../crates/ostra-default-plugin/src/stages/): its state (`data.rs`), how events change
-  it (`fold.rs`, `runs.rs`, `gates.rs`, `judges.rs`), its planner rules (`planner.rs`), and its judge inputs
-  (`judge_input.rs`). A stage has only the files it needs.
+  it (`fold.rs`, `runs.rs`, `gates.rs`, `judges.rs`), its planner rules (`planner.rs`), its judge inputs
+  (`judge_input.rs`), and its board cards and artifacts (`view.rs`). A stage has only the files it needs.
 - The engine keeps the state of the pipeline in each session as an opaque box, `SessionState::ext`. The
   standard pipeline keeps `OstraState` in it
   ([`crates/ostra-default-plugin/src/data.rs`](../../crates/ostra-default-plugin/src/data.rs)): the research
@@ -195,8 +195,10 @@ runs in the process instead. It folds its own state and plans its own steps, the
   that asks a judge).
 - `Pipeline::check_submit` adds checks to a submit at submit time, after the shape check. The executors call it
   through `ExecutionHost::check_submit`. The standard pipeline checks a `documentation` submit there.
-- The board, the run labels, and the artifacts of a session come from the pipeline
-  ([`view/`](../../crates/ostra-default-plugin/src/view/)).
+- The board, the run labels, and the artifacts of a session come from the pipeline. Each stage gives its own
+  cards and artifacts in its `view.rs`, and
+  [`view/`](../../crates/ostra-default-plugin/src/view/) puts them together in pipeline order with the
+  summary, the detail, and the tree.
 
 The engine performs the book write itself (`Step::WriteBook`, Rule B5), from the update that
 `Pipeline::book_update` gives. The engine depends on no part of the standard plugin. The tests of a real engine

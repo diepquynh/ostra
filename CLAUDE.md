@@ -42,7 +42,7 @@ ostra-sdk         the plugin SDK: the Plugin trait's helpers, typed result contr
 ostra-standard    the definitions of the standard plugin `ostra`, written with ostra-sdk: the built-in agents
                   (from assets/agents/) and the default workflows (from assets/workflows/)
 ostra-default-plugin  the standard plugin's pipeline: one folder per built-in stage (`stages/<stage>/`) with
-                  its state, fold, planner rules, judges, and gates; the dispatchers and shared code in
+                  its state, fold, planner rules, judges, gates, and view; the dispatchers and shared code in
                   `data.rs`, `fold/`, `planner/`, `judge_input/`, `view/`, and `pipeline/`; the spawn factory
                   (`factory.rs`)
 ostra-server      the `ostra` binary: axum, auth, REST, WebSocket, embedded web build, CLI
@@ -123,9 +123,10 @@ below).
 **10. Files stay small and group by feature.** Keep a source file under about 800 lines, because a person and
 an agent read one feature in one place. Group code by feature, not by layer. In the standard plugin, each stage
 has a folder `stages/<stage>/` with only the files it needs: `data.rs` (its state), `fold.rs`, `runs.rs`,
-`gates.rs`, and `judges.rs` (how events change it), `planner.rs` (its rules), and `judge_input.rs`. A `match`
-over every stage stays a short dispatcher in `fold/`, `planner/`, or `judge_input/`, and each arm calls the
-stage. Code that several stages use stays in those folders and in `data.rs`. Put each trait in its own file.
+`gates.rs`, and `judges.rs` (how events change it), `planner.rs` (its rules), `judge_input.rs`, and `view.rs`
+(its board cards and artifacts). A `match` over every stage stays a short dispatcher in `fold/`, `planner/`,
+or `judge_input/`, and each arm calls the stage. `view/` walks the stages to build the board, the artifacts,
+the summary, and the tree. Code that several stages use stays in those folders and in `data.rs`. Put each trait in its own file.
 When a file grows past the limit, split it in a separate `refactor:` commit that only moves code.
 
 ## Recipes

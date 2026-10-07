@@ -48,7 +48,7 @@ Ostra has 18 crates in one Cargo workspace. Each crate has one job.
 | `ostra-standard` | The definitions of the standard plugin `ostra`: its agent files and its default workflows |
 | `ostra-agents` | The embedded prompts, skills, and refs, the agent catalog, prompt rendering for each executor, typed spawn structs, and the repo brief |
 | `ostra-engine` | Event-sourced session state, the pure planner, the runner, gates, workflows, messages, and the `Pipeline` trait |
-| `ostra-default-plugin` | The standard plugin's pipeline: one folder per built-in stage (`stages/<stage>/`) with its state, state changes, planning, and judges, plus the views, the step effects, and the spawn factory |
+| `ostra-default-plugin` | The standard plugin's pipeline: one folder per built-in stage (`stages/<stage>/`) with its state, state changes, planning, judges, and board cards, plus the board assembly, the step effects, and the spawn factory |
 | `ostra-exec-native` | The native agent loop: a provider, the tools, and the policy in one loop |
 | `ostra-exec-harness` | Harness executors: the PTY, one adapter per CLI, the hook bridge, the MCP stdio shim |
 | `ostra-code` | A tokenizer, the code index of each project, a language server client, and the code providers for the Files view |
