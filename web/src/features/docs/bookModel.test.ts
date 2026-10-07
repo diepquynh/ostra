@@ -22,6 +22,20 @@ describe("bookPages", () => {
     expect(nav.flatMap((g) => g.pages.map((p) => p.id))).toEqual(["overview", "glossary", "api.checkout", "web.cart"]);
   });
 
+  it("names the part across projects and the project of each of its code references", () => {
+    const section = {
+      ...MOCK_BOOK.parts[0].sections[0],
+      id: "flow",
+      code_refs: [{ project: "web", path: "src/cart.ts", symbol: null, lines: null, note: "The client" }],
+    };
+    const cross = { ...MOCK_BOOK.parts[0], project: "_cross", sections: [section] };
+    const book = { ...MOCK_BOOK, parts: [...MOCK_BOOK.parts, cross] };
+    const { nav, sources } = bookPages(book);
+    expect(nav.map((g) => g.label)).toContain("Across projects: How it works");
+    expect(sources[sectionPage("_cross", "flow")]).toContain("`web/src/cart.ts`");
+    expect(sources.overview).toContain("## Across projects");
+  });
+
   it("leaves out the glossary page when the book has none", () => {
     const { nav } = bookPages({ ...MOCK_BOOK, glossary: [] });
     expect(nav[0].pages.map((p) => p.id)).toEqual(["overview"]);

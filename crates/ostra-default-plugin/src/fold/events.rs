@@ -127,6 +127,7 @@ impl OstraEvents for SessionState {
                 project,
                 modules,
                 refs,
+                session_wide,
             } => {
                 self.ext
                     .os_mut()
@@ -137,7 +138,13 @@ impl OstraEvents for SessionState {
                     .docs_scan = Some(DocsScan {
                     modules: modules.clone(),
                     refs: refs.clone(),
+                    session_wide: *session_wide,
                 });
+                if *session_wide {
+                    // Rule B10: the session's pipeline reads every documented project's scan.
+                    let os = self.ext.os_mut();
+                    os.session_book.docs_scan = Some(crate::book::session_scan(&os.project_tracks));
+                }
             }
             SessionEvent::ProjectInitFinished { project } => {
                 if let Some(i) = self.ext.os_mut().project_inits.get_mut(project) {

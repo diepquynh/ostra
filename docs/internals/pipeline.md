@@ -946,9 +946,10 @@ for one. Each set of projects that you document gets its own book.
 
 The docs run in their own workflow node, the built-in stage `ostra:book`. The default `implement`, `test`, and
 `docs` workflows end with a node `docs` that uses it, after the `closing` node. The stage reads the choice of the
-closing gate itself, because a built-in stage takes no `when` conditions (Rule WB5). For each project, it runs the
-docs pipeline below when the closing gate chose docs and no BLOCKER is open (Hard rule 21). Then the engine
-writes the book. The stage is done when the docs of each such project are settled and the book is written.
+closing gate itself, because a built-in stage takes no `when` conditions (Rule WB5). When the choice of every
+project is known, it runs one docs pipeline for the documented projects: the projects that the closing gate chose
+docs for, with a passed phase and no open BLOCKER (Hard rule 21). Then the engine writes the book. The stage is
+done when the pipeline is settled and the book is written.
 
 The book stage waits for the whole closing stage. So the docs of a project start after the tests of every project
 end. Other nodes can read the choice as `closing.docs` and the book as `docs.book`, after the node IDs of the
@@ -956,9 +957,10 @@ default workflows
 ([Workflows](workflows.md#data-between-nodes)). A workflow can bind the agents of the stage with
 `agents = { documentation = "...", fact-check = "..." }` (Rule WF8).
 
-A workflow without an `ostra:book` node keeps the earlier behavior: the closing stage runs the docs pipeline and
-the book write itself, and the docs of one project can run at the same time as the tests of a different project.
-A session from a log without a recorded workflow does the same. This path is deprecated, and the workflow
+A workflow without an `ostra:book` node keeps the earlier place: the closing stage runs the docs pipeline and
+the book write itself, after the tests of every documented project end. A session from a log without a recorded
+workflow keeps one docs pipeline for each project, and the docs of one project can run at the same time as the
+tests of a different project. This path is deprecated, and the workflow
 carries a notice that tells you to add the node ([Workflows](workflows.md#a-workflow-without-the-book-stage)).
 
 The code of the stage is in the standard plugin's
@@ -978,14 +980,15 @@ parallel topic writers answered 211 questions, but it wrote 64 narrow pages, rep
 pages, and linked to pages that no longer existed. So the stage writes in parallel and then reconciles the drafts
 in rounds until the book meets a definition of done:
 
-0. **Scan.** Before the survey, the engine reads the project's modules and its named constants from disk
+0. **Scan.** Before the survey, the engine reads the modules and the named constants of each documented project from disk
    (`OstraStep::ScanDocs`, a `Step::Pipeline` step) and records them in `DocsScanned`, because the fold cannot read the file system. The
    modules come from the module map, or else from the source folders, with a folder of 3 or more source
    subfolders, such as `crates/`, split into one module per subfolder. The constants are the upper-case names
    that Rust, TypeScript, JavaScript, Go, Java, Kotlin, and Python code defines outside test files, at most 1500.
-   The runner writes both as `reference.md` in the drafts folder, and every later run reads it.
-1. **Survey.** A `documentation` run with `Docs mode: survey` makes one brief pass over everything that is
-   available: the code, the project memory lessons, the workspace artifacts, the files that the user attached or
+   The runner writes both as `reference.md` in the drafts folder, and every later run reads it. The survey
+   waits until every documented project is scanned.
+1. **Survey.** One `documentation` run with `Docs mode: survey` makes one brief pass over everything that is
+   available: the code of every documented project, the project memory lessons, the workspace artifacts, the files that the user attached or
    uploaded, and the existing book. It returns the project overview, an inventory, and a page plan. The inventory
    lists everything that the book must cover, each item with exactly one owning page, or with an `out_of_scope`
    reason. Each mechanism that two or more pages use, such as the slot limiter, gets its own item. An item also
@@ -1015,9 +1018,42 @@ flowchart LR
   rev --> check
 ```
 
-Before each run after the survey, the runner writes the drafts into `ostra-docs-drafts/<project>/` in the session
+Before each run after the survey, the runner writes the drafts into `ostra-docs-drafts/_session/` in the session
 root: one `<page id>.md` per draft, `index.md` with the page plan, and `inventory.md` with every item and its
 owner. The fact-checks and the synthesis pass read the drafts there.
+
+#### One pipeline for every documented project
+
+The stage runs one pipeline for the whole session, not one for each project, because a feature can span
+projects. For example, a route in `api` and the screen in `web` that calls it are one flow for a reader. A writer
+of one project's part cannot see the other part, so before this change the flow had no page. Its two halves were
+on two pages that did not link to each other.
+
+- **Key and folders.** The runs of the pipeline carry the key `_session` (`book::SESSION_DOCS`) in place of a
+  project key: `docs-survey _session`, `docs _session/<page>`, and one `docs_rounds` gate for the session. Each run
+  works in every documented project (Rule WD1). Its session dir is the session root, and its drafts folder is
+  `ostra-docs-drafts/_session/`.
+- **Book parts.** Each run gets `Book parts:`, a list of each documented project and then `_cross`
+  (`book::CROSS_PART`), the part across projects (Rule B11). The survey gives each page a `part`. It puts each
+  flow, contract, and setup that two or more projects take part in, such as an end-to-end test, on a page in
+  `_cross`. It writes one overview for each part with a page in `part_overviews`, and the introduction of the
+  whole book in `overview`.
+- **Tagged paths.** The reference sheet writes each module glob and each file as `@<project>/<path>`, and the
+  survey writes the code paths of its sources the same way. An item's source that names a project covers only
+  the modules of that project, so a source in `api/src` does not cover the `src` module of `web`.
+- **Code references.** A page writer gets `Page part:`. A code reference names its `project` when its file is not
+  in the page's own project, and a page in `_cross` names it on every reference.
+- **The submit check.** `check_with_params` in
+  [`stages/book/parts.rs`](../../crates/ostra-default-plugin/src/stages/book/parts.rs) reads `Book parts:` from the
+  run's params. It refuses a page without a valid part, a part with pages and no overview, and a code reference
+  that names an unknown project, or that names none on a page in `_cross`.
+- **The book write.** The fold splits the planned pages into one part update for each part with a page
+  (`session_parts`). Each part gets its overview and the inventory items that its pages own.
+
+A log that recorded no workflow, or that ran a docs run, a survey, or a scan for one project's own pipeline,
+keeps one pipeline for each project (`docs_per_project` in
+[`stages/book/fold.rs`](../../crates/ostra-default-plugin/src/stages/book/fold.rs)). A scan records
+`session_wide` in `DocsScanned`, so the fold can tell the two paths apart.
 
 #### The definition of done
 
@@ -1075,7 +1111,7 @@ needs a revision, or when a round revised nothing.
 
 After each 3 rounds without done (`DOCS_ROUNDS`), a `docs_rounds` gate asks whether to run another round or to
 accept the book as it is. YOLO always runs another round, so the session budget is the bound, as in the review
-loop. All runs of the stage fan out at once, across every step and every project (Rule B7). The workspace's
+loop. All runs of the stage fan out at once, across every step (Rule B7). The workspace's
 `limits.max_parallel_executions` bounds how many run at the same time, through the slot limiter. Each submit names its `step` (`survey`, `page`, or
 `synthesis`). A run that answers another step fails with the instruction to submit the right step, because the
 fold must not read a page as a survey.
@@ -1089,12 +1125,12 @@ A page has these fields:
 
 | Field | What it holds |
 | --- | --- |
-| `id` | A lowercase slug, unique in the part. A later run keeps the ID, because other pages and agents link to it. |
+| `id` | A lowercase slug, unique in the survey's plan. A later run keeps the ID, because other pages and agents link to it. |
 | `group` | The group of the book's contents, such as `How it works` or `Security`. The console's sidebar shows the pages by group. |
 | `title` | The topic in a few words, such as `Order cancellation` or `Add a route`. |
 | `summary` | One or two sentences about what the reader learns on the page. The book index shows it. |
 | `body` | The page in Markdown. The writer chooses the structure: paragraphs, lists, tables, and `mermaid` diagrams. |
-| `code_refs` | Optional. Project-relative paths, symbols, and lines, with what the reader finds there. The page shows them last. |
+| `code_refs` | Optional. Paths relative to the root of their project, symbols, and lines, with what the reader finds there. A reference names its `project` when its file is not in the page's own project. The page shows them last. |
 
 The survey chooses the pages. Each page is broad: it covers an area that a reader looks for as a whole, such as
 one `Executors` page for every executor, with one `##` part per sub-topic. The inventory lists the reference
@@ -1178,10 +1214,11 @@ architecture run. The fold ignores it.
 
 ### Writing the book
 
-The engine writes the book, not an agent (Rule B5). The planner emits `WriteBook` when the docs pipeline of every
-documented project is settled. The runner asks the pipeline for the update of the session
-(`Pipeline::book_update`). The update holds one `PartUpdate` for each documented project: the overview, the
-glossary, the inventory, and every planned page in order. Each page is `PageUpdate::Write` with the page that
+The engine writes the book, not an agent (Rule B5). The planner emits `WriteBook` when the docs pipeline of the
+session is settled. The runner asks the pipeline for the update of the session (`Pipeline::book_update`). The
+update holds one `PartUpdate` for each part that has a planned page: the part's overview, the inventory items that
+its pages own, and every planned page of the part in order. The first part also holds the glossary and the items
+out of scope. Each page is `PageUpdate::Write` with the page that
 the session wrote, or `PageUpdate::Keep` with the ID of a page that the book keeps.
 
 The runner merges the parts of the session into the book and writes these files:
@@ -1191,8 +1228,12 @@ The runner merges the parts of the session into the book and writes these files:
   book.json            the whole book, which the console renders and exports
   index.md             every part, with a link and the first sentence of the summary per page
   glossary.md
-  <project>/<page>.md   the title, the summary, the body, and the code references
+  <part>/<page>.md      the title, the summary, the body, and the code references
 ```
+
+Each part is a folder: a project key, or `_cross` for the part across projects. A page in one part can link to a
+page in another part as `<page id>.md`. The engine writes that link as `../<part>/<page id>.md`, so the link works
+in the Markdown files. `index.md` lists the part across projects last, under the heading `Across projects`.
 
 The runner records `BookWritten`. Only then does the session complete. Ostra records a failed write with its
 error on the board, and the session continues. The `workspace-docs` guard and a read-only sandbox mount block
@@ -1203,17 +1244,18 @@ A book has the name of its projects, sorted and joined with `_` (`api_web`). So 
 the same projects updates the same book (Rule B6). The New task form can also pick an existing book. An update
 makes these changes:
 
-- The new part of a project replaces its old part.
+- The new part of a project, or of the part across projects, replaces its old part.
 - Glossary entries merge by term, and the newer definition stays.
-- The part of another project stays as it was.
+- A part that the session does not plan a page for stays as it was.
 
-A part is replaced as a whole. So each writer gets the current `book.json` as `Existing book:` and copies the
-pages that its change did not reach. The engine holds one lock from the read of `book.json` to the write. So if
+A part is replaced as a whole. So the survey gets the current `book.json` as `Existing book:` and keeps the
+pages that its change did not reach (`rewrite: false`). A kept page comes from its own part, or else from the part
+that held it before, so the survey can move a page from a project's part to the part across projects. The engine holds one lock from the read of `book.json` to the write. So if
 two sessions finish on the same book at the same time, both keep their parts.
 
-Ostra documents nothing in a project when a BLOCKER finding is open in that project (Hard rule 21). If the writer
-of a project was abandoned, the book leaves the project out. The book has the name of the parts that were
-written.
+Ostra documents nothing in a project when a BLOCKER finding is open in that project (Hard rule 21). If the survey
+of the session was abandoned, the session writes no book. The book has the name of the documented projects.
+`Book.projects` lists the projects and leaves out the part across projects.
 
 `GET /api/workspaces/{ws}/docs` serves the list of books, newest first. `GET /api/workspaces/{ws}/docs/{book}`
 serves one `book.json`. A `DELETE` on the second route removes the folder of a book.
@@ -1225,9 +1267,9 @@ own tab (`/w/<ws>/b/<book>`). The reader makes pages from `book.json` in the bro
 (`web/src/features/docs/bookModel.ts`). So it always shows the stored book, never Markdown that an agent wrote.
 The pages come in reading order:
 
-- an overview with the introduction of each project,
+- an overview with the introduction of each part,
 - the glossary,
-- the pages of each project.
+- the pages of each part, with the part across projects named `Across projects`.
 
 A page shows its title, its summary, and the body that the writer wrote. The code references close the page,
 because a reader needs the behavior before the files. The sidebar lists the pages, with the `##` headings of each

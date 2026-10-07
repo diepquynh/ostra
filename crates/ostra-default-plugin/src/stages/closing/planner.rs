@@ -29,6 +29,7 @@ impl<'a> PlannerClosing<'a> for Planner<'a> {
         let removed = removed_phases(s);
         let projects: Vec<String> = s.ext.os().project_tracks.keys().cloned().collect();
         let mut closing_items = vec![];
+        let mut tested: Vec<&String> = vec![];
         for key in &projects {
             if !self.project_code_done(key, &removed) {
                 continue;
@@ -78,10 +79,23 @@ impl<'a> PlannerClosing<'a> for Planner<'a> {
             } else {
                 true
             };
+            if tests_done {
+                tested.push(key);
+            }
             // Rule B10: a workflow with a book stage writes the docs there, after closing.
-            if closing.1 && tests_done && !book_node(s) {
+            if closing.1 && tests_done && !book_node(s) && s.docs_per_project() {
                 self.docs_stage(key, &passed);
             }
+        }
+        // Rule B10: without a book stage, the session-wide docs start when every documented
+        // project's tests are done.
+        if !book_node(s)
+            && !s.docs_per_project()
+            && let Some(docs) = self.docs_choices()
+            && !docs.is_empty()
+            && docs.iter().all(|k| tested.contains(&k))
+        {
+            self.docs_session_stage(&docs);
         }
         if !closing_items.is_empty() {
             // Rule T6: projects reaching the gate together are asked in one batch.
@@ -221,7 +235,11 @@ impl<'a> PlannerClosing<'a> for Planner<'a> {
             if docs
                 && !book_node(s)
                 && !blocker_open(&passed)
-                && !track.book.docs_aggregate().is_settled()
+                && !if s.docs_per_project() {
+                    track.book.docs_aggregate().is_settled()
+                } else {
+                    s.ext.os().session_book.docs_aggregate().is_settled()
+                }
             {
                 return false;
             }

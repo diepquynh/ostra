@@ -20,6 +20,16 @@ pub trait FoldBook {
     /// Rule B6: what this session adds to its book, from the docs-stage submits in the log.
     fn book_update(&self) -> ostra_core::book::BookUpdate;
 
+    /// Rule B10: the log ran a docs pipeline per project, as logs did before the session-wide
+    /// pipeline, so the session keeps that path.
+    fn docs_per_project(&self) -> bool;
+
+    /// Rule B10: the docs pipeline a run's key names: the session's for `_session`, else the
+    /// project's own.
+    fn docs_pipe(&self, key: &str) -> Option<&crate::data::DocsPipeline>;
+
+    fn docs_pipe_mut(&mut self, key: &str) -> &mut crate::data::DocsPipeline;
+
     /// Rule B6: the picked book, or the one named after the documented projects.
     fn book_id(&self) -> String;
 
@@ -60,7 +70,66 @@ impl FoldBook for SessionState {
             .collect()
     }
 
+    fn docs_per_project(&self) -> bool {
+        // A log that recorded no workflow is from before the session-wide pipeline.
+        self.workflow.is_none()
+            || self.ext.os().project_tracks.values().any(|t| {
+                let b = &t.book;
+                !matches!(b.docs, DocsState::NotStarted)
+                    || !matches!(b.survey, DocsState::NotStarted)
+                    || !b.page_docs.is_empty()
+                    || !b.docs_rounds.is_empty()
+                    || b.docs_gate.is_some()
+                    || b.docs_accepted
+                    || b.docs_scan.as_ref().is_some_and(|s| !s.session_wide)
+            })
+    }
+
+    fn docs_pipe(&self, key: &str) -> Option<&crate::data::DocsPipeline> {
+        if key == ostra_core::book::SESSION_DOCS {
+            return Some(&self.ext.os().session_book);
+        }
+        self.ext.os().project_tracks.get(key).map(|t| &t.book)
+    }
+
+    fn docs_pipe_mut(&mut self, key: &str) -> &mut crate::data::DocsPipeline {
+        let os = self.ext.os_mut();
+        if key == ostra_core::book::SESSION_DOCS {
+            return &mut os.session_book;
+        }
+        &mut os.project_tracks.entry(key.to_string()).or_default().book
+    }
+
     fn book_update(&self) -> ostra_core::book::BookUpdate {
+        if !self.docs_per_project() {
+            // Rule B11: one session-wide pipeline, its pages split into the book's parts.
+            let t = &self.ext.os().session_book;
+            let parts = match t.docs_aggregate() {
+                DocsState::Done(d) => {
+                    let plan: Vec<_> = t
+                        .survey_plan()
+                        .map(|survey| {
+                            survey
+                                .pages
+                                .iter()
+                                .map(|p| {
+                                    let draft =
+                                        t.page_docs.get(&p.id).and_then(|d| d.draft.clone());
+                                    (p.clone(), if p.rewrite { draft } else { None })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    crate::book::session_parts(&d, &plan, &self.docs_projects())
+                }
+                _ => vec![],
+            };
+            return ostra_core::book::BookUpdate {
+                session: self.id.to_string(),
+                parts,
+            };
+        }
+        // Rule B10: a log that ran the pipeline per project writes one part per project.
         let parts = self
             .ext
             .os()

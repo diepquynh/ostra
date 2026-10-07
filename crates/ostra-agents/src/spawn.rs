@@ -367,6 +367,9 @@ pub struct DocumentationParams {
     pub mode: DocsMode,
     /// Rule B10: the reference sheet of the project's modules and named constants.
     pub reference: Option<PathBuf>,
+    /// Rule B11: the parts of a session-wide book: each documented project, then `_cross`. Empty
+    /// for one project's own pipeline.
+    pub book_parts: Vec<String>,
     pub extra: Extras,
 }
 
@@ -379,7 +382,7 @@ pub enum DocsMode {
     /// Survey what is available and plan the pages.
     Survey,
     /// Write or revise one page.
-    Page(DocsPageScope),
+    Page(Box<DocsPageScope>),
     /// One synthesis pass over every draft.
     Synthesis {
         round: u32,
@@ -394,6 +397,8 @@ pub enum DocsMode {
 pub struct DocsPageScope {
     pub id: String,
     pub title: String,
+    /// Rule B11: the part that holds the page, in a session-wide book.
+    pub part: Option<String>,
     pub group: String,
     pub covers: String,
     pub sources: Vec<String>,
@@ -732,12 +737,18 @@ impl SpawnParams for DocumentationParams {
         b.paths("Implementer reports", &self.implementer_reports);
         b.opt_path("Existing book", self.existing_book.as_deref());
         b.opt_path("Reference", self.reference.as_deref());
+        if !self.book_parts.is_empty() {
+            b.line("Book parts", &self.book_parts.join(", "));
+        }
         match &self.mode {
             DocsMode::Part => {}
             DocsMode::Survey => b.line("Docs mode", "survey"),
             DocsMode::Page(p) => {
                 b.line("Docs mode", "page");
                 b.line("Page", &format!("{} ({})", p.title, p.id));
+                if let Some(part) = &p.part {
+                    b.line("Page part", part);
+                }
                 b.line("Page group", &p.group);
                 b.line("Page covers", &p.covers);
                 if !p.sources.is_empty() {
@@ -1103,6 +1114,7 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ),
     ("reference", &["Reference"], Kind::Text),
     ("page", &["Page"], Kind::Text),
+    ("page_part", &["Page part"], Kind::Text),
     ("page_group", &["Page group"], Kind::Text),
     ("page_covers", &["Page covers"], Kind::Text),
     ("page_sources", &["Page sources"], Kind::Text),
@@ -1113,7 +1125,7 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("revise", &["Revise"], Kind::Text),
     ("round", &["Round"], Kind::Text),
     ("findings", &["Findings"], Kind::Text),
-    ("book_parts", &["Book parts"], Kind::Path),
+    ("book_parts", &["Book parts"], Kind::Text),
     ("changed_files", &["Changed files"], Kind::Text),
     ("change_rationale", &["Change rationale"], Kind::Text),
     ("target_files", &["Target files", "Target file"], Kind::Text),

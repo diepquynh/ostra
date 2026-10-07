@@ -2634,6 +2634,7 @@ fn scanned(project: &str, modules: &[&str], refs: &[&str]) -> SessionEvent {
                 file: "src/lib.rs".into(),
             })
             .collect(),
+        session_wide: false,
     }
 }
 
@@ -6558,7 +6559,7 @@ fn b10_the_book_stage_writes_the_docs_after_closing() {
         "a project's instance reads its own closing choice"
     );
     assert_eq!(h.state().ref_value("closing.docs", None), json!(["p"]));
-    finish_docs(&mut h, "p");
+    finish_session_docs(&mut h, &["p"]);
     assert_eq!(h.summaries(), vec!["write-book p"]);
     h.ev(SessionEvent::BookWritten {
         book: "p".into(),
@@ -6575,7 +6576,7 @@ fn b10_a_workflow_without_a_book_stage_writes_the_docs_in_closing() {
     assert_eq!(wf.notices().len(), 1, "the deprecated path names its fix");
     let mut h = docs_on(wf);
     assert_eq!(h.summaries(), vec!["scan-docs p"]);
-    finish_docs(&mut h, "p");
+    finish_session_docs(&mut h, &["p"]);
     assert_eq!(h.summaries(), vec!["write-book p"]);
     h.ev(SessionEvent::BookWritten {
         book: "p".into(),
@@ -6631,6 +6632,221 @@ fn b10_the_book_stage_waits_for_every_projects_tests() {
     h.run("spawn code-reviewer", review(&[]));
     h.command(CommandPurpose::Stage, "a");
     assert_eq!(h.summaries(), vec!["scan-docs a", "scan-docs b"]);
+}
+
+// -------------------------------------------------------------------------------------------------
+// Rules B1 and B10: one session-wide docs pipeline, with a part across projects
+// -------------------------------------------------------------------------------------------------
+
+fn scanned_wide(project: &str, modules: &[&str]) -> SessionEvent {
+    match scanned(project, modules, &[]) {
+        SessionEvent::DocsScanned {
+            project,
+            modules,
+            refs,
+            ..
+        } => SessionEvent::DocsScanned {
+            project,
+            modules,
+            refs,
+            session_wide: true,
+        },
+        _ => unreachable!(),
+    }
+}
+
+/// The session-wide docs pipeline to the end: a scan of each project, a survey of one page, its
+/// draft, a passing check, and a synthesis pass that finds the book done.
+fn finish_session_docs(h: &mut H, projects: &[&str]) {
+    for p in projects {
+        if h.summaries().contains(&format!("scan-docs {p}")) {
+            h.ev(scanned_wide(p, &[]));
+        }
+    }
+    h.run(
+        "spawn documentation docs-survey _session",
+        survey_submit(projects[0], &[("orders", true)]),
+    );
+    h.run(
+        "spawn documentation docs _session/orders",
+        page_submit(projects[0], "orders", CLEAN),
+    );
+    h.run(
+        "spawn fact-check docs-check _session/orders round 1",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis _session round 1",
+        synthesis_submit(true, vec![]),
+    );
+}
+
+/// A DOCS session over `projects` that recorded the default docs workflow.
+fn docs_wide(projects: &[&str]) -> H {
+    let mut h = H::new(projects, SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": projects, "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
+    h.ev(SessionEvent::WorkflowResolved {
+        workflow: ostra_default_plugin::workflow(Category::Docs),
+    });
+    h
+}
+
+/// A survey of `a` and `b`: one page in each project's part and one page across them.
+fn wide_survey() -> Value {
+    let page = |id: &str, part: &str| json!({"id": id, "title": id, "group": "How it works", "covers": "It.", "part": part});
+    let item = |id: &str, sources: &[&str]| json!({"id": format!("{id}-item"), "name": id, "sources": sources, "owner": id});
+    json!({
+        "status": "ok", "step": "survey", "summary": "Surveyed.", "overview": "a serves orders, and b shows them.",
+        "part_overviews": [
+            {"part": "a", "overview": "a serves orders."},
+            {"part": "b", "overview": "b shows orders."},
+            {"part": "_cross", "overview": "How b calls a."}
+        ],
+        "pages": [page("orders", "a"), page("screens", "b"), page("flow", "_cross")],
+        "inventory": [
+            item("orders", &["@a/src/orders.rs"]),
+            item("screens", &["@b/ui/screens.tsx"]),
+            item("flow", &["@a/src/api.rs", "@b/ui/client.ts"])
+        ]
+    })
+}
+
+#[test]
+fn b10_one_pipeline_documents_every_project_of_the_session() {
+    let mut h = docs_wide(&["a", "b"]);
+    assert_eq!(h.summaries(), vec!["scan-docs a", "scan-docs b"]);
+    h.ev(scanned_wide("a", &["src"]));
+    assert_eq!(
+        h.summaries(),
+        vec!["scan-docs b"],
+        "the survey waits for every project's scan"
+    );
+    h.ev(scanned_wide("b", &["ui"]));
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-survey _session"],
+        "one survey for the session, not one per project"
+    );
+    let r = h.spawn_step("spawn documentation docs-survey _session");
+    assert_eq!(r.projects(), ["a", "b"], "Rule WD1: it works in both");
+    assert_eq!(r.session_dir, root());
+    assert_eq!(r.inputs.ox().docs_parts, ["a", "b", "_cross"]);
+    assert_eq!(
+        r.inputs.ox().docs_reference,
+        Some(root().join("ostra-docs-drafts/_session/reference.md"))
+    );
+    h.run("spawn documentation docs-survey _session", wide_survey());
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn documentation docs _session/orders",
+            "spawn documentation docs _session/screens",
+            "spawn documentation docs _session/flow"
+        ]
+    );
+    for page in ["orders", "screens", "flow"] {
+        h.run(
+            &format!("spawn documentation docs _session/{page}"),
+            page_submit("a", page, CLEAN),
+        );
+    }
+    for page in ["orders", "screens", "flow"] {
+        h.run(
+            &format!("spawn fact-check docs-check _session/{page} round 1"),
+            check_submit(true),
+        );
+    }
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-synthesis _session round 1"],
+        "one synthesis pass over the pages of every part"
+    );
+    h.run(
+        "spawn documentation docs-synthesis _session round 1",
+        synthesis_submit(true, vec![]),
+    );
+    assert_eq!(h.summaries(), vec!["write-book a_b"]);
+    // Rule B11: the pages split into the parts the survey gave them.
+    let update = h.state().book_update();
+    let parts: Vec<(&str, usize, &str)> = update
+        .parts
+        .iter()
+        .map(|p| (p.project.as_str(), p.pages.len(), p.overview.as_str()))
+        .collect();
+    assert_eq!(
+        parts,
+        [
+            ("a", 1, "a serves orders."),
+            ("b", 1, "b shows orders."),
+            ("_cross", 1, "How b calls a.")
+        ]
+    );
+    let book = ostra_core::book::merge(None, "a_b", &update, chrono::Utc::now());
+    assert_eq!(
+        book.projects,
+        ["a", "b"],
+        "the part across projects is no project"
+    );
+    assert_eq!(book.parts[2].project, "_cross");
+    assert_eq!(book.parts[2].inventory[0].id, "flow-item");
+}
+
+#[test]
+fn b10_the_session_pipeline_has_one_rounds_gate() {
+    let mut h = docs_wide(&["a", "b"]);
+    h.ev(scanned_wide("a", &[]));
+    h.ev(scanned_wide("b", &[]));
+    h.run("spawn documentation docs-survey _session", wide_survey());
+    for page in ["orders", "screens", "flow"] {
+        h.run(
+            &format!("spawn documentation docs _session/{page}"),
+            page_submit("a", page, CLEAN),
+        );
+    }
+    for round in 1..=3 {
+        let pages: &[&str] = if round == 1 {
+            &["orders", "screens", "flow"]
+        } else {
+            &["flow"]
+        };
+        for page in pages {
+            h.run(
+                &format!("spawn fact-check docs-check _session/{page} round {round}"),
+                check_submit(true),
+            );
+        }
+        h.run(
+            &format!("spawn documentation docs-synthesis _session round {round}"),
+            synthesis_submit(false, vec![("flow", "Link to `orders.md`.")]),
+        );
+        if round < 3 {
+            h.run(
+                &format!("spawn documentation docs-revise _session/flow round {round}"),
+                page_submit("a", "flow", CLEAN),
+            );
+        }
+    }
+    h.open_gate("docs_rounds");
+    assert_eq!(
+        h.state().open_gates().count(),
+        1,
+        "one gate for the session"
+    );
+}
+
+#[test]
+fn b10_a_log_that_ran_docs_per_project_keeps_that_path() {
+    let mut h = docs_wide(&["a", "b"]);
+    h.ev(scanned("a", &[], &[]));
+    h.ev(scanned("b", &[], &[]));
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn documentation docs-survey a",
+            "spawn documentation docs-survey b"
+        ],
+        "a scan for one project's own pipeline keeps one pipeline per project"
+    );
 }
 
 #[test]

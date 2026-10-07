@@ -313,17 +313,19 @@ impl SpawnFactory for AgentsFactory {
                 implementer_reports: x.implementer_reports.clone(),
                 existing_book: existing_book(s),
                 reference: x.docs_reference.clone(),
+                book_parts: x.docs_parts.clone(),
                 mode: match (x.docs_step, &x.docs_page) {
                     (Some(ostra_core::book::DocsStep::Survey), _) => DocsMode::Survey,
                     (Some(ostra_core::book::DocsStep::Synthesis), _) => DocsMode::Synthesis {
                         round: x.docs_round,
-                        drafts: s.docs_drafts_dir(&req.project),
+                        drafts: s.docs_drafts_dir(crate::book::docs_key(&req.purpose).unwrap_or(&req.project)),
                         findings: x.docs_instructions.clone(),
                     },
                     (Some(ostra_core::book::DocsStep::Page), Some(p)) => {
-                        DocsMode::Page(DocsPageScope {
+                        DocsMode::Page(Box::new(DocsPageScope {
                             id: p.id.clone(),
                             title: p.title.clone(),
+                            part: p.part.clone(),
                             group: p.group.clone(),
                             covers: p.covers.clone(),
                             sources: p.sources.clone(),
@@ -334,10 +336,10 @@ impl SpawnFactory for AgentsFactory {
                                 .filter(|o| o.id != p.id)
                                 .map(|o| (o.id.clone(), o.title.clone(), o.covers.clone()))
                                 .collect(),
-                            drafts: s.docs_drafts_dir(&req.project),
+                            drafts: s.docs_drafts_dir(crate::book::docs_key(&req.purpose).unwrap_or(&req.project)),
                             draft: i.target.clone(),
                             instructions: x.docs_instructions.clone(),
-                        })
+                        }))
                     }
                     _ => DocsMode::Part,
                 },

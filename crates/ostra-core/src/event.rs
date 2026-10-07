@@ -325,25 +325,25 @@ impl ExecPurpose {
                 project,
                 page: None,
                 ..
-            } => format!("Docs for {project}"),
+            } => format!("Docs{}", docs_for(project)),
             ExecPurpose::Docs {
                 project,
                 page: Some(p),
                 round: 0,
-            } => format!("Docs for {project} · {p}"),
+            } => format!("Docs{} · {p}", docs_for(project)),
             ExecPurpose::Docs {
                 project,
                 page: Some(p),
                 round,
-            } => format!("Docs for {project} · {p} · revision {round}"),
-            ExecPurpose::DocsSurvey { project } => format!("Docs survey for {project}"),
+            } => format!("Docs{} · {p} · revision {round}", docs_for(project)),
+            ExecPurpose::DocsSurvey { project } => format!("Docs survey{}", docs_for(project)),
             ExecPurpose::DocsCheck {
                 project,
                 page,
                 round,
-            } => format!("Docs check for {project} · {page} · round {round}"),
+            } => format!("Docs check{} · {page} · round {round}", docs_for(project)),
             ExecPurpose::DocsSynthesis { project, round } => {
-                format!("Docs synthesis for {project} · round {round}")
+                format!("Docs synthesis{} · round {round}", docs_for(project))
             }
             ExecPurpose::Architecture => "System architecture".into(),
             ExecPurpose::PromptGen {
@@ -945,6 +945,11 @@ pub enum SessionEvent {
         project: String,
         modules: Vec<crate::book::DocsModule>,
         refs: Vec<crate::book::RefItem>,
+        /// Rule B10: the scan serves the session-wide docs pipeline. Logs written before it scanned
+        /// for one project's own pipeline.
+        #[serde(default, skip_serializing_if = "is_false")]
+        #[ts(optional, as = "Option<bool>")]
+        session_wide: bool,
     },
     /// Rule B9: logs from before one writer per project split a large project's part into areas.
     /// The fold ignores it.
@@ -1004,6 +1009,19 @@ pub struct StoredEvent {
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Rule B10: ` for <project>` after a docs run's name, or nothing for a session-wide run.
+fn docs_for(project: &str) -> String {
+    if project == crate::book::SESSION_DOCS {
+        String::new()
+    } else {
+        format!(" for {project}")
+    }
 }
 
 impl ExecPurpose {

@@ -9,6 +9,12 @@ export type BookPages = { nav: NavGroup[]; sources: Record<string, string> };
 export const OVERVIEW = "overview";
 export const GLOSSARY = "glossary";
 
+/** The key of the part for pages that span projects (Rule B11). No project key can take it. */
+export const CROSS_PART = "_cross";
+
+/** The name of a part as a reader sees it. */
+export const partLabel = (part: string) => (part === CROSS_PART ? "Across projects" : part);
+
 /** The page id of a project's section. Ids never hold `/`, which separates a page from its anchor. */
 export const sectionPage = (project: string, id: string) => `${project}.${id}`;
 
@@ -56,7 +62,7 @@ function codeRefs(refs: CodeRef[], project: string): string {
   return table(
     ["Path", "Symbol", "Lines", "What is there"],
     refs.map((r) => [
-      codeCell(`${project}/${r.path}`),
+      codeCell(`${r.project ?? project}/${r.path}`),
       r.symbol ? codeCell(r.symbol) : "",
       r.lines ? cell(r.lines) : "",
       cell(r.note),
@@ -97,9 +103,13 @@ export function sectionMarkdown(s: DocSection, project: string): string {
 function overviewMarkdown(book: Book): string {
   const out = [`# ${inlineText(book.title || book.id)}`];
   out.push(`Projects: ${book.projects.map(code).join(", ")}. Updated ${new Date(book.updated_at).toLocaleString()}.`);
-  const counts = book.parts.map((p) => [codeCell(p.project), String(p.sections.length)]);
-  if (counts.length) out.push(table(["Project", "Sections"], counts));
-  for (const p of book.parts) if (p.overview.trim()) out.push(`## ${inlineText(p.project)}`, prose(p.overview));
+  const counts = book.parts.map((p) => [
+    p.project === CROSS_PART ? cell(partLabel(p.project)) : codeCell(p.project),
+    String(p.sections.length),
+  ]);
+  if (counts.length) out.push(table(["Part", "Sections"], counts));
+  for (const p of book.parts)
+    if (p.overview.trim()) out.push(`## ${inlineText(partLabel(p.project))}`, prose(p.overview));
   return out.join("\n\n");
 }
 
@@ -127,8 +137,9 @@ export function bookPages(book: Book): BookPages {
     for (const s of p.sections) {
       const id = sectionPage(p.project, s.id);
       sources[id] = sectionMarkdown(s, p.project);
-      const name = s.group || p.project;
-      const label = book.parts.length > 1 && s.group ? `${p.project}: ${name}` : name;
+      const part = partLabel(p.project);
+      const name = s.group || part;
+      const label = book.parts.length > 1 && s.group ? `${part}: ${name}` : name;
       let group = parts.find((g) => g.label === label);
       if (!group) {
         group = { label, pages: [] };

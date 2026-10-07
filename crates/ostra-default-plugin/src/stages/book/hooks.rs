@@ -34,6 +34,10 @@ pub(crate) fn work_projects(s: &SessionState, purpose: &ExecPurpose) -> Option<V
                     .cloned()
                     .collect();
             }
+            // Rule B10: a session-wide run works in every documented project.
+            if project == ostra_core::book::SESSION_DOCS {
+                return Some(others);
+            }
             let mut all = vec![project.clone()];
             all.extend(others.into_iter().filter(|k| k != project));
             Some(all)
@@ -48,6 +52,7 @@ pub(crate) async fn scan_docs(
     host: &StepHost,
     session: &SessionId,
     project: String,
+    session_wide: bool,
 ) -> Result<(), EngineError> {
     let st = host.snapshot(session)?;
     let path = st.project_path(&project).ok_or_else(|| {
@@ -64,6 +69,7 @@ pub(crate) async fn scan_docs(
             project,
             modules,
             refs,
+            session_wide,
         },
     )?;
     Ok(())
@@ -96,18 +102,26 @@ pub(crate) fn spawn_files(st: &SessionState, req: &SpawnRequest) {
     }
 }
 
-/// Rule B10: the drafts of a project as Markdown, the inventory, and an index of the page plan.
-pub(crate) fn write_docs_drafts(st: &SessionState, project: &str) {
-    let Some(track) = st.ext.os().project_tracks.get(project).map(|t| &t.book) else {
+/// Rule B10: the drafts of a docs pipeline as Markdown, the inventory, and an index of the page
+/// plan. `key` is a project, or `_session` for the session-wide pipeline.
+pub(crate) fn write_docs_drafts(st: &SessionState, key: &str) {
+    let Some(track) = st.docs_pipe(key) else {
         return;
     };
-    let dir = st.docs_drafts_dir(project);
+    let wide = key == ostra_core::book::SESSION_DOCS;
+    let projects = st.docs_projects();
+    let name = if wide {
+        "the session's book".to_string()
+    } else {
+        format!("`{key}`")
+    };
+    let dir = st.docs_drafts_dir(key);
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
     if let Some(scan) = &track.docs_scan {
         let mut text = format!(
-            "# Reference sheet for `{project}`\n\nThe modules and the named constants that the engine found in the source. The book must cover each module, and a reader looks up each constant.\n\n## Modules\n\n"
+            "# Reference sheet for {name}\n\nThe modules and the named constants that the engine found in the source. The book must cover each module, and a reader looks up each constant.\n\n## Modules\n\n"
         );
         for m in &scan.modules {
             text.push_str(&format!("- `{}`: {}\n", m.name, m.globs.join(", ")));
@@ -126,11 +140,24 @@ pub(crate) fn write_docs_drafts(st: &SessionState, project: &str) {
     let Some(survey) = track.survey_plan() else {
         return;
     };
+    // Rule B11: a session-wide page renders under its part, as the book shows it.
+    let part_of = |id: &str| -> String {
+        if !wide {
+            return key.to_string();
+        }
+        survey
+            .pages
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| super::page_part(p, &projects))
+            .unwrap_or_default()
+    };
     let drafts = track.placed_drafts();
     for d in &drafts {
+        let part = part_of(&d.id);
         let _ = std::fs::write(
-            st.docs_draft_path(project, &d.id),
-            ostra_core::book::render_section(project, d),
+            st.docs_draft_path(key, &d.id),
+            ostra_core::book::render_section(&part, d),
         );
         // Rule B10: the draft before the last revision, so a fact-check re-pass diffs the two.
         if let Some(prev) = track.page_docs.get(&d.id).and_then(|p| p.previous.as_ref()) {
@@ -138,14 +165,21 @@ pub(crate) fn write_docs_drafts(st: &SessionState, project: &str) {
             prev.id = d.id.clone();
             let _ = std::fs::write(
                 dir.join(format!("{}.prev.md", d.id)),
-                ostra_core::book::render_section(project, &prev),
+                ostra_core::book::render_section(&part, &prev),
             );
         }
     }
-    let mut index = format!(
-        "# Page plan for `{project}`\n\n{}\n\n",
-        survey.overview.trim()
-    );
+    let mut index = format!("# Page plan for {name}\n\n{}\n\n", survey.overview.trim());
+    for o in &survey.part_overviews {
+        index.push_str(&format!(
+            "## {}\n\n{}\n\n",
+            ostra_core::book::part_label(&o.part),
+            o.overview.trim()
+        ));
+    }
+    if !survey.part_overviews.is_empty() {
+        index.push_str("## Pages\n\n");
+    }
     for p in &survey.pages {
         let state = if drafts.iter().any(|d| d.id == p.id) {
             format!("draft: `{}.md`", p.id)
@@ -154,14 +188,19 @@ pub(crate) fn write_docs_drafts(st: &SessionState, project: &str) {
         } else {
             "kept from the book".into()
         };
+        let part = if wide {
+            format!("part: {}, ", part_of(&p.id))
+        } else {
+            String::new()
+        };
         index.push_str(&format!(
-            "- `{}` {} (group: {}, {state}): {}\n",
+            "- `{}` {} ({part}group: {}, {state}): {}\n",
             p.id, p.title, p.group, p.covers
         ));
     }
     let _ = std::fs::write(dir.join("index.md"), index);
     let mut inv = format!(
-        "# Inventory for `{project}`\n\nEvery item the book must cover, with its owning page.\n\n| Item | Name | Owner | Sources | Settings | Names |\n| --- | --- | --- | --- | --- | --- |\n"
+        "# Inventory for {name}\n\nEvery item the book must cover, with its owning page.\n\n| Item | Name | Owner | Sources | Settings | Names |\n| --- | --- | --- | --- | --- | --- |\n"
     );
     for i in &track.current_inventory() {
         let owner = match &i.out_of_scope {
@@ -183,5 +222,5 @@ pub(crate) fn write_docs_drafts(st: &SessionState, project: &str) {
             code(&i.names)
         ));
     }
-    let _ = std::fs::write(st.docs_inventory_path(project), inv);
+    let _ = std::fs::write(st.docs_inventory_path(key), inv);
 }

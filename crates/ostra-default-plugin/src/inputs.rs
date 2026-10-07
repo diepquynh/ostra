@@ -55,6 +55,8 @@ pub struct OstraInputs {
     pub docs_instructions: Vec<String>,
     pub docs_round: u32,
     pub docs_check: bool,
+    /// Rule B11: the parts of a session-wide book, for the documentation spawn.
+    pub docs_parts: Vec<String>,
     pub init_item: Option<String>,
     /// Rule WD3: one line per later stage of the workflow: its agents, their executors, and
     /// whether each works in several projects.

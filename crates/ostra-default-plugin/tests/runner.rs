@@ -185,7 +185,14 @@ impl Executor for Scripted {
                 json!({"findings": [], "security_block": false, "ledger_path": "/l", "summary": "passed"})
             }
             AgentName::Documentation => {
-                let stub = sess.join("ostra-docs-request.md");
+                // The writer reads the request where its spawn names it.
+                let stub = spec
+                    .first_message
+                    .lines()
+                    .skip_while(|l| *l != "Implementer reports:")
+                    .nth(1)
+                    .map(|l| PathBuf::from(l.trim()))
+                    .unwrap_or_else(|| sess.join("ostra-docs-request.md"));
                 let text = std::fs::read_to_string(&stub).unwrap_or_default();
                 assert!(
                     text.contains("Document the greeting"),

@@ -648,7 +648,13 @@ impl Inner {
     ) -> Result<(), EngineError> {
         let st = self.snapshot(session)?;
         let update = self.pipeline().book_update(&st);
-        let projects = update.parts.iter().map(|p| p.project.clone()).collect();
+        // Rule B11: the part across projects is no project.
+        let projects = update
+            .parts
+            .iter()
+            .filter(|p| p.project != ostra_core::book::CROSS_PART)
+            .map(|p| p.project.clone())
+            .collect();
         let ws = &st.workspace_root;
         let error = ostra_core::book::apply(ws, &book, &update, chrono::Utc::now())
             .err()

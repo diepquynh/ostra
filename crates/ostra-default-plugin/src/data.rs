@@ -275,6 +275,8 @@ pub struct OstraState {
     pub phases: BTreeMap<u32, PhaseRun>,
     pub superseded_phases: Vec<PhaseRun>,
     pub project_tracks: BTreeMap<String, ProjectTrack>,
+    /// Rule B10: the session-wide docs pipeline. A log whose docs ran per project leaves it empty.
+    pub session_book: DocsPipeline,
     pub quick: QuickTrack,
     pub init: Option<InitTrack>,
     /// Rule O4: the init of each created project, run when the build starts.
@@ -302,6 +304,7 @@ impl Default for OstraState {
             phases: BTreeMap::new(),
             superseded_phases: vec![],
             project_tracks: BTreeMap::new(),
+            session_book: DocsPipeline::default(),
             quick: QuickTrack::default(),
             init: None,
             project_inits: BTreeMap::new(),

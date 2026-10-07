@@ -273,6 +273,8 @@ impl Index {
             let u = &self.units[h.unit];
             let place = if u.project.is_empty() {
                 u.book.clone()
+            } else if u.project == book::CROSS_PART {
+                format!("{}, across projects", u.book)
             } else {
                 format!("{}, project `{}`", u.book, u.project)
             };
@@ -372,7 +374,7 @@ impl Builder {
                 project: part.project.clone(),
                 id: format!("{}/overview", part.project),
                 kind: UnitKind::Overview,
-                title: format!("{} overview", part.project),
+                title: format!("{} overview", book::part_label(&part.project)),
                 file: "index.md".into(),
                 code_paths: vec![],
                 title_tf: HashMap::new(),
@@ -439,8 +441,14 @@ impl Builder {
             let mut code_paths = paths_in(&text);
             let (id, kind, unit_title) = match &heading {
                 None => {
-                    let mut refs: Vec<String> =
-                        s.code_refs.iter().map(|r| r.path.clone()).collect();
+                    let mut refs: Vec<String> = s
+                        .code_refs
+                        .iter()
+                        .map(|r| match &r.project {
+                            Some(p) => format!("{p}/{}", r.path),
+                            None => r.path.clone(),
+                        })
+                        .collect();
                     refs.append(&mut code_paths);
                     code_paths = refs;
                     (section_id.clone(), UnitKind::Section, title.clone())
@@ -967,6 +975,7 @@ mod tests {
             code_refs: refs
                 .iter()
                 .map(|p| CodeRef {
+                    project: None,
                     path: (*p).into(),
                     symbol: None,
                     lines: None,

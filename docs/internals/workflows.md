@@ -121,7 +121,7 @@ A file names the built-in stages `ostra:<stage>`:
 | `ostra:build` | The implement and review loop of each phase, and the phase stages |
 | `ostra:feedback` | The implementation review gate and its feedback rounds (Rule F1) |
 | `ostra:closing` | For each project: format, the closing gate, and tests. Without a book stage after it, also docs and the book |
-| `ostra:book` | For each project that the closing gate chose docs for: the docs stage of Rule B10, then the book write |
+| `ostra:book` | One docs pipeline for the projects that the closing gate chose docs for (Rule B10), then the book write |
 
 ### A workflow without the book stage
 

@@ -239,7 +239,7 @@ not a positive number, `raise` adds the original budget again. `stop` fails the 
 
 The docs stage reconciles its drafts in synthesis rounds until the book meets its definition of done (Rule B10).
 After each 3 rounds without done, this gate opens before the next revisions. It names the checks that the last
-synthesis pass found failed. Nothing of the project's docs stage runs while it is open.
+synthesis pass found failed. The session-wide docs pipeline has one such gate for every documented project. A session from an older log has one gate for each project. Nothing of the pipeline runs while the gate is open.
 
 `continue` runs another round, and the gate opens again only after 3 more rounds. `accept` ends the loop and
 writes the book from the current drafts. Under YOLO the engine answers `continue`, so the session budget is the

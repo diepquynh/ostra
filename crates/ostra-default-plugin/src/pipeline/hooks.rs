@@ -140,7 +140,7 @@ impl Pipeline for OstraPipeline {
     fn check_submit(&self, contract: Contract, input: &Value, params: &Value) -> Vec<String> {
         match contract {
             // Rule B10: each docs step's own shape, with the correction first.
-            Contract::Documentation => book::checks::check_value(input),
+            Contract::Documentation => book::parts::check_with_params(input, params),
             Contract::Plan => plan::limits::check_plan(input, params),
             _ => vec![],
         }

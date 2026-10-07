@@ -39,8 +39,13 @@ pub enum OstraStep {
         execution: ExecutionId,
         error: String,
     },
-    /// Rule B10: read the project's modules and named constants from disk and record them.
-    ScanDocs { project: String },
+    /// Rule B10: read the project's modules and named constants from disk and record them, for
+    /// the session-wide pipeline or for the project's own one.
+    ScanDocs {
+        project: String,
+        #[serde(default)]
+        session_wide: bool,
+    },
 }
 
 impl OstraStep {
@@ -58,7 +63,7 @@ impl OstraStep {
             OstraStep::AnnounceBlocked { phase, tests, .. } => format!("blocked:{phase}:{tests}"),
             OstraStep::FinishInit { project } => format!("finish-init:{project}"),
             OstraStep::RecordInitProblem { project, .. } => format!("init-problem:{project}"),
-            OstraStep::ScanDocs { project } => format!("scan-docs:{project}"),
+            OstraStep::ScanDocs { project, .. } => format!("scan-docs:{project}"),
         }
     }
 
@@ -74,7 +79,7 @@ impl OstraStep {
             OstraStep::AnnounceBlocked { phase, .. } => format!("blocked phase {phase}"),
             OstraStep::FinishInit { project } => format!("finish-init {project}"),
             OstraStep::RecordInitProblem { project, .. } => format!("init-problem {project}"),
-            OstraStep::ScanDocs { project } => format!("scan-docs {project}"),
+            OstraStep::ScanDocs { project, .. } => format!("scan-docs {project}"),
         }
     }
 

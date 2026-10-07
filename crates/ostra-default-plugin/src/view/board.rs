@@ -110,6 +110,7 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         closing::view::cards(key, t, &mut out);
         book::view::docs_card(s, key, t, &mut out);
     }
+    book::view::session_docs_card(s, &mut out);
     book::view::book_card(s, &mut out);
     quick::view::cards(s, &mut out);
     out.push(completion_card(s));

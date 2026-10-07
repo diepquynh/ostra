@@ -54,6 +54,8 @@ impl Default for DocsState {
 pub struct DocsScan {
     pub modules: Vec<ostra_core::book::DocsModule>,
     pub refs: Vec<ostra_core::book::RefItem>,
+    /// The scan serves the session-wide pipeline, not the project's own one.
+    pub session_wide: bool,
 }
 
 /// Rule B10: one synthesis round: a fact-check per changed page, one synthesis pass, then a

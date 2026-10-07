@@ -2,6 +2,10 @@
 
 export type CodeRef = { 
 /**
+ * Rule B11: the project whose folder holds `path`. Absent means the project of the page's part.
+ */
+project?: string, 
+/**
  * Project-relative path, `/`-separated.
  */
 path: string, symbol: string | null, 

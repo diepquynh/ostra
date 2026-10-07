@@ -42,7 +42,7 @@ you mean. When a literal phrase is available, use it.
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir` it. |
 | **repo key** | The lowercase slug from the prompt's `Repo key:` line. Ostra records your verdict under it, so the approval gate for this artifact can find it. You never write that record yourself, and nothing about your own output changes. |
 | **target** | The file named by the prompt's `Target:` line: either the spec file (`ostra-spec-*.md`) or the plan's master file (`ostra-plan-*.md`, not a phase file). {{tool_read}} it first. Ostra renders it, and every phase file, from a typed document the generating agent wrote, so read the markdown as it stands. Its tables that the generating agent does not write, such as the spec's Delivery Order and Traceability tables and the plan's Phase Index and Requirement Traceability, are derived from the same document. |
-| **target type** | The prompt's `Target type:` line: `spec`, `plan`, or `page`. Determines which claims below apply. A `page` target is one draft page of a documentation book (`ostra-docs-drafts/<repo key>/<page id>.md`), and its `Spec file:` is the book's inventory (`inventory.md` in the same folder). |
+| **target type** | The prompt's `Target type:` line: `spec`, `plan`, or `page`. Determines which claims below apply. A `page` target is one draft page of a documentation book (`ostra-docs-drafts/<repo key>/<page id>.md`, or `ostra-docs-drafts/_session/<page id>.md` for a book of several projects), and its `Spec file:` is the book's inventory (`inventory.md` in the same folder). |
 | **research doc** | Path(s) from the prompt's `Research docs:` lines, if given (one per repo `explore` ran for). The pages `explore` actually fetched, with their URLs and dates. It outranks your own training-data knowledge, exactly as it does for `explore`. On a `spec` target it is what you check the External Evidence table against. |
 | **changed since research** | On a `spec` target, the prompt's `Changed since research:` line: the files the research documents cite whose content changed, or that are gone, since the newest document naming them was written, or `none`. A file it does not list still holds what the research documents say about it. |
 | **code facts** | On a `plan` target, the file from the prompt's `Code facts:` line, which Ostra writes from the research documents: per repo, each file the research read with its purpose and key symbols, the patterns and flows it found, and a mark on each file, `unchanged`, `changed`, `gone`, or `not checked`. An `unchanged` entry describes the file as it is now. |
@@ -66,6 +66,11 @@ you mean. When a literal phrase is available, use it.
 pass checks the whole page. On a re-pass, the drafts folder holds the page's previous draft as
 `<page id>.prev.md`. Diff the two (`diff -u "<page id>.prev.md" "<page id>.md"`), then check each prior finding
 and every claim in a changed line, and nothing else. When the previous draft is missing, check the whole page.
+
+A page of a book of several projects has a `Project:` line or a `Part: across projects` line under its title. A
+code reference in its `## Code references` table is `{repo key}/{path}` when it names its project, and a tagged
+path in the inventory is `@{repo key}/{path}`. Both are relative to the root of that project, which the
+`Work dirs:` line gives. Read code in every work dir that the page names.
 
 **Fail (target unreadable):** submit the FAIL verdict in Step 5 with one HIGH finding: `location: "{target path}"`,
 `claim: "file is readable"`, `issue: "Target file does not exist or could not be read."`.

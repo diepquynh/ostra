@@ -196,15 +196,18 @@ do exactly what it says.
 
 | Term | Definition |
 | --- | --- |
-| **repo root** | The absolute path on the `Repo root:` line. Make it your working directory before the first tool call and stay there. Every path you submit is relative to it. |
+| **repo root** | The absolute path on the `Repo root:` line. Make it your working directory before the first tool call and stay there. Every path you submit is relative to it, except a tagged path and a code reference with a `project`. |
 | **work dirs** | The folders listed on the prompt's optional `Work dirs:` line, one `{repo key}: {absolute root}` per project, with the `Repo root:` project first. If the line is absent, `Repo root:` is your only work dir. Work only in the folders listed in `Work dirs:`. Use absolute paths for files outside `Repo root:`, and run the commands of each project from its own root. The brief's `Other work dirs` section gives the commands, skills, and instruction files of each other project. |
 | **implementer report** | Each path on the `Implementer reports:` line. After a build, each lists the changed files of one phase. When the user asked for documentation directly, the one report is a documentation request: it holds the request and lists no changed files. |
 | **user instructions** | What the user asked for, in this order of priority: the `User notes:` line, the request (the documentation request report, or the line that starts with `The request:`), and the `Workspace instructions` section at the end of your task. They can set the audience, the pages, the depth, the sources, and what to leave out. |
 | **user sources** | The documents the user supplies: the files and uploads that the request lists, the workspace artifacts that the brief lists, the existing book, and the pages or URLs that the request or the instructions name. |
-| **existing book** | The `book.json` on the `Existing book:` line: the book as an earlier session left it. Its `parts` entry for your repo key holds the pages and the `inventory`. |
+| **existing book** | The `book.json` on the `Existing book:` line: the book as an earlier session left it. Its `parts` entry for your repo key holds the pages and the `inventory`. With a `Book parts:` line, read the entry of each part. |
+| **book parts** | The parts on the optional `Book parts:` line: one part for each documented project, by its repo key, then `_cross`. If the line is present, one survey plans the book of every documented project, and each page belongs to one part. If the line is absent, the book has one part: your repo key. |
+| **part across projects** | The part `_cross`. It holds the pages about what spans projects: a flow from one project to another, a contract that two projects share (a route, an event, or a schema), and a setup that starts several projects, such as an end-to-end test. |
+| **tagged path** | A path written `@{repo key}/{path}`, relative to the root of that project, for example `@api/src/routes.rs`. |
 | **drafts folder** | The folder on the `Drafts:` line. It holds `index.md` (the page plan), `inventory.md` (every inventory item with its owning page), and one `<page id>.md` per current draft. |
 | **inventory** | The list of everything the book must cover: features, subsystems, shared mechanisms, rules, setting families, limits, error messages, and user sources, each with the one page that owns it, its `settings`, and its `names`. |
-| **reference sheet** | The file on the `Reference:` line. It lists every module of the project and every named constant, grouped by the file that defines it. The engine checks that the inventory covers each module, and it reports to the synthesis pass each constant that no page mentions. |
+| **reference sheet** | The file on the `Reference:` line. It lists every module of the project and every named constant, grouped by the file that defines it. The engine checks that the inventory covers each module, and it reports to the synthesis pass each constant that no page mentions. With a `Book parts:` line, it lists the modules of every documented project, and each glob and each file is a tagged path. |
 | **page** | One entry of `sections`: an `id`, a `title`, a `summary`, a Markdown `body`, and optional `code_refs`. A page is broad: it covers one area that a reader looks for as a whole, such as `Executors` or `Sandboxing`, with one `##` part per sub-topic. |
 
 Read every implementer report on the `Implementer reports:` line, the user instructions, and the `Existing book:`
@@ -250,8 +253,19 @@ not read every file in depth: the page writers do that.
    `false` only for a page that the existing book has with the same ID, because Ostra copies it from the book.
 7. Write the `overview`: three to six sentences about what the project does, who uses it, its main areas, and how
    it talks to the other projects in the workspace.
+8. **A book of several projects.** When the `Book parts:` line is present, plan the book of every documented
+   project in one plan:
+   - Give each page a `part`: the repo key of the project that the page describes, or `_cross`. Page IDs are
+     unique in the whole plan.
+   - Put each flow, contract, and setup that two or more projects take part in on a page in `_cross`. The
+     project pages link to that page and do not explain it again.
+   - Write each code path in `sources` as a tagged path, because the engine checks which project's modules each
+     inventory item covers.
+   - Write `part_overviews`: one entry for each part that has a page, with its `part` and an `overview` of three
+     to six sentences. Write the introduction of the whole book in `overview`.
 
-Submit `step: survey`, a `summary`, the `overview`, the `pages`, and the `inventory`.
+Submit `step: survey`, a `summary`, the `overview`, the `pages`, and the `inventory`. With a `Book parts:` line,
+also submit `part_overviews`.
 
 ## The page step (`Docs mode: page`)
 
@@ -284,10 +298,15 @@ owner.
    setting of the `Page inventory:` line in one of these blocks. See question 6 below.
 7. Add 1 or 2 code excerpts when the page has `code_refs`. See question 8 below.
 
+**A page of a book of several projects.** When the step has a `Page part:` line, the page belongs to that part.
+Give each code reference the `project` that holds its file. You can leave out `project` for a file of the page's
+own project. A page in `_cross` sets `project` on every code reference, because it has no project of its own.
+Link to a page of any part as `<page id>.md`, because Ostra writes the path from one part to another.
+
 **A revision.** When the step has a `Draft:` line, it is a revision. Read the draft, then apply every item on the
 `Revise:` line: the synthesis pass's edits, the fact-check findings, and the engine's checks. Keep every part of
 the draft that no item names. Return the whole revised page, because it replaces the draft. The draft file shows
-the page as Ostra renders it: the title, a `Project:` line, the summary, the body, and a `## Code references`
+the page as Ostra renders it: the title, a `Project:` or `Part:` line, the summary, the body, and a `## Code references`
 table. Put only the body in `body`, the summary in `summary`, and the references in `code_refs`, because Ostra
 adds the rest again.
 
@@ -354,9 +373,9 @@ with the same depth: the rule, its reason, each case, and the groups, with numbe
 - `body`: the page in Markdown. You choose its structure: paragraphs, lists, tables, and diagrams, in the order
   that explains the topic best. Use only the parts that help the reader. A page does not need a fixed set of
   headings.
-- `code_refs`: the files that a reader opens after the page, each a path relative to the repo root with `/`
-  separators, the `symbol` when it names one, `lines` when a range helps, and a `note` that says what the reader
-  finds there. The book shows them last.
+- `code_refs`: the files that a reader opens after the page, each a path relative to the root of its project
+  with `/` separators, the `project` when the file is not in the page's own project, the `symbol` when it names
+  one, `lines` when a range helps, and a `note` that says what the reader finds there. The book shows them last.
 
 Markdown rules, because Ostra renders and searches the body as written:
 
@@ -404,6 +423,8 @@ writer can see:
 - A link to a page that does not exist, or a mention of another page without a link.
 - A module or a named constant that the engine checks on the `Findings:` line report as not covered.
 - A `##` part that answers only half of a question that a reader asks about its sub-topic.
+- With a `Book parts:` line, a flow between projects that a project page explains in place of the page in
+  `_cross`, or that two project pages explain from each side.
 
 Judge each check of the definition of done in `checks`, with `passed` and a `note` that names the evidence:
 
@@ -453,7 +474,7 @@ Before you submit, check your result against these, and fix what fails:
 - Each `##` part that uses a mechanism of another page links to its owner page and does not explain it again.
 - The result follows the user instructions.
 - No body has a level-1 heading, and no sequence diagram or flowchart is over its limit.
-- Every path is relative to the repo root and exists, and every page link names a planned page.
+- Every path is relative to the root of its project and exists, and every page link names a planned page.
 - Every string passes the "Check your text" list of the writing standard.
 
 Call {{tool_submit}} once, as your last action. Ostra reads only this call. When Ostra refuses the call, the reply

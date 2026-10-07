@@ -98,7 +98,12 @@ reason: string | null,
  * Rule J1: the answer waits for the Route answer or Feedback judge before it is applied.
  * Answers recorded before the rule have none and fold as they always did.
  */
-routed: boolean, } | { "type": "command_started", purpose: CommandPurpose, project: string, command: string, } | { "type": "command_ran", purpose: CommandPurpose, project: string, command: string, exit_code: number | null, output_tail: string, } | { "type": "docs_scanned", project: string, modules: Array<DocsModule>, refs: Array<RefItem>, } | { "type": "docs_planned", project: string, } | { "type": "book_written", book: string, 
+routed: boolean, } | { "type": "command_started", purpose: CommandPurpose, project: string, command: string, } | { "type": "command_ran", purpose: CommandPurpose, project: string, command: string, exit_code: number | null, output_tail: string, } | { "type": "docs_scanned", project: string, modules: Array<DocsModule>, refs: Array<RefItem>, 
+/**
+ * Rule B10: the scan serves the session-wide docs pipeline. Logs written before it scanned
+ * for one project's own pipeline.
+ */
+session_wide?: boolean, } | { "type": "docs_planned", project: string, } | { "type": "book_written", book: string, 
 /**
  * The projects whose parts this session wrote.
  */

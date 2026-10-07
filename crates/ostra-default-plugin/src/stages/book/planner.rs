@@ -14,6 +14,15 @@ use ostra_core::event::{ExecPurpose, GatePayload};
 use ostra_core::workflow::BuiltinStage;
 use ostra_engine::plan::*;
 use ostra_engine::state::*;
+use std::path::PathBuf;
+
+/// Where the runs of one docs pipeline start: the key their purposes carry (a project, or
+/// `_session`), the main project they work in, and their session dir.
+pub struct RunAt {
+    pub key: String,
+    pub main: String,
+    pub session_dir: PathBuf,
+}
 
 pub struct BookProgress {
     /// Projects whose part of the book is written, sorted.
@@ -46,17 +55,30 @@ pub fn docs_chosen(s: &SessionState, project: &str) -> Option<bool> {
 
 /// Rules B5 to B10: the docs stage and the book write.
 pub trait PlannerBook<'a> {
+    /// Rule B10: the docs pipeline of one project, the path of a log that ran docs per project.
     fn docs_stage(&mut self, project: &str, passed: &[&PhaseRun]);
+
+    /// Rule B10: one docs pipeline for every documented project of the session: a scan of each,
+    /// then one survey, the pages, and one synthesis loop.
+    fn docs_session_stage(&mut self, projects: &[String]);
+
+    /// Rule B10: the survey, the page writers, and the synthesis rounds of one pipeline.
+    fn docs_pipeline(&mut self, at: &RunAt, track: &'a DocsPipeline, base: SpawnInputs);
 
     /// One run of the docs stage: start it under the cap, or open the failure gate.
     fn docs_run<T>(
         &mut self,
-        project: &str,
+        at: &RunAt,
         state: &crate::data::StageRun<T>,
         agent: AgentName,
         purpose: ExecPurpose,
         inputs: SpawnInputs,
     );
+
+    /// Rule B10: the projects that get documentation, once every project's closing choice is
+    /// known: the closing gate chose docs, a phase passed, and no BLOCKER is open (Hard rule 21).
+    /// `None` while a project can still get documentation.
+    fn docs_choices(&self) -> Option<Vec<String>>;
 
     /// Where the book stands once every project's closing stages are known. `None` while a
     /// project may still get documentation.
@@ -78,32 +100,20 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
         if blocker_open(passed) {
             return;
         }
-        let base = SpawnInputs {
-            user_notes: s.notes_for(NoteStage::Docs),
-            extra: OstraInputs {
-                implementer_reports: passed
-                    .iter()
-                    .filter_map(|p| p.implementer_report.clone())
-                    .collect(),
-                ..Default::default()
-            }
-            .into_value(),
-            ..Default::default()
-        };
-        let stage = if book_node(s) {
-            BuiltinStage::Book
-        } else {
-            BuiltinStage::Closing
-        };
-        let writer = s.agent_for(stage, Contract::Documentation);
-        let docs = |page: Option<&str>, round: u32| ExecPurpose::Docs {
-            project: project.to_string(),
-            page: page.map(str::to_string),
-            round,
+        let base = docs_base(s, passed, vec![]);
+        let at = RunAt {
+            key: project.to_string(),
+            main: project.to_string(),
+            session_dir: s.project_session_dir(project),
         };
         // Rule B10: a log from before the pipeline keeps its whole-part writer.
         if !matches!(track.docs, DocsState::NotStarted) {
-            self.docs_run(project, &track.docs, writer, docs(None, 0), base);
+            let purpose = ExecPurpose::Docs {
+                project: project.to_string(),
+                page: None,
+                round: 0,
+            };
+            self.docs_run(&at, &track.docs, docs_writer(s), purpose, base);
             return;
         }
         // Rule B10: scan the modules and constants, survey, write a first draft of each page, then
@@ -111,15 +121,76 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
         if track.docs_scan.is_none() && matches!(track.survey, DocsState::NotStarted) {
             self.push(Step::from(OstraStep::ScanDocs {
                 project: project.to_string(),
+                session_wide: false,
             }));
             return;
         }
+        self.docs_pipeline(&at, track, base);
+    }
+
+    fn docs_session_stage(&mut self, projects: &[String]) {
+        let s = self.s;
+        let Some(main) = projects.first() else {
+            return;
+        };
+        let track = &s.ext.os().session_book;
+        // Rule B10: one scan per documented project, then one survey over all of them.
+        if matches!(track.survey, DocsState::NotStarted) {
+            let mut scanning = false;
+            for key in projects {
+                let scanned = s.ext.os().project_tracks[key]
+                    .book
+                    .docs_scan
+                    .as_ref()
+                    .is_some_and(|x| x.session_wide);
+                if !scanned {
+                    self.push(Step::from(OstraStep::ScanDocs {
+                        project: key.clone(),
+                        session_wide: true,
+                    }));
+                    scanning = true;
+                }
+            }
+            if scanning {
+                return;
+            }
+        }
+        let mut passed: Vec<&PhaseRun> = vec![];
+        for key in projects {
+            for p in passed_phases(s, key) {
+                if !passed.iter().any(|x| x.info.id == p.info.id) {
+                    passed.push(p);
+                }
+            }
+        }
+        // Rule B11: each documented project is a part, and the part across projects comes last.
+        let mut parts = projects.to_vec();
+        parts.push(ostra_core::book::CROSS_PART.into());
+        let base = docs_base(s, &passed, parts);
+        let at = RunAt {
+            key: ostra_core::book::SESSION_DOCS.into(),
+            main: main.clone(),
+            session_dir: s.session_root.clone(),
+        };
+        self.docs_pipeline(&at, track, base);
+    }
+
+    fn docs_pipeline(&mut self, at: &RunAt, track: &'a DocsPipeline, base: SpawnInputs) {
+        let s = self.s;
+        let key = at.key.as_str();
+        let stage = docs_stage_kind(s);
+        let writer = docs_writer(s);
+        let docs = |page: Option<&str>, round: u32| ExecPurpose::Docs {
+            project: key.to_string(),
+            page: page.map(str::to_string),
+            round,
+        };
         let base = SpawnInputs {
             extra: OstraInputs {
                 docs_reference: track
                     .docs_scan
                     .as_ref()
-                    .map(|_| s.docs_drafts_dir(project).join("reference.md")),
+                    .map(|_| s.docs_drafts_dir(key).join("reference.md")),
                 ..OstraInputs::of(&base)
             }
             .into_value(),
@@ -135,9 +206,9 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                 ..base
             };
             let purpose = ExecPurpose::DocsSurvey {
-                project: project.to_string(),
+                project: key.to_string(),
             };
-            self.docs_run(project, &track.survey, writer, purpose, inputs);
+            self.docs_run(at, &track.survey, writer, purpose, inputs);
             return;
         };
         let planned = track.planned_pages();
@@ -170,7 +241,7 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                 continue;
             };
             self.docs_run(
-                project,
+                at,
                 &d.run,
                 writer,
                 docs(Some(&page.id), 0),
@@ -216,8 +287,8 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                 )
                 .unwrap_or_else(|| "none".into());
             let inputs = SpawnInputs {
-                target: Some(s.docs_draft_path(project, page)),
-                spec_file: Some(s.docs_inventory_path(project)),
+                target: Some(s.docs_draft_path(key, page)),
+                spec_file: Some(s.docs_inventory_path(key)),
                 prior_findings: Some(prior),
                 extra: OstraInputs {
                     docs_check: true,
@@ -228,11 +299,11 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                 ..Default::default()
             };
             let purpose = ExecPurpose::DocsCheck {
-                project: project.to_string(),
+                project: key.to_string(),
                 page: page.clone(),
                 round,
             };
-            self.docs_run(project, &state, checker, purpose, inputs);
+            self.docs_run(at, &state, checker, purpose, inputs);
         }
         if checking {
             return;
@@ -294,10 +365,10 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                 ..base
             };
             let purpose = ExecPurpose::DocsSynthesis {
-                project: project.to_string(),
+                project: key.to_string(),
                 round,
             };
-            self.docs_run(project, &synthesis, writer, purpose, inputs);
+            self.docs_run(at, &synthesis, writer, purpose, inputs);
             return;
         }
         let Some(r) = current else {
@@ -315,14 +386,19 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                         .collect(),
                     _ => vec![],
                 };
+                let title = if key == ostra_core::book::SESSION_DOCS {
+                    format!("Documentation is not done after {round} rounds")
+                } else {
+                    format!("Documentation for {key} is not done after {round} rounds")
+                };
                 self.gate(
-                    format!("Documentation for {project} is not done after {round} rounds"),
+                    title,
                     format!(
                         "{round} synthesis rounds ran, and {} pages still need changes. Run another round, or accept the book as it is.",
                         r.targets.len()
                     ),
                     GatePayload::DocsRounds {
-                        project: project.to_string(),
+                        project: key.to_string(),
                         rounds: round,
                         open,
                     },
@@ -341,30 +417,23 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                 .cloned()
                 .unwrap_or(DocsState::NotStarted);
             let mut inputs = page_inputs(page, instructions.clone());
-            inputs.target = Some(s.docs_draft_path(project, page_id));
-            self.docs_run(project, &state, writer, docs(Some(page_id), round), inputs);
+            inputs.target = Some(s.docs_draft_path(key, page_id));
+            self.docs_run(at, &state, writer, docs(Some(page_id), round), inputs);
         }
     }
 
     fn docs_run<T>(
         &mut self,
-        project: &str,
+        at: &RunAt,
         state: &crate::data::StageRun<T>,
         agent: AgentName,
         purpose: ExecPurpose,
         inputs: SpawnInputs,
     ) {
-        let s = self.s;
         match state {
             crate::data::StageRun::NotStarted => {
                 // Rule B7: docs runs fan out at once, and the workspace's slot limit bounds them.
-                self.spawn(
-                    agent,
-                    purpose,
-                    project,
-                    s.project_session_dir(project),
-                    inputs,
-                );
+                self.spawn(agent, purpose, &at.main, at.session_dir.clone(), inputs);
             }
             crate::data::StageRun::Failed {
                 exec,
@@ -373,16 +442,16 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                 ..
             } => {
                 let (exec, error) = (exec.clone(), error.clone());
-                self.exec_failed_gate(&exec, agent, project, &error);
+                self.exec_failed_gate(&exec, agent, &at.main, &error);
             }
             _ => {}
         }
     }
 
-    fn book_progress(&self) -> Option<BookProgress> {
+    fn docs_choices(&self) -> Option<Vec<String>> {
         let s = self.s;
         let removed = removed_phases(s);
-        let mut parts = vec![];
+        let mut out = vec![];
         for key in s.ext.os().project_tracks.keys() {
             if !self.project_code_done(key, &removed) {
                 return None;
@@ -401,11 +470,31 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                 None if s.tests_requested() && s.docs_requested() => true,
                 None => return None,
             };
-            if !docs_on || blocker_open(&passed) {
-                continue;
+            if docs_on && !blocker_open(&passed) {
+                out.push(key.clone());
             }
-            match track.book.docs_aggregate() {
-                DocsState::Done(_) => parts.push(key.clone()),
+        }
+        Some(out)
+    }
+
+    fn book_progress(&self) -> Option<BookProgress> {
+        let s = self.s;
+        let documented = self.docs_choices()?;
+        if !s.docs_per_project() {
+            // Rule B10: the session-wide pipeline writes the parts of every documented project.
+            if documented.is_empty() {
+                return Some(BookProgress { parts: vec![] });
+            }
+            return match s.ext.os().session_book.docs_aggregate() {
+                DocsState::Done(_) => Some(BookProgress { parts: documented }),
+                DocsState::Abandoned => Some(BookProgress { parts: vec![] }),
+                _ => None,
+            };
+        }
+        let mut parts = vec![];
+        for key in documented {
+            match s.ext.os().project_tracks[&key].book.docs_aggregate() {
+                DocsState::Done(_) => parts.push(key),
                 DocsState::Abandoned => {}
                 _ => return None,
             }
@@ -436,18 +525,30 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
         if !book_node(s) {
             return true;
         }
-        let mut settled = true;
-        for key in s.ext.os().project_tracks.keys() {
-            if docs_chosen(s, key) != Some(true) {
-                continue;
+        let settled = if s.docs_per_project() {
+            let mut settled = true;
+            for key in s.ext.os().project_tracks.keys() {
+                if docs_chosen(s, key) != Some(true) {
+                    continue;
+                }
+                let passed = passed_phases(s, key);
+                self.docs_stage(key, &passed);
+                settled &= s.ext.os().project_tracks[key]
+                    .book
+                    .docs_aggregate()
+                    .is_settled();
             }
-            let passed = passed_phases(s, key);
-            self.docs_stage(key, &passed);
-            settled &= s.ext.os().project_tracks[key]
-                .book
-                .docs_aggregate()
-                .is_settled();
-        }
+            settled
+        } else {
+            match self.docs_choices() {
+                Some(docs) if docs.is_empty() => true,
+                Some(docs) => {
+                    self.docs_session_stage(&docs);
+                    s.ext.os().session_book.docs_aggregate().is_settled()
+                }
+                None => false,
+            }
+        };
         self.book_stage();
         settled
             && match self.book_progress() {
@@ -455,5 +556,37 @@ impl<'a> PlannerBook<'a> for Planner<'a> {
                 Some(_) => true,
                 None => false,
             }
+    }
+}
+
+/// Rule B10: the stage whose agents write the docs: the book stage, or the closing stage of a
+/// workflow without one.
+fn docs_stage_kind(s: &SessionState) -> BuiltinStage {
+    if book_node(s) {
+        BuiltinStage::Book
+    } else {
+        BuiltinStage::Closing
+    }
+}
+
+fn docs_writer(s: &SessionState) -> AgentName {
+    s.agent_for(docs_stage_kind(s), Contract::Documentation)
+}
+
+/// Rule B10: what every run of a docs pipeline starts from: the user's notes, the implementer
+/// reports of the passed phases, and, for the session-wide pipeline, the parts of the book.
+fn docs_base(s: &SessionState, passed: &[&PhaseRun], parts: Vec<String>) -> SpawnInputs {
+    SpawnInputs {
+        user_notes: s.notes_for(NoteStage::Docs),
+        extra: OstraInputs {
+            implementer_reports: passed
+                .iter()
+                .filter_map(|p| p.implementer_report.clone())
+                .collect(),
+            docs_parts: parts,
+            ..Default::default()
+        }
+        .into_value(),
+        ..Default::default()
     }
 }

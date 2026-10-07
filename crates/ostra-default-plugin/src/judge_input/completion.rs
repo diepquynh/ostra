@@ -135,15 +135,10 @@ pub(crate) fn completion_input(s: &SessionState) -> (String, String) {
                 .closing
                 .map(|(a, b)| format!("tests {}, docs {}", yes(a), yes(b)))
                 .unwrap_or_else(|| "not reached".into());
-            let docs = match &t.book.docs_aggregate() {
-                DocsState::Done(d) => format!(
-                    "docs written ({} sections): {}",
-                    d.sections.len(),
-                    d.summary.trim()
-                ),
-                DocsState::Abandoned => "docs abandoned".into(),
-                DocsState::NotStarted => "docs not run".into(),
-                _ => "docs incomplete".into(),
+            let docs = if s.docs_per_project() {
+                docs_status(&t.book.docs_aggregate())
+            } else {
+                "docs in the session-wide pipeline below".into()
             };
             let format = match t.format {
                 Some(None) => {
@@ -154,6 +149,15 @@ pub(crate) fn completion_input(s: &SessionState) -> (String, String) {
                 None => "format not run".into(),
             };
             let _ = writeln!(m, "- {k}: {format}; closing gate: {closing}; {docs}");
+        }
+        // Rule B10: one docs pipeline for the whole session.
+        let book = &s.ext.os().session_book;
+        if !s.docs_per_project() && !matches!(book.docs_aggregate(), DocsState::NotStarted) {
+            let _ = writeln!(
+                m,
+                "- documentation: {}",
+                docs_status(&book.docs_aggregate())
+            );
         }
     }
     let yolo: Vec<String> = s
@@ -199,5 +203,18 @@ impl PolicyLabel for ostra_core::pipeline::PhaseInfo {
                 self.test_rationale.clone().unwrap_or_default()
             ),
         }
+    }
+}
+
+fn docs_status(docs: &DocsState) -> String {
+    match docs {
+        DocsState::Done(d) => format!(
+            "docs written ({} sections): {}",
+            d.sections.len(),
+            d.summary.trim()
+        ),
+        DocsState::Abandoned => "docs abandoned".into(),
+        DocsState::NotStarted => "docs not run".into(),
+        _ => "docs incomplete".into(),
     }
 }

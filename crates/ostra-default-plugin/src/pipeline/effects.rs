@@ -44,7 +44,10 @@ async fn perform_own(
             execution,
             error,
         } => init::hooks::record_problem(host, session, project, execution, error),
-        OstraStep::ScanDocs { project } => book::hooks::scan_docs(host, session, project).await,
+        OstraStep::ScanDocs {
+            project,
+            session_wide,
+        } => book::hooks::scan_docs(host, session, project, session_wide).await,
         OstraStep::Command {
             purpose,
             project,

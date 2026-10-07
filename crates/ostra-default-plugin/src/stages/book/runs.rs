@@ -1,6 +1,7 @@
 //! How a docs-stage run that starts or ends changes the book stage (Rule B10).
 
 use crate::book::DocsTrack;
+use crate::book::fold::FoldBook;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use ostra_core::book::{DocsStep, DocumentationSubmit};
@@ -73,47 +74,25 @@ impl BookRuns for SessionState {
                 round,
             } => {
                 *self
-                    .ext
-                    .os_mut()
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .book
+                    .docs_pipe_mut(project)
                     .docs_run(page.as_deref(), *round) = DocsState::Running(id.clone());
             }
             ExecPurpose::DocsSurvey { project } => {
-                self.ext
-                    .os_mut()
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .book
-                    .survey = DocsState::Running(id.clone());
+                self.docs_pipe_mut(project).survey = DocsState::Running(id.clone());
             }
             ExecPurpose::DocsCheck {
                 project,
                 page,
                 round,
             } => {
-                self.ext
-                    .os_mut()
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .book
+                self.docs_pipe_mut(project)
                     .round_mut(*round)
                     .checks
                     .insert(page.clone(), CheckState::Running(id.clone()));
             }
             ExecPurpose::DocsSynthesis { project, round } => {
-                self.ext
-                    .os_mut()
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .book
-                    .round_mut(*round)
-                    .synthesis = DocsState::Running(id.clone());
+                self.docs_pipe_mut(project).round_mut(*round).synthesis =
+                    DocsState::Running(id.clone());
             }
             _ => {}
         }
@@ -127,13 +106,7 @@ impl BookRuns for SessionState {
                 page,
                 round,
             } => {
-                let t = &mut self
-                    .ext
-                    .os_mut()
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .book;
+                let t = self.docs_pipe_mut(project);
                 let mut run = stage_run(
                     status,
                     parse::<DocumentationSubmit>(&result.submit),
@@ -153,13 +126,7 @@ impl BookRuns for SessionState {
                 *t.docs_run(page.as_deref(), *round) = run;
             }
             ExecPurpose::DocsSurvey { project } => {
-                let t = &mut self
-                    .ext
-                    .os_mut()
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .book;
+                let t = self.docs_pipe_mut(project);
                 t.survey = expect_step(
                     stage_run(
                         status,
@@ -193,24 +160,13 @@ impl BookRuns for SessionState {
                     &rec.id,
                     error,
                 );
-                self.ext
-                    .os_mut()
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .book
+                self.docs_pipe_mut(project)
                     .round_mut(*round)
                     .checks
                     .insert(page.clone(), run);
             }
             ExecPurpose::DocsSynthesis { project, round } => {
-                let t = &mut self
-                    .ext
-                    .os_mut()
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .book;
+                let t = self.docs_pipe_mut(project);
                 let run = expect_step(
                     stage_run(
                         status,

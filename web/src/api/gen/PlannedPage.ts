@@ -23,4 +23,9 @@ sources: Array<string>,
 /**
  * Write the page in this session. A page that is not rewritten keeps its text from the book.
  */
-rewrite: boolean, };
+rewrite: boolean, 
+/**
+ * Rule B11: the part that holds the page: a project key, or `_cross` for a page that spans
+ * projects. Absent in a survey of one project.
+ */
+part?: string, };

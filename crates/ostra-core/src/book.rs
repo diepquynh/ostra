@@ -21,6 +21,20 @@ pub const MAX_SEQUENCE_MESSAGES: usize = 20;
 pub const MAX_FLOWCHART_NODES: usize = 15;
 /// Longest book ID, so a book folder name stays short on every file system.
 pub const MAX_BOOK_ID: usize = 80;
+/// Rule B11: the key of the book part for the flows, contracts, and setups that span projects. No
+/// project key can take it, because project keys start with a letter or a digit.
+pub const CROSS_PART: &str = "_cross";
+/// Rule B10: the key that a session-wide docs run carries in place of a project key.
+pub const SESSION_DOCS: &str = "_session";
+
+/// Rule B11: the name of a part as a reader sees it.
+pub fn part_label(part: &str) -> String {
+    if part == CROSS_PART {
+        "Across projects".into()
+    } else {
+        part.to_string()
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
@@ -42,6 +56,10 @@ pub struct Diagram {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[ts(export)]
 pub struct CodeRef {
+    /// Rule B11: the project whose folder holds `path`. Absent means the project of the page's part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<String>,
     /// Project-relative path, `/`-separated.
     pub path: String,
     #[serde(default)]
@@ -150,6 +168,20 @@ pub struct PlannedPage {
     /// Write the page in this session. A page that is not rewritten keeps its text from the book.
     #[serde(default = "yes")]
     pub rewrite: bool,
+    /// Rule B11: the part that holds the page: a project key, or `_cross` for a page that spans
+    /// projects. Absent in a survey of one project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub part: Option<String>,
+}
+
+/// Rule B11: the introduction of one part of the book, from a session-wide survey.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export)]
+pub struct PartOverview {
+    /// A project key, or `_cross`.
+    pub part: String,
+    pub overview: String,
 }
 
 fn yes() -> bool {
@@ -203,9 +235,14 @@ pub struct DocumentationSubmit {
     pub step: DocsStep,
     /// Two or three sentences for the user: what the step did.
     pub summary: String,
-    /// The project's introduction, from the survey.
+    /// The project's introduction, from the survey. A session-wide survey writes the introduction
+    /// of the whole book here.
     #[serde(default)]
     pub overview: String,
+    /// Rule B11: a session-wide survey's introduction of each part.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<PartOverview>>", optional)]
+    pub part_overviews: Vec<PartOverview>,
     /// The page of a page step, or every page of a whole-part writer.
     #[serde(default)]
     pub sections: Vec<DocSection>,
@@ -321,8 +358,14 @@ pub enum PageUpdate {
     Keep { id: String, group: String },
 }
 
-/// Rule B6: a project's new part: each written page, and each kept page from the old part.
-fn merge_part(update: &PartUpdate, old: Option<&BookPart>, now: DateTime<Utc>) -> BookPart {
+/// Rule B6: a project's new part: each written page, and each kept page from the old part. A
+/// kept page that a session-wide survey moved comes from the part that held it before.
+fn merge_part(
+    update: &PartUpdate,
+    old: Option<&BookPart>,
+    before: &[BookPart],
+    now: DateTime<Utc>,
+) -> BookPart {
     let sections = update
         .pages
         .iter()
@@ -330,6 +373,12 @@ fn merge_part(update: &PartUpdate, old: Option<&BookPart>, now: DateTime<Utc>) -
             PageUpdate::Write(s) => Some(s.clone()),
             PageUpdate::Keep { id, group } => old
                 .and_then(|o| o.sections.iter().find(|s| &s.id == id))
+                .or_else(|| {
+                    before
+                        .iter()
+                        .flat_map(|o| o.sections.iter())
+                        .find(|s| &s.id == id)
+                })
                 .map(|s| DocSection {
                     group: group.clone(),
                     ..s.clone()
@@ -420,15 +469,20 @@ pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTim
         parts: vec![],
         glossary: vec![],
     });
+    let before = book.parts.clone();
     for part in &update.parts {
         let old = book
             .parts
             .iter()
             .position(|p| p.project == part.project)
             .map(|i| book.parts.remove(i));
-        book.parts.push(merge_part(part, old.as_ref(), now));
+        book.parts
+            .push(merge_part(part, old.as_ref(), &before, now));
     }
-    book.parts.sort_by(|a, b| a.project.cmp(&b.project));
+    // Rule B11: the project parts by key, then the part across projects.
+    book.parts.sort_by(|a, b| {
+        (a.project == CROSS_PART, &a.project).cmp(&(b.project == CROSS_PART, &b.project))
+    });
     let incoming = update.parts.iter().flat_map(|p| p.glossary.iter());
     for entry in incoming {
         let key = entry.term.trim().to_lowercase();
@@ -437,7 +491,12 @@ pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTim
         book.glossary.push(entry.clone());
     }
     book.glossary.sort_by_key(|g| g.term.to_lowercase());
-    let projects: BTreeSet<String> = book.parts.iter().map(|p| p.project.clone()).collect();
+    let projects: BTreeSet<String> = book
+        .parts
+        .iter()
+        .filter(|p| p.project != CROSS_PART)
+        .map(|p| p.project.clone())
+        .collect();
     book.projects = projects.into_iter().collect();
     book.title = format!("Documentation for {}", book.projects.join(", "));
     if !book.sessions.contains(&update.session) {
@@ -491,15 +550,46 @@ pub fn write(workspace: &Path, book: &Book) -> std::io::Result<()> {
     )?;
     put("index.md".into(), render_index(book))?;
     put("glossary.md".into(), render_glossary(&book.glossary))?;
+    let homes: Vec<(&str, &str)> = book
+        .parts
+        .iter()
+        .flat_map(|p| {
+            p.sections
+                .iter()
+                .map(|s| (p.project.as_str(), s.id.as_str()))
+        })
+        .collect();
     for part in &book.parts {
         for s in &part.sections {
+            let s = DocSection {
+                body: relink(&s.body, &part.project, &homes),
+                ..s.clone()
+            };
             put(
                 Path::new(&part.project).join(format!("{}.md", s.id)),
-                render_section(&part.project, s),
+                render_section(&part.project, &s),
             )?;
         }
     }
     remove_stale(&root, &root, &keep)
+}
+
+/// Rule B11: a link to a page of another part, written `](page.md)`, points into that part's
+/// folder, because each part is its own folder of the book.
+fn relink(body: &str, part: &str, homes: &[(&str, &str)]) -> String {
+    static LINK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\]\(([a-z0-9][a-z0-9-]*)\.md").expect("valid regex"));
+    LINK.replace_all(body, |c: &regex::Captures| {
+        let id = &c[1];
+        if homes.contains(&(part, id)) {
+            return c[0].to_string();
+        }
+        match homes.iter().find(|(_, i)| *i == id) {
+            Some((home, _)) => format!("](../{home}/{id}.md"),
+            None => c[0].to_string(),
+        }
+    })
+    .into_owned()
 }
 
 fn remove_stale(root: &Path, dir: &Path, keep: &BTreeSet<PathBuf>) -> std::io::Result<()> {
@@ -563,7 +653,10 @@ fn code_refs_table(out: &mut String, h: &str, refs: &[CodeRef]) {
         &["Path", "Symbol", "Lines", "What it holds"],
         refs.iter().map(|r| {
             vec![
-                format!("`{}`", r.path),
+                match &r.project {
+                    Some(p) => format!("`{p}/{}`", r.path),
+                    None => format!("`{}`", r.path),
+                },
                 r.symbol
                     .clone()
                     .map(|s| format!("`{s}`"))
@@ -577,8 +670,13 @@ fn code_refs_table(out: &mut String, h: &str, refs: &[CodeRef]) {
 
 /// Rule B1: the title, the summary, the writer's own Markdown, and the code references last.
 pub fn render_section(project: &str, s: &DocSection) -> String {
+    let part = if project == CROSS_PART {
+        "Part: across projects".to_string()
+    } else {
+        format!("Project: `{project}`")
+    };
     let mut out = format!(
-        "# {}\n\nProject: `{project}`\n\n{}\n\n{}\n\n",
+        "# {}\n\n{part}\n\n{}\n\n{}\n\n",
         s.title.trim(),
         s.summary.trim(),
         s.body.trim()
@@ -615,7 +713,7 @@ pub fn render_index(book: &Book) -> String {
     for part in &book.parts {
         out.push_str(&format!(
             "\n## {}\n\n{}\n\n",
-            part.project,
+            part_label(&part.project),
             part.overview.trim()
         ));
         for s in &part.sections {
@@ -935,7 +1033,7 @@ pub fn check_page(where_: &str, sec: &DocSection, issues: &mut Vec<String>) {
     for r in &sec.code_refs {
         if !is_relative(&r.path) {
             issues.push(format!(
-                "Write code reference \"{}\" in {where_} as a path relative to the project root, with `/` separators and no `..`.",
+                "Write code reference \"{}\" in {where_} as a path relative to the root of its project, with `/` separators and no `..`.",
                 r.path
             ));
         }
@@ -1399,6 +1497,134 @@ mod tests {
         assert_eq!(book.parts[0].sections[0].group, "Reference");
         assert_eq!(book.parts[0].inventory.len(), 1);
         assert_eq!(book.sessions, ["s1", "s2"]);
+    }
+
+    /// Rule B11: the part across projects comes last, names no project, renders its own label, and
+    /// its links to another part's pages point into that part's folder.
+    #[test]
+    fn b1_the_part_across_projects() {
+        let ws = tempfile::tempdir().unwrap();
+        let page = |id: &str, body: &str, refs: serde_json::Value| -> DocSection {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "title": id, "summary": "S.", "body": body, "group": "How it works",
+                "code_refs": refs
+            }))
+            .unwrap()
+        };
+        let part = |project: &str, pages: Vec<DocSection>| PartUpdate {
+            project: project.into(),
+            overview: format!("{project} overview."),
+            pages: pages.into_iter().map(PageUpdate::Write).collect(),
+            ..Default::default()
+        };
+        let update = BookUpdate {
+            session: "s1".into(),
+            parts: vec![
+                part(
+                    CROSS_PART,
+                    vec![page(
+                        "flow",
+                        "The client calls [orders](orders.md) and [flow](flow.md).",
+                        serde_json::json!([{"project": "a", "path": "src/api.rs", "note": "The route."}]),
+                    )],
+                ),
+                part(
+                    "a",
+                    vec![page(
+                        "orders",
+                        "Text.",
+                        serde_json::json!([{"path": "src/orders.rs", "note": "The handler."}]),
+                    )],
+                ),
+            ],
+        };
+        let book = apply(ws.path(), "a_b", &update, Utc::now()).unwrap();
+        let keys: Vec<&str> = book.parts.iter().map(|p| p.project.as_str()).collect();
+        assert_eq!(keys, ["a", CROSS_PART]);
+        assert_eq!(book.projects, ["a"]);
+        assert_eq!(book.title, "Documentation for a");
+        let root = book_dir(ws.path(), "a_b");
+        let flow = std::fs::read_to_string(root.join("_cross/flow.md")).unwrap();
+        assert!(flow.contains("Part: across projects"), "{flow}");
+        assert!(flow.contains("[orders](../a/orders.md)"), "{flow}");
+        assert!(
+            flow.contains("[flow](flow.md)"),
+            "a link in the same part stays: {flow}"
+        );
+        assert!(flow.contains("`a/src/api.rs`"), "{flow}");
+        let orders = std::fs::read_to_string(root.join("a/orders.md")).unwrap();
+        assert!(orders.contains("| `src/orders.rs` |"), "{orders}");
+        let index = std::fs::read_to_string(root.join("index.md")).unwrap();
+        assert!(index.contains("## Across projects"), "{index}");
+        let back: Book =
+            serde_json::from_str(&std::fs::read_to_string(root.join("book.json")).unwrap())
+                .unwrap();
+        assert_eq!(back.parts[0].sections[0].code_refs[0].project, None);
+        assert_eq!(
+            back.parts[1].sections[0].code_refs[0].project.as_deref(),
+            Some("a")
+        );
+    }
+
+    /// Rule B6: a session-wide survey can keep a page in another part than the one that held it.
+    #[test]
+    fn b6_a_kept_page_moves_to_the_part_the_survey_gives_it() {
+        let now = Utc::now();
+        let page: DocSection = serde_json::from_value(serde_json::json!({
+            "id": "flow", "title": "Flow", "summary": "S.", "body": "Old flow.", "group": "How it works"
+        }))
+        .unwrap();
+        let first = BookUpdate {
+            session: "s1".into(),
+            parts: vec![PartUpdate {
+                project: "a".into(),
+                overview: "a.".into(),
+                pages: vec![PageUpdate::Write(page)],
+                ..Default::default()
+            }],
+        };
+        let book = merge(None, "a_b", &first, now);
+        let other: DocSection = serde_json::from_value(serde_json::json!({
+            "id": "orders", "title": "Orders", "summary": "S.", "body": "Orders.", "group": "How it works"
+        }))
+        .unwrap();
+        let second = BookUpdate {
+            session: "s2".into(),
+            parts: vec![
+                PartUpdate {
+                    project: "a".into(),
+                    overview: "a.".into(),
+                    pages: vec![PageUpdate::Write(other)],
+                    ..Default::default()
+                },
+                PartUpdate {
+                    project: CROSS_PART.into(),
+                    overview: "Across.".into(),
+                    pages: vec![PageUpdate::Keep {
+                        id: "flow".into(),
+                        group: "Flows".into(),
+                    }],
+                    ..Default::default()
+                },
+            ],
+        };
+        let book = merge(Some(book), "a_b", &second, now);
+        let pages: Vec<(&str, &str, &str)> = book
+            .parts
+            .iter()
+            .flat_map(|p| {
+                p.sections
+                    .iter()
+                    .map(move |s| (p.project.as_str(), s.id.as_str(), s.body.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            pages,
+            [
+                ("a", "orders", "Orders."),
+                (CROSS_PART, "flow", "Old flow.")
+            ]
+        );
     }
 
     #[test]

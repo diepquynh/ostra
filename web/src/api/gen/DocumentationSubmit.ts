@@ -5,6 +5,7 @@ import type { DoneCheck } from "./DoneCheck";
 import type { GlossaryEntry } from "./GlossaryEntry";
 import type { InventoryItem } from "./InventoryItem";
 import type { PageEdit } from "./PageEdit";
+import type { PartOverview } from "./PartOverview";
 import type { PlannedPage } from "./PlannedPage";
 import type { StuckInfo } from "./StuckInfo";
 import type { SubmitStatus } from "./SubmitStatus";
@@ -22,9 +23,14 @@ step: DocsStep,
  */
 summary: string, 
 /**
- * The project's introduction, from the survey.
+ * The project's introduction, from the survey. A session-wide survey writes the introduction
+ * of the whole book here.
  */
 overview: string, 
+/**
+ * Rule B11: a session-wide survey's introduction of each part.
+ */
+part_overviews?: Array<PartOverview>, 
 /**
  * The page of a page step, or every page of a whole-part writer.
  */

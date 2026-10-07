@@ -2,6 +2,7 @@
 //! checks of the drafts against the definition of done.
 
 use super::MAX_DOCS_PAGES;
+use super::parts::tagged;
 use ostra_core::book::{
     DocSection, DocsModule, DocsStep, DocumentationSubmit, InventoryItem, RefItem, check_glossary,
     check_pages, is_page_id,
@@ -185,12 +186,11 @@ pub fn mechanical_issues(
             issues.push("Split the sentences that use a semicolon or an em dash.".into());
         }
         // A revision that copies its rendered draft back repeats what Ostra adds around the body.
-        if page
-            .body
-            .lines()
-            .any(|l| l.trim_start().starts_with("Project: `"))
-            || (!page.code_refs.is_empty()
-                && page.body.lines().any(|l| l.trim() == "## Code references"))
+        if page.body.lines().any(|l| {
+            let l = l.trim_start();
+            l.starts_with("Project: `") || l.starts_with("Part: across projects")
+        }) || (!page.code_refs.is_empty()
+            && page.body.lines().any(|l| l.trim() == "## Code references"))
         {
             issues.push("Remove the `Project:` line and the `## Code references` table from the body: Ostra adds the title, the project, the summary, and the code references around it.".into());
         }
@@ -437,11 +437,15 @@ fn path_prefix(p: &str) -> &str {
 }
 
 /// Rule B10: an inventory item covers a module when one of its sources lies inside the module,
-/// or the module lies inside one of its sources.
+/// or the module lies inside one of its sources. Rule B11: a source that names a project covers
+/// only that project's modules.
 fn covers(item: &InventoryItem, m: &DocsModule) -> bool {
-    m.globs.iter().map(|g| path_prefix(g)).any(|mp| {
-        item.sources.iter().map(|s| path_prefix(s)).any(|sp| {
-            !sp.is_empty()
+    m.globs.iter().map(|g| tagged(g)).any(|(mk, mg)| {
+        let mp = path_prefix(mg);
+        item.sources.iter().map(|s| tagged(s)).any(|(sk, ss)| {
+            let sp = path_prefix(ss);
+            !(mk.is_some() && sk.is_some() && mk != sk)
+                && !sp.is_empty()
                 && (mp.is_empty()
                     || sp == mp
                     || sp.starts_with(&format!("{mp}/"))
@@ -569,6 +573,30 @@ mod tests {
             old,
             check_documentation(&bad),
             "the deprecated path runs the same check"
+        );
+    }
+
+    /// Rule B11: a source tagged with a project covers only that project's modules.
+    #[test]
+    fn b1_a_tagged_source_covers_its_own_projects_modules() {
+        let module = |glob: &str| DocsModule {
+            name: "m".into(),
+            globs: vec![glob.into()],
+        };
+        let item: InventoryItem = serde_json::from_value(serde_json::json!({
+            "id": "x", "name": "x", "sources": ["@a/src/orders.rs"], "owner": "p"
+        }))
+        .unwrap();
+        assert!(covers(&item, &module("@a/src/**")));
+        assert!(!covers(&item, &module("@b/src/**")));
+        assert!(covers(&item, &module("src/**")), "a module without a tag");
+        let plain: InventoryItem = serde_json::from_value(serde_json::json!({
+            "id": "y", "name": "y", "sources": ["src/orders.rs"], "owner": "p"
+        }))
+        .unwrap();
+        assert!(
+            covers(&plain, &module("@b/src/**")),
+            "a source without a tag"
         );
     }
 

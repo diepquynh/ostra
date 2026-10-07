@@ -490,9 +490,18 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         existing_book: Some("/ws/.ostra/docs/api_web/book.json".into()),
         mode: DocsMode::Part,
         reference: Some("/s/ostra-docs-drafts/api/reference.md".into()),
+        book_parts: vec![],
         extra: Extras::default(),
     };
     roundtrip(&md);
+    // Rule B11: a session-wide run names the parts of the book.
+    let wide = DocumentationParams {
+        mode: DocsMode::Survey,
+        book_parts: vec!["api".into(), "web".into(), "_cross".into()],
+        ..md.clone()
+    };
+    roundtrip(&wide);
+    assert!(wide.render().contains("Book parts: api, web, _cross"));
     let survey = DocumentationParams {
         mode: DocsMode::Survey,
         ..md.clone()
@@ -523,9 +532,10 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         assert!(text.contains(line), "{line}: {text}");
     }
     let page = DocumentationParams {
-        mode: DocsMode::Page(DocsPageScope {
+        mode: DocsMode::Page(Box::new(DocsPageScope {
             id: "executors".into(),
             title: "Executors".into(),
+            part: Some("api".into()),
             group: "How it works".into(),
             covers: "Native and harness runs.".into(),
             sources: vec!["crates/ostra-exec-native/".into()],
@@ -538,7 +548,7 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
             drafts: "/s/ostra-docs-drafts/api".into(),
             draft: Some("/s/ostra-docs-drafts/api/executors.md".into()),
             instructions: vec!["Move the slot rules to `limits.md`.".into()],
-        }),
+        })),
         ..md.clone()
     };
     roundtrip(&page);
@@ -546,6 +556,7 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
     for line in [
         "Docs mode: page",
         "Page: Executors (executors)",
+        "Page part: api",
         "Page group: How it works",
         "Page inventory: Turn loop (crates/ostra-exec-native/src/lib.rs)",
         "Other pages: `limits` Spend and limits: Slots and budgets.",
