@@ -463,7 +463,7 @@ Fixtures cannot see such logic, and a restart loses it.
 | Loop state the planner reads (`WorkLoop`, `LoopNext`) | `crates/ostra-default-plugin/src/stages/build/data.rs` |
 | Driver loop, `perform`, slots | `crates/ostra-engine/src/runner/driver.rs` |
 | `validate_answer` | `crates/ostra-engine/src/runner/control.rs` |
-| The pipeline's own steps (`OstraStep`) and their effects | `crates/ostra-default-plugin/src/steps.rs`, `crates/ostra-default-plugin/src/pipeline/effects.rs` |
+| The pipeline's own steps (`OstraStep`) and their effects | `crates/ostra-default-plugin/src/steps.rs`, the dispatcher in `crates/ostra-default-plugin/src/pipeline/effects.rs`, and each stage's `stages/<stage>/hooks.rs` |
 | Spawn parameters from planner inputs | `crates/ostra-default-plugin/src/factory.rs` |
 | The workflow walk (`workflow_flow`, `phase_stages`) | `crates/ostra-engine/src/plan.rs` |
 | `builtin_stage` | `crates/ostra-default-plugin/src/planner/shared.rs` |

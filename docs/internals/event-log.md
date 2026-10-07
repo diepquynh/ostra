@@ -135,7 +135,7 @@ answer from the original run.
 Thus, the runner records the list in the `params` of the execution when it starts the review:
 
 ```rust
-// crates/ostra-default-plugin/src/pipeline/hooks.rs, spawn_params (perform_spawn calls it)
+// crates/ostra-default-plugin/src/stages/build/hooks.rs, spawn_params (perform_spawn calls it)
 if matches!(req.purpose, ExecPurpose::Review { .. }) && let Value::Object(map) = params {
     let ids = profile.map(|p| p.auto_fixable_ids()).unwrap_or_default();
     map.insert(AUTO_FIXABLE_PARAM.into(), serde_json::to_value(ids).unwrap_or_default());

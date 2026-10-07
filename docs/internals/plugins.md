@@ -184,8 +184,14 @@ runs in the process instead. It folds its own state and plans its own steps, the
   [`planner/shared.rs`](../../crates/ostra-default-plugin/src/planner/shared.rs) calls the stage's
   `planner.rs`. A step that only the
   pipeline plans is `Step::Pipeline`, with a key and a summary from the pipeline. The runner hands it back to
-  `Pipeline::perform` ([`pipeline/effects.rs`](../../crates/ostra-default-plugin/src/pipeline/effects.rs)), for
-  example the format command, an autofix, or the docs scan.
+  `Pipeline::perform`. The dispatcher in
+  [`pipeline/effects.rs`](../../crates/ostra-default-plugin/src/pipeline/effects.rs) gives each step to the
+  `hooks.rs` of the stage that owns it, for example an autofix to the build stage or the docs scan to the
+  book stage. The format and stage commands serve the build and closing stages, so they stay in
+  [`pipeline/commands.rs`](../../crates/ostra-default-plugin/src/pipeline/commands.rs).
+- `OstraPipeline` implements the trait in
+  [`pipeline/hooks.rs`](../../crates/ostra-default-plugin/src/pipeline/hooks.rs), and each method forwards to
+  the stage that owns the answer, such as `master_plan` to `stages/plan/hooks.rs`.
 - A spawn's `SpawnInputs` holds the generic fields. The pipeline's own inputs travel in `SpawnInputs::extra`, as
   `OstraInputs` ([`inputs.rs`](../../crates/ostra-default-plugin/src/inputs.rs)), and the spawn factory
   (`AgentsFactory` in [`factory.rs`](../../crates/ostra-default-plugin/src/factory.rs)) reads them.

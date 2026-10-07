@@ -123,10 +123,13 @@ below).
 **10. Files stay small and group by feature.** Keep a source file under about 800 lines, because a person and
 an agent read one feature in one place. Group code by feature, not by layer. In the standard plugin, each stage
 has a folder `stages/<stage>/` with only the files it needs: `data.rs` (its state), `fold.rs`, `runs.rs`,
-`gates.rs`, and `judges.rs` (how events change it), `planner.rs` (its rules), `judge_input.rs`, and `view.rs`
-(its board cards and artifacts). A `match` over every stage stays a short dispatcher in `fold/`, `planner/`,
-or `judge_input/`, and each arm calls the stage. `view/` walks the stages to build the board, the artifacts,
-the summary, and the tree. Code that several stages use stays in those folders and in `data.rs`. Put each trait in its own file.
+`gates.rs`, and `judges.rs` (how events change it), `planner.rs` (its rules), `judge_input.rs`, `view.rs`
+(its board cards and artifacts), and `hooks.rs` (its answers to the engine's `Pipeline` hooks and its step
+effects). A `match` over every stage stays a short dispatcher in `fold/`, `planner/`, `judge_input/`, or
+`pipeline/effects.rs`, and each arm calls the stage. `view/` walks the stages to build the board, the
+artifacts, the summary, and the tree. `pipeline/hooks.rs` holds the one `impl Pipeline`, and each method
+forwards in one line. Code that several stages use stays in those folders and in `data.rs`. Put each trait in
+its own file.
 When a file grows past the limit, split it in a separate `refactor:` commit that only moves code.
 
 ## Recipes

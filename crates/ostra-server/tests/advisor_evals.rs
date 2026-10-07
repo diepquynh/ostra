@@ -173,7 +173,7 @@ impl Vars {
     }
 }
 
-/// The runner's check after a created project's init (`init_problem` in `runner.rs`).
+/// The check after a created project's init (`init_problem` in `stages/init/hooks.rs`).
 fn init_check(repo: &Path) -> Option<String> {
     if !paths::project_inventory(repo).exists() {
         return Some("the initializer did not write .ostra/INVENTORY.md".into());
