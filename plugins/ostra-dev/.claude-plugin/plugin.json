@@ -1,0 +1,7 @@
+{
+  "name": "ostra-dev",
+  "description": "Skills to write Ostra agents, workflows, and plugins: Markdown agents, workflow and transform files, and Rust plugins with ostra-sdk.",
+  "author": { "name": "Diep Quynh" },
+  "homepage": "https://github.com/diepquynh/ostra",
+  "license": "MIT"
+}

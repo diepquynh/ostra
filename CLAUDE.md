@@ -169,6 +169,18 @@ cookie checks from `guard`. `/internal/*` is for harness callbacks and accepts l
 and list it in `docs/README.md`; a section of README or HANDOVER is an entry with `section`. `site/src/docs/model.test.ts` fails when an entry
 finds no content, so a renamed heading breaks the test instead of the page.
 
+**Change the core of Ostra.** After each change to the core, read the Claude Code plugin in `plugins/ostra-dev/`
+and update each skill that the change makes wrong, in the same change. The core is every crate under `crates/`,
+`assets/agents/`, `assets/workflows/`, and `assets/custom-agent.md`. Developers copy the skill examples directly, so
+a wrong skill gives them broken agents, workflows, and plugins. The skills describe these items:
+
+- The agent frontmatter, capabilities, write scopes, result contracts, submit fields, and prompt tokens
+  (`ostra-agent`).
+- The workflow and composite transform formats, the built-in stages, references, conditions, transform
+  functions, and validation rules (`ostra-workflow`).
+- The `ostra-sdk` API, the stdio protocol, checkpoint limits, `[[plugins]]`, and `ostra plugin add`
+  (`ostra-plugin`). The template crate in `ostra-plugin/template/` must compile against the changed SDK.
+
 **Change an API type.** Types in `ostra-core` carry `#[ts(export)]`. Run `cargo test -p ostra-core` to
 regenerate `web/src/api/gen/`, then `cd web && npm run typecheck` and fix only what breaks.
 

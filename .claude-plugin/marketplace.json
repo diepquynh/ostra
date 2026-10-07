@@ -1,0 +1,14 @@
+{
+  "name": "ostra",
+  "description": "Claude Code skills for developers who extend Ostra.",
+  "owner": {
+    "name": "Diep Quynh"
+  },
+  "plugins": [
+    {
+      "name": "ostra-dev",
+      "source": "./plugins/ostra-dev",
+      "description": "Skills to write Ostra agents, workflows, and plugins."
+    }
+  ]
+}

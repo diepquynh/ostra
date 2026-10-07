@@ -253,6 +253,7 @@ scratch setup.
 | `design/` | The design system `web/` and `site/` share: tokens and React components |
 | `site/` | The homepage and docs. Docs pages render this repository's Markdown |
 | `.design-sync/` | Notes and config for syncing UI changes to the Claude Design project |
+| `plugins/ostra-dev/` | Claude Code skills to write Ostra agents, workflows, and plugins. Install them with `/plugin marketplace add diepquynh/ostra` |
 | `tests/conformance/` | Engine fixtures, one per rule ID of HANDOVER section 8.2 |
 
 `cd site && npm run build` writes the homepage and docs to `site/dist`, a folder any static host can serve. It

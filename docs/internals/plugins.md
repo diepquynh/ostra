@@ -679,6 +679,29 @@ access to the package registry and the browser download hosts. Without this acce
 blocker, and you decide whether the session continues without these tests. To run the tests of the example, use
 `cargo test -p ostra-sdk --example web_dev`.
 
+## Skills for Claude Code
+
+The repository is also a Claude Code plugin marketplace, `ostra`. Its plugin `ostra-dev` holds three skills,
+which help a developer write an extension in their own workspace:
+
+| Skill | What it writes |
+| --- | --- |
+| `ostra-agent` | A Markdown agent in `.ostra/agents/` ([Agents](agents.md#custom-agents)) |
+| `ostra-workflow` | A workflow in `.ostra/workflows/`, or a composite transform in `.ostra/transforms/` ([Workflows](workflows.md)) |
+| `ostra-plugin` | A plugin program in Rust with `ostra-sdk`, from a template crate that compiles and passes its tests |
+
+To install the skills, run these commands in Claude Code:
+
+```text
+/plugin marketplace add diepquynh/ostra
+/plugin install ostra-dev@ostra
+```
+
+The skills are in [`plugins/ostra-dev/skills/`](../../plugins/ostra-dev/skills/). Each skill has a `SKILL.md` with
+the steps and a check list. `ostra-workflow` and `ostra-plugin` also have a `reference.md`. A change to a shape
+that a skill describes must change the skill in the same change, because developers copy the skill examples
+directly. These shapes are the agent frontmatter, the workflow format, a transform function, and the SDK API.
+
 ## Where to look in the code
 
 | What | Where |
