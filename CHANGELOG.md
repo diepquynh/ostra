@@ -2,6 +2,12 @@
 
 Every release of Ostra, written from its commit titles by `./release.sh`.
 
+## 0.2.1 (2026-10-07)
+
+### Features
+
+- Make Claude Haiku 5.5 the default native fast model (689016e)
+
 ## 0.2.0 (2026-10-07)
 
 ### Features
