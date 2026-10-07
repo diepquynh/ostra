@@ -3,12 +3,14 @@
 pub mod autofix;
 pub mod data;
 pub mod gates;
+pub mod judge_input;
 pub mod judges;
 pub mod loops;
 pub mod planner;
 
 pub use data::*;
 pub use gates::*;
+pub use judge_input::*;
 pub use judges::*;
 pub use loops::*;
 pub use planner::*;

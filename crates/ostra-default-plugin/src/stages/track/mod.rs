@@ -1,5 +1,9 @@
 //! The Track judge: the light or the full track of an `IMPLEMENT` request.
 
+pub mod judge_input;
+
+pub use judge_input::*;
+
 use crate::fold::*;
 use crate::judge::TrackOut;
 #[allow(unused_imports)]

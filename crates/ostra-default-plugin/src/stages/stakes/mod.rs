@@ -1,5 +1,9 @@
 //! The Stakes judge, which can skip the plan of an `IMPLEMENT` request.
 
+pub mod judge_input;
+
+pub use judge_input::*;
+
 use crate::fold::*;
 use crate::judge::StakesOut;
 #[allow(unused_imports)]

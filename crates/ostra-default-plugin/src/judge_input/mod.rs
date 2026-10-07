@@ -5,7 +5,7 @@ mod facts;
 mod inputs;
 mod yolo;
 
-use completion::*;
-use facts::*;
+pub(crate) use completion::*;
+pub(crate) use facts::*;
 pub use inputs::*;
 pub use yolo::*;
