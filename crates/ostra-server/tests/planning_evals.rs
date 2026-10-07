@@ -332,6 +332,8 @@ struct RunLog {
     calls: Vec<(String, Value)>,
     /// Document results: the output text and whether it was an error.
     documents: Vec<(String, bool)>,
+    /// Every failed tool call and every submit result: the tool, the output, and whether it was an error.
+    results: Vec<(String, String, bool)>,
     turns: usize,
     secs: f64,
 }
@@ -342,6 +344,7 @@ struct Tap {
     calls: Mutex<Vec<(String, Value)>>,
     tools: Mutex<HashMap<String, String>>,
     documents: Mutex<Vec<(String, bool)>>,
+    results: Mutex<Vec<(String, String, bool)>>,
     turns: Mutex<usize>,
 }
 
@@ -361,8 +364,12 @@ impl ExecutionHost for Tap {
                 is_error,
                 ..
             } => {
-                if self.tools.lock().get(call_id).map(String::as_str) == Some("Document") {
+                let tool = self.tools.lock().get(call_id).cloned().unwrap_or_default();
+                if tool == "Document" {
                     self.documents.lock().push((output.clone(), *is_error));
+                }
+                if *is_error || tool.starts_with("submit_") {
+                    self.results.lock().push((tool, output.clone(), *is_error));
                 }
             }
             ExecutionDelta::Turn { .. } => *self.turns.lock() += 1,
@@ -561,6 +568,7 @@ impl Executor for Router {
             calls: Mutex::new(vec![]),
             tools: Mutex::new(HashMap::new()),
             documents: Mutex::new(vec![]),
+            results: Mutex::new(vec![]),
             turns: Mutex::new(0),
         });
         let started = Instant::now();
@@ -620,6 +628,7 @@ impl Executor for Router {
             usage: result.usage,
             calls: tap.calls.lock().clone(),
             documents: tap.documents.lock().clone(),
+            results: tap.results.lock().clone(),
             turns: *tap.turns.lock(),
             secs: started.elapsed().as_secs_f64(),
         });
@@ -1348,6 +1357,7 @@ fn run_json(r: &RunLog) -> Value {
         "cache_write_tokens": r.usage.cache_write_tokens, "output_tokens": r.usage.output_tokens,
         "seconds": r.secs, "tool_calls": r.calls.iter().map(|(t, i)| format!("{t} {}", clip(&i.to_string(), 400))).collect::<Vec<_>>(),
         "document_results": r.documents.iter().map(|(t, e)| json!({"error": e, "text": clip(t, 2000)})).collect::<Vec<_>>(),
+        "tool_results": r.results.iter().map(|(t, o, e)| json!({"tool": t, "error": e, "text": clip(o, 2000)})).collect::<Vec<_>>(),
     })
 }
 

@@ -171,7 +171,8 @@ pub struct PlanPhaseSubmit {
     pub test_rationale: Option<String>,
     #[serde(default)]
     pub depends_on: Vec<u32>,
-    /// Absolute path of the phase file.
+    /// Absolute path of the phase file. Empty means the path Ostra renders for the phase.
+    #[serde(default)]
     pub file: String,
 }
 
@@ -193,6 +194,17 @@ pub struct PlanSubmit {
     /// the first such phase creates each one.
     #[serde(default)]
     pub new_projects: Vec<String>,
+}
+
+impl PlanSubmit {
+    /// The phase's file: the path the agent sent, or the one Ostra renders beside the master plan.
+    pub fn phase_file(&self, p: &PlanPhaseSubmit) -> std::path::PathBuf {
+        if p.file.trim().is_empty() {
+            crate::doc::phase_path(std::path::Path::new(&self.master_plan_path), p.id)
+        } else {
+            std::path::PathBuf::from(&p.file)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]

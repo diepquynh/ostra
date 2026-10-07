@@ -62,7 +62,7 @@ pub fn plan_phase_infos(plan: &ostra_core::submit::PlanSubmit) -> Vec<PhaseInfo>
                     TestPolicy::Required
                 },
                 depends_on: Some(p.depends_on.clone()),
-                file: Some(PathBuf::from(&p.file)),
+                file: Some(plan.phase_file(p)),
                 test_rationale: p.test_rationale.clone(),
             }
         })

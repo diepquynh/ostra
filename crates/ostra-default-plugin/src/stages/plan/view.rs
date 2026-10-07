@@ -75,7 +75,7 @@ pub(crate) fn artifacts(s: &SessionState, a: &mut Artifacts) {
         );
         for p in &plan.phases {
             a.add(
-                PathBuf::from(&p.file),
+                plan.phase_file(p),
                 "phase",
                 format!("Phase {}: {}", p.id, p.title),
                 Some(p.project.clone()),

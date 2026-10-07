@@ -631,7 +631,7 @@ type, because a harness executor must see that harness's tool names.
   `systemMessage`/`hookSpecificOutput` wrapper for a plain schema. Code then reads structured data, so nothing
   scrapes a final message (that removes `UC/hooks/factcheck-record.js` and `agy-message-record.js`).
 - Keep each prompt's writing-style section and every rule ID (K1 to K8, S1 to S8, R-a to R-e, AC-a to AC-d, P0
-  to P13).
+  to P15).
 - `UC/commands/orchestrate/prompt.md`, `hub-listen`, and `yolo` are not runtime prompts in Ostra. The first is
   the engine specification and the source of the judge prompts. The other two become engine features.
 - `UC/skills/meta-author/prompt.md` and `UC/refs/*.md` are embedded assets the initializer and prompt-generation
@@ -820,7 +820,8 @@ management tools `ProjectList` and `ProjectCreate` (section 10.7), the messaging
   - Checks: every write runs the document checks and returns their results. Errors are broken references and
     rules code can decide (uncovered criteria under S1, dangling `R`, `C`, `D`, and `E` ids, `AC{n}.{m}`
     numbering, deliverable and phase cycles, the P10 phase sequence, a missing P12 rationale, P13 binding rules
-    not copied verbatim). Warnings cover judgment calls such as one `SHALL` per statement and the S4 size. A
+    not copied verbatim, a P14 phase that completes no requirement). Warnings cover judgment calls such as one
+    `SHALL` per statement, the S4 size, and a requirement that two phases in one project deliver (P14). A
     submit call is refused while an error remains. Writes and submits also run the code reference checks
     (Hard 4), and a research document's write records its files' hashes (D2a) in an Ostra-owned `snapshot`
     field that the model's schema leaves out.

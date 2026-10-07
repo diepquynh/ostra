@@ -59,7 +59,8 @@ you mean. When a literal phrase is available, use it.
 | **criterion** | One atomic, verifiable demand the request makes, identified `C1`, `C2`, ... **You derive these yourself** in Step 2A, from the request and the research documents. They live in the spec document's `criteria` list, and Ostra derives the spec's Traceability table from them. |
 | **spec file** | `{session-dir}/ostra-spec-{run-stamp}-{topic-slug}.md`: **the single document you write**, with {{tool_document}}. Ostra stores the typed spec as JSON beside that path and renders the markdown at the path itself, which is what the plan and fact-check agents read and what the user approves chapter by chapter. It holds every requirement for the whole request. You never write a second spec and never write an index file. |
 | **run stamp** | The `{YYYYMMDD}-{HHmmss}` string you compute once in **Step 1: {{tool_read}} inputs and compute the run stamp** and use in the spec file name. Never recompute it. Written `{run-stamp}` in every path below. |
-| **deliverable** | One independently shippable unit of the work, identified `D1`, `D2`, ... A deliverable is an **entry in the spec's `deliverables` list**, not a separate file. It groups the requirements that ship together, targets exactly one repo, and carries its own position in the delivery order. |
+| **deliverable** | One independently shippable unit of the work, identified `D1`, `D2`, ... A deliverable is an **entry in the spec's `deliverables` list**, not a separate file. It groups the requirements that ship together, targets exactly one repo, and carries its own position in the delivery order. It delivers at least one complete feature of the request (S2). |
+| **feature** | One behavior of the request that a user or a caller can use. For example, one API endpoint with its input, its validation, its stored data, its response, and its error responses. The plan builds each feature in one phase, so the spec must state each feature completely. |
 | **requirement** | One EARS-notation statement inside the spec, identified `R{n}`, for example `R7`. Requirement numbers run in one flat sequence from `R1` across the whole file, never restarting per deliverable. |
 | **EARS** | Easy Approach to Requirements Syntax: the five sentence templates in **Step 6: Write requirements in EARS notation**. Every requirement uses one of them. |
 | **acceptance criterion** | One Given/When/Then statement proving a requirement holds, identified `AC{n}.{m}`. For example `AC7.2` is the second acceptance criterion of `R7`. The plan agent turns these into success criteria. |
@@ -345,14 +346,18 @@ number of files you write. Rules are numbered so later steps can cite them.
   A criterion assigned to no deliverable is a dropped requirement. A criterion assigned to two makes two parts
   of the plan build the same thing. Neither is allowed.
 - **S2: One deliverable is one shippable unit.** A deliverable's criteria must form a set that can be built,
-  verified, and left in a working state on its own. PASS: "user can cancel an order" (cancelling works end to
-  end when the deliverable is done). FAIL: "add the service method" (nothing is observable until a later
-  deliverable adds the endpoint, so these two belong in one deliverable).
+  verified, and left in a working state on its own. A deliverable holds at least one complete feature, and
+  each feature in it works completely when the deliverable is done. If the request asks for feature X with 4
+  APIs, each of the 4 APIs works when its deliverable is done: its input, validation, stored data, response,
+  and error paths. Never split one feature across two deliverables. PASS: "user can cancel an order"
+  (cancelling works end to end when the deliverable is done). FAIL: "add the service method" (nothing is
+  observable until a later deliverable adds the endpoint, so these two belong in one deliverable).
 - **S3: Cohesion by outcome, not by layer.** Group criteria that serve one user-visible outcome. PASS: D1 is
   registration, D2 is login. FAIL: D1 is all data models, D2 is all services, D3 is all endpoints. That is a
   plan's phase structure, not a deliverable boundary, and it violates S2.
 - **S4: Size ceiling.** A deliverable covers at most **6 criteria**. If a candidate deliverable would cover 7 or
-  more, split it along its weakest internal dependency edge and re-apply S2 to both halves. If splitting would
+  more, split it between two of its features, along the weakest dependency edge, and re-apply S2 to both
+  halves. Never split inside one feature. If splitting would
   break S2 (neither half is independently shippable), keep it whole and note the overrun in the spec's Notes
   section.
 - **S5: One deliverable targets one repo.** A deliverable's Repo is a single repo key. If one outcome needs

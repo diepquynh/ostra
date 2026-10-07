@@ -250,6 +250,11 @@ every research document (oldest first, with superseded documents included), and 
 gets the `Changed since research:` line (Rule D2a). This line lists the cited files whose content changed, or that
 are gone, after the newest document that names them, or `none`. For every file that the line does not list, the prompt tells the agent to take current behavior from the research documents. The agent does not read the code again.
 
+The spec groups its requirements into deliverables. Each deliverable holds at least one complete feature of the
+request, and the spec never splits one feature across two deliverables (Rules S2, S4). A feature is one
+behavior that a user or a caller can use. For example, if the request asks for 4 API endpoints, each endpoint
+works completely when its deliverable is done: input, validation, stored data, response, and error paths.
+
 The agent writes the spec file and submits its summary, counts, external evidence rows, and open questions.
 
 The spec is a typed document. The Document tool checks its structure and the code that it cites. Every criterion
@@ -376,6 +381,21 @@ When the plan runs again after a fact-check FAIL, it also receives its earlier m
 name, such as `step 2.3` or `...-phase-2.md`. The agent reads and changes only those phases. Its `update` sends
 only the steps and fields that change. At every level, an item that an update names takes the fields that the
 update sends and keeps its other fields. So a revision never sends a whole phase again to change one step.
+
+Each phase leaves at least one feature working, and no phase is one layer (Rule P14). A deliverable gets one
+phase by default. The plan splits a deliverable only between its features. So the phase for an endpoint holds
+the migration, the entity, the service, and the route that the endpoint needs. The plan does not give the
+entities, the migrations, and the controllers a phase each. A layer phase builds code that does nothing yet.
+Its implementer, its reviewer, and the next phase then read the same files again, and its build proves
+nothing about the request. The plan also does not copy the spec into its steps (Rule P15). A step names the
+files, the symbols, and the existing patterns, and the requirement text appears once, in the phase's
+requirements list.
+
+The Document tool checks Rule P14 on each plan write. A phase completes a requirement when no other phase in the
+same project delivers it. A phase that completes no requirement is an error, and a requirement that two phases
+in one project deliver is a warning. A phase in another project does not count, because Rule WD3 can split one
+feature into one phase per project. The check is `working_features` in
+[`check.rs`](../../crates/ostra-core/src/doc/check.rs).
 
 The plan is a master plan plus one file per phase. Each phase has an ID, a project, a deliverable, a complexity,
 a test policy (`Required`, or `Skip` with a rationale), and the phases that it depends on. Each step names the

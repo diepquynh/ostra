@@ -135,6 +135,32 @@ fn broken_references_are_errors() {
 }
 
 #[test]
+fn a_phase_is_a_working_feature_not_a_layer() {
+    // Phases 1 and 2 split R1 to R3 into a service layer and a route layer.
+    let mut v = value(PLAN);
+    let mut route = v["phases"][0].clone();
+    route["id"] = json!(2);
+    route["name"] = json!("Cancel route");
+    route["depends_on"] = json!([1]);
+    route["steps"] = json!([v["phases"][0]["steps"][1].clone()]);
+    route["steps"][0]["id"] = json!("2.1");
+    v["phases"][0]["steps"] = json!([v["phases"][0]["steps"][0].clone()]);
+    v["phases"][1]["id"] = json!(3);
+    v["phases"][1]["depends_on"] = json!([2]);
+    v["phases"][1]["steps"][0]["id"] = json!("3.1");
+    v["phases"].as_array_mut().unwrap().insert(1, route);
+    let issues = check(&DocKind::Plan.parse(&v).unwrap());
+    let lines: Vec<String> = issues.iter().map(|i| i.line()).collect();
+    let all = lines.join("\n");
+    assert!(all.contains("Merge phase 2 with phase 1"), "{all}");
+    assert!(all.contains("Deliver `R1` in one phase: phases 1, 2"), "{all}");
+    // Phase 1 completes R3 alone, so only the route phase is an error.
+    assert!(!all.contains("Merge phase 1"), "{all}");
+    // The web phase consumes the backend contract in another repo and completes R4.
+    assert!(!all.contains("Merge phase 3"), "{all}");
+}
+
+#[test]
 fn schema_errors_name_the_field() {
     let mut v = value(SPEC);
     v["requirements"][0]["acceptance"][0]
@@ -252,6 +278,11 @@ fn plan_submit_must_match_the_phases() {
     let phase = |id: u32, deliverable: &str, project: &str, complexity: &str, deps: Vec<u32>| json!({"id": id, "deliverable": deliverable, "project": project, "title": "t", "complexity": complexity, "test_policy": "Required", "depends_on": deps, "file": phase_path(&md, id)});
     let mut submit = json!({"spec_path": "/s", "master_plan_path": md, "phases": [phase(1, "D1", "backend", "Medium", vec![]), phase(2, "D2", "web", "Low", vec![1])], "stakes": "Medium", "summary": "s", "step_count": 3, "requirement_coverage": "4 of 4"});
     check_submit(crate::contract::Contract::Plan, &submit).unwrap();
+    // A phase without `file` takes the path Ostra rendered.
+    submit["phases"][0].as_object_mut().unwrap().remove("file");
+    check_submit(crate::contract::Contract::Plan, &submit).unwrap();
+    let parsed: crate::submit::PlanSubmit = serde_json::from_value(submit.clone()).unwrap();
+    assert_eq!(parsed.phase_file(&parsed.phases[0]), phase_path(&md, 1));
     submit["phases"][1]["complexity"] = json!("High");
     let err = check_submit(crate::contract::Contract::Plan, &submit).unwrap_err();
     assert!(

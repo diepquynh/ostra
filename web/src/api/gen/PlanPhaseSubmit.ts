@@ -18,6 +18,6 @@ test_policy: string,
  */
 test_rationale: string | null, depends_on: Array<number>, 
 /**
- * Absolute path of the phase file.
+ * Absolute path of the phase file. Empty means the path Ostra renders for the phase.
  */
 file: string, };
