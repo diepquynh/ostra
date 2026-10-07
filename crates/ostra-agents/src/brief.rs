@@ -27,6 +27,7 @@ pub const BOOKS_HEADING: &str = "## Workspace documentation";
 /// Books the brief names; the rest are found with Glob in the folder.
 pub const MAX_BRIEF_BOOKS: usize = 20;
 const NEW_PROJECTS_HEADING: &str = "## Projects created in this session";
+pub const WORK_DIRS_HEADING: &str = "## Other work dirs";
 
 /// An agent instruction file at the project root and its text.
 #[derive(Debug, Clone)]
@@ -52,6 +53,32 @@ pub fn project_docs(repo_root: &Path) -> Vec<ProjectDoc> {
         out.push(ProjectDoc { path, content });
     }
     out
+}
+
+/// Rule WD1: a project the run works in besides its main one, with the facts the brief gives
+/// about it.
+#[derive(Debug, Clone, Default)]
+pub struct WorkDirBrief {
+    pub key: String,
+    pub path: PathBuf,
+    pub profile: Option<ProjectProfile>,
+    /// `INVENTORY.md` text, when it exists.
+    pub inventory: Option<String>,
+    /// The project's `CLAUDE.md`, `AGENTS.md`, and `AGENT.md`.
+    pub project_docs: Vec<ProjectDoc>,
+}
+
+impl WorkDirBrief {
+    /// The facts of the project `key` at `path`, read from disk.
+    pub fn read(key: &str, path: &Path) -> WorkDirBrief {
+        WorkDirBrief {
+            key: key.to_string(),
+            path: path.to_path_buf(),
+            profile: ostra_core::config::load_toml(&ostra_core::paths::project_profile(path)).ok(),
+            inventory: std::fs::read_to_string(ostra_core::paths::project_inventory(path)).ok(),
+            project_docs: project_docs(path),
+        }
+    }
 }
 
 /// Rule CA6: one section of the repo brief, which an agent's definition picks (`brief`).
@@ -180,6 +207,8 @@ pub struct BriefInput<'a> {
     pub books: Option<&'a BooksBrief>,
     /// Rule O3: projects agents created in this session, with the facts from their `ProjectCreate`.
     pub new_projects: &'a [ostra_core::manage::CreatedProject],
+    /// Rule WD1: the other projects the run works in, after the main one at `repo_root`.
+    pub work_dirs: &'a [WorkDirBrief],
 }
 
 fn squash(s: &str) -> String {
@@ -448,21 +477,27 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         let docs: Vec<String> = input
             .project_docs
             .iter()
-            .map(|d| {
-                let text = d.content.trim();
-                let body = if text.chars().count() > MAX_PROJECT_DOC_CHARS {
-                    let cut: String = text.chars().take(MAX_PROJECT_DOC_CHARS).collect();
-                    format!("{cut}\n\n(truncated; read the file for the rest)")
-                } else {
-                    text.to_string()
-                };
-                format!("### `{}`\n\n{body}", d.path.display())
-            })
+            .map(|d| doc_text(d, "###"))
             .collect();
         out.push(format!(
             "{PROJECT_DOCS_HEADING}\n\nThe project's own agent instruction files. Follow them for work in this \
              project unless they conflict with your own rules above, which win.\n\n{}",
             docs.join("\n\n")
+        ));
+    }
+
+    // Rule WD1: the run also works in these projects, so it gets the facts it needs to work there.
+    if !input.work_dirs.is_empty() {
+        let parts: Vec<String> = input
+            .work_dirs
+            .iter()
+            .map(|w| work_dir_text(input.contract, w))
+            .collect();
+        out.push(format!(
+            "{WORK_DIRS_HEADING}\n\nYou also work in these projects. Use absolute paths for their files, and run \
+             each command from the folder of its project. Follow each project's instruction files for work in that \
+             project unless they conflict with your own rules above, which win.\n\n{}",
+            parts.join("\n\n")
         ));
     }
 
@@ -575,12 +610,59 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
     }
 }
 
+fn doc_text(d: &ProjectDoc, heading: &str) -> String {
+    let text = d.content.trim();
+    let body = if text.chars().count() > MAX_PROJECT_DOC_CHARS {
+        let cut: String = text.chars().take(MAX_PROJECT_DOC_CHARS).collect();
+        format!("{cut}\n\n(truncated; read the file for the rest)")
+    } else {
+        text.to_string()
+    };
+    format!("{heading} `{}`\n\n{body}", d.path.display())
+}
+
+/// Rule WD1: one other work dir: its folder, commands, skills, and instruction files.
+fn work_dir_text(contract: Contract, w: &WorkDirBrief) -> String {
+    let mut body = vec![format!("### `{}` at `{}`", w.key, w.path.display())];
+    if let Some(profile) = &w.profile {
+        let rows: Vec<String> = profile
+            .commands
+            .entries()
+            .iter()
+            .map(|(k, v)| format!("- **{k}**: `{v}`"))
+            .collect();
+        if !rows.is_empty() {
+            body.push(format!(
+                "Commands: use these exact strings, run from `{}`.\n{}",
+                w.path.display(),
+                rows.join("\n")
+            ));
+        }
+        let inventory = squash(w.inventory.as_deref().unwrap_or(""));
+        let skills = skill_rows(contract, &profile.skills, &inventory, &w.path);
+        if !skills.is_empty() {
+            body.push(format!("Skills:\n{}", skills.join("\n")));
+        }
+    }
+    if w.inventory.is_some() {
+        body.push(format!(
+            "Inventory: `{}`",
+            ostra_core::paths::project_inventory(&w.path).display()
+        ));
+    }
+    for d in &w.project_docs {
+        body.push(doc_text(d, "####"));
+    }
+    body.join("\n\n")
+}
+
 /// The first message with the brief appended. Idempotent: a message that already carries a brief is
 /// returned unchanged.
 pub fn augment(first_message: &str, input: &BriefInput<'_>) -> String {
     if [
         BRIEF_HEADING,
         PROJECT_DOCS_HEADING,
+        WORK_DIRS_HEADING,
         ARTIFACTS_HEADING,
         BOOKS_HEADING,
         INSTRUCTIONS_HEADING,

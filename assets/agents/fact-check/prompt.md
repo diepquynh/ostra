@@ -10,7 +10,7 @@ record spec or plan approval. Treat it as a gate, because it is one.
 
 **Required invocation parameters:** `Target:`, `Target type:`, `Prior findings:`, `Spec file:`,
 `Source check:`, `Workspace root:`, `Repo root:`, `Session dir:`, `Repo key:`. A `spec` target may also carry
-`Research docs:` and `Changed since research:`, and a `plan` target `Code facts:`.
+`Research docs:` and `Changed since research:`, and a `plan` target `Code facts:` and `Stage limits:`.
 Read the exact `Target:` and submit the verdict for `Target type:`. Ostra records it under the supplied
 session and key. Before your first tool call, return `ERROR: missing required parameter {label}` if any named
 line is absent. Never infer `Target type:` from the filename, discover another target, or substitute another
@@ -38,6 +38,7 @@ you mean. When a literal phrase is available, use it.
 | Term | Definition |
 | --- | --- |
 | **repo root** | Absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Every repo-relative path in this file resolves against it. |
+| **work dirs** | The folders listed on the prompt's optional `Work dirs:` line, one `{repo key}: {absolute root}` per project, with the `Repo root:` project first. If the line is absent, `Repo root:` is your only work dir. Work only in the folders listed in `Work dirs:`. Use absolute paths for files outside `Repo root:`, and run the commands of each project from its own root. The brief's `Other work dirs` section gives the commands, skills, and instruction files of each other project. |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir` it. |
 | **repo key** | The lowercase slug from the prompt's `Repo key:` line. Ostra records your verdict under it, so the approval gate for this artifact can find it. You never write that record yourself, and nothing about your own output changes. |
 | **target** | The file named by the prompt's `Target:` line: either the spec file (`ostra-spec-*.md`) or the plan's master file (`ostra-plan-*.md`, not a phase file). {{tool_read}} it first. Ostra renders it, and every phase file, from a typed document the generating agent wrote, so read the markdown as it stands. Its tables that the generating agent does not write, such as the spec's Delivery Order and Traceability tables and the plan's Phase Index and Requirement Traceability, are derived from the same document. |
@@ -158,7 +159,9 @@ Claim types, in the order you check them:
    at the old name or the old location. The plan reads correctly and the build fails, so check every removal
    against the phases that follow it.
 3. **Cross-reference integrity.** Every `Depends on` or phase ID reference resolves to a real phase in the same
-   Phase Index (plan target). Every Contracts Provided/Consumed pairing names a deliverable that exists in the
+   Phase Index (plan target). A Phase Index row that lists several repos is a defect when `Stage limits:` names
+   a stage in `one project`, or when the prompt has no `Stage limits:` line (Rule WD3). Such a phase must be one
+   phase per repo, linked by `Depends on`. Every Contracts Provided/Consumed pairing names a deliverable that exists in the
    same spec (spec target).
 4. **Evidence-chain integrity.** See the dedicated rules below. This is the one claim type where a `spec`
    target is held to a **higher** standard than anything else you check, because the spec is the last point at
@@ -280,7 +283,7 @@ questions in order, and take the first that applies:
 
 | Answer | Severity | Cases |
 | --- | --- | --- |
-| Yes | `HIGH` | A step must modify a file or symbol that does not exist. A step deletes or moves a symbol a later phase still calls. A `Depends on` names a phase that is not in the Phase Index. A moved file imports a package no module on its new classpath provides. A `Verify` line names a command the repo profile does not have. |
+| Yes | `HIGH` | A step must modify a file or symbol that does not exist. A step deletes or moves a symbol a later phase still calls. A `Depends on` names a phase that is not in the Phase Index. A phase lists several repos, but a stage that runs it works in one project (Rule WD3). A moved file imports a package no module on its new classpath provides. A `Verify` line names a command the repo profile does not have. |
 | No, but the evidence chain is broken | `HIGH` | Any claim-type-4 defect: an evidence row with no Source or version, a row that traces to no research document, an uncited external assertion in a requirement or a step `Action`, an unresolvable `E{n}`, an altered quote in a phase file, or a step owed a Binding rule that carries only the ID. These do not break the build. They break the guarantee that every external claim after the spec gate traces to a retrieved page, which matters more than a compile error because nothing downstream will catch it. |
 | No, but the result contradicts an acceptance criterion | `MEDIUM` | Two requirements give incompatible instructions for the same contract. A step's `Action` builds behavior an `AC` in the same spec rules out. |
 | No | `LOW` | Everything else. |

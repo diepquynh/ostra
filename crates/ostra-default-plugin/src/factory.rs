@@ -148,6 +148,18 @@ impl SpawnFactory for AgentsFactory {
             repo_root: env.repo_root.to_path_buf(),
             session_dir: req.session_dir.clone(),
             repo_key: req.project.clone(),
+            // Rule WD1: a run in several projects names each folder, the main one first.
+            work_dirs: if env.work_dirs.is_empty() {
+                vec![]
+            } else {
+                std::iter::once((req.project.clone(), env.repo_root.to_path_buf()))
+                    .chain(
+                        env.work_dirs
+                            .iter()
+                            .map(|w| (w.key.clone(), w.path.clone())),
+                    )
+                    .collect()
+            },
         };
         let (changed_since_research, facts_file) = code_facts(i, s);
         // Rule CA5: the spawn is the contract's, whichever agent fills it.
@@ -209,6 +221,11 @@ impl SpawnFactory for AgentsFactory {
                 research_docs: i.research_docs.clone(),
                 changed_since_research,
                 code_facts: facts_file,
+                stage_limits: if x.target_type == Some(FactTarget::Plan) && !x.docs_check {
+                    stage_limits(i)
+                } else {
+                    vec![]
+                },
             }),
             Contract::Plan => Box::new(PlanParams {
                 common,
@@ -218,6 +235,7 @@ impl SpawnFactory for AgentsFactory {
                 findings: x.findings.clone(),
                 phases_to_revise: x.revise_phases.clone(),
                 master_plan: i.target.clone(),
+                stage_limits: stage_limits(i),
             }),
             // Rule O8: an implementer the user sent to a stuck run fixes only what stopped it.
             Contract::Implementation if matches!(req.purpose, ExecPurpose::Unblock { .. }) => {
@@ -466,6 +484,7 @@ impl SpawnFactory for AgentsFactory {
                 artifacts: artifacts.as_ref(),
                 books: books.as_ref(),
                 new_projects: &s.created_projects,
+                work_dirs: env.work_dirs,
             },
         );
         let system_prompt = env
@@ -491,6 +510,14 @@ impl SpawnFactory for AgentsFactory {
             }),
         })
     }
+}
+
+/// Rule WD3: the later stages' limits the planner put in `SpawnInputs::extra`, one line each.
+fn stage_limits(i: &ostra_engine::plan::SpawnInputs) -> Vec<String> {
+    i.extra
+        .get("stage_limits")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default()
 }
 
 /// Rule W3: an instruction that tags files or artifacts carries their absolute paths, so every

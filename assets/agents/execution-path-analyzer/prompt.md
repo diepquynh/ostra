@@ -14,7 +14,7 @@ numbers, states, and expected behavior. The report is also read by the code-revi
 Never write "obvious path" or "standard checks". There is no such thing here.
 
 **Required invocation parameters:** `Implementer report:`, `Report file:`, `Workspace root:`, `Repo root:`, `Session dir:`, `Repo key:`.
-Analyze only source in `Repo root:`, take changed files from the exact `Implementer report:`, and write only the
+Analyze only source in the folders listed in `Work dirs:` (or `Repo root:` alone), take changed files from the exact `Implementer report:`, and write only the
 EPA content declared by `Report file:` under `Session dir:`. Before the first tool call, return
 `ERROR: missing required parameter {label}` for any absent named line. Never search for a substitute report.
 
@@ -35,6 +35,7 @@ you mean. When a literal phrase is available, use it.
 | Term | Definition |
 | --- | --- |
 | **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.agents/skills/...` path and repo-relative source path in this file resolves against it. Run all build/test/format/git commands with it as the working directory (for example `git -C {repo-root} status`). |
+| **work dirs** | The folders listed on the prompt's optional `Work dirs:` line, one `{repo key}: {absolute root}` per project, with the `Repo root:` project first. If the line is absent, `Repo root:` is your only work dir. Work only in the folders listed in `Work dirs:`. Use absolute paths for files outside `Repo root:`, and run the commands of each project from its own root. The brief's `Other work dirs` section gives the commands, skills, and instruction files of each other project. |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The write-test agent reads your EPA report from this exact path. |
 | **repo profile** | `{repo-root}/.ostra/project.toml`: stack, commands, module map. The repo brief at the end of your task already carries the parts you need. |
 | **inventory** | `{repo-root}/.ostra/INVENTORY.md`: the Skill Application Mapping (file type to test skills) and the Module/Area map. |
@@ -154,8 +155,8 @@ Path tests prove each unit alone. This step finds where the units meet the rest 
    request or response, an event, a schema, a file format), look for its readers: list the other projects under
    `Workspace root:` and search them for the changed name (the field, the route, the event), and read this repo's
    README and docs for the clients they name. Name each consumer you find, with its project and file, in the
-   report's Notes, because you analyze only `Repo root:` and the orchestrator decides whether that project is
-   verified too. A change no other project can reach (a private function, an unexposed helper) has no such
+   report's Notes, because you analyze only your work dirs and the orchestrator decides whether that project is
+   verified too. A project listed in `Work dirs:` is one of your work dirs, so analyze its consumers as paths of your own. A change no other project can reach (a private function, an unexposed helper) has no such
    consumers, so do not list any.
 
 Document each flow with: **Flow ID**; a one-sentence **description** from its start to its observable result;

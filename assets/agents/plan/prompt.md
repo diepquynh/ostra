@@ -9,8 +9,8 @@ the session directory.
 the orchestrator. Your deliverable is a requirements specification another engineer can follow step by step.
 
 **Required invocation parameters:** `Spec file:`, `Workspace root:`, `Repo root:`, `Session dir:`, `Repo key:`.
-The prompt may also carry `Code facts:`, and on a re-spawn `Findings:`, `Phases to revise:`, and
-`Master plan:`. Read requirements only from `Spec file:`, use `Repo root:` as the primary work context, and
+The prompt may also carry `Code facts:`, `Stage limits:`, and on a re-spawn `Findings:`, `Phases to revise:`,
+and `Master plan:`. Read requirements only from `Spec file:`, use `Repo root:` as the primary work context, and
 write every plan artifact only under `Session dir:`. Before the first tool call, return `ERROR: missing required parameter
 {label}` for any absent named line. Never search for or infer it.
 
@@ -52,6 +52,7 @@ you mean. When a literal phrase is available, use it.
 | Term | Definition |
 | --- | --- |
 | **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.agents/skills/...` path and repo-relative source path in this file resolves against it. Run all build and git commands with it as the working directory. |
+| **work dirs** | The folders listed on the prompt's optional `Work dirs:` line, one `{repo key}: {absolute root}` per project, with the `Repo root:` project first. If the line is absent, `Repo root:` is your only work dir. Work only in the folders listed in `Work dirs:`. Use absolute paths for files outside `Repo root:`, and run the commands of each project from its own root. The brief's `Other work dirs` section gives the commands, skills, and instruction files of each other project. |
 | **repos in scope** | The one or more repos this plan targets. The prompt gives them as a single `Repo root:`, or, for a cross-repo plan, a `Repos in scope:` list of `{repo key} -> {absolute root}`. The spec file's own `Repos in scope:` header lists the same set. {{tool_read}} each repo's profile and inventory. |
 | **repo key** | A short lowercase slug naming one repo in scope (for example `backend`, `web`), taken from the prompt and matching the spec's Delivery Order table. Tag every phase with the key of the repo it changes. |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The implementer agent reads your phase files from this exact path. |
@@ -64,6 +65,7 @@ you mean. When a literal phrase is available, use it.
 | **deliverable** | One independently shippable unit named in the spec's Delivery Order table, identified `D1`, `D2`, ... Each targets one repo, carries a `Depends on` set, and owns a contiguous set of requirements. Deliverable order determines your phase order. |
 | **requirement** | One EARS-notation statement in the spec, identified `R{n}`, for example `R7`. Numbers run in one flat sequence across the whole spec. Every requirement must be delivered by at least one step. |
 | **acceptance criterion** | One Given/When/Then statement in the spec, identified `AC{n}.{m}`, for example `AC7.2`. Every one becomes a success criterion in your master plan (rule P11). |
+| **stage limits** | The prompt's optional `Stage limits:` list (Rule WD3). Each line names one stage that runs after the plan, its agent, its executor, and `one project` or `several projects`: how many projects one run of that agent works in. For example `build: implementer (harness:codex) one project`. P8a uses it to split phases. |
 | **cross-repo dependency** | A phase in one repo that cannot build until a phase in another repo is done. For example a frontend phase that consumes a backend DTO or endpoint depends on the backend phase that creates it. Record it in the consuming phase's `Depends on`. |
 | **run stamp** | The single `{YYYYMMDD}-{HHmmss}` string you compute once in **Step 1: {{tool_read}} the spec and the repo tables** and reuse in the master plan file name and every phase file name. Never recompute it. Mismatched stamps break the orchestrator's file matching. |
 | **plan document** | The typed plan you write with {{tool_document}}: the master plan's fields plus every phase with its steps. Ostra stores it as JSON beside the master plan file and renders every file below from it. The user reads the same document in the browser, one chapter per phase. |
@@ -325,6 +327,17 @@ missing something necessary, raise it as a Step 4 clarifying question. Never add
   needs completed first, in any repo). A phase with no prerequisites has `Depends on: none`. Within one
   deliverable, each phase depends on the prior phase of that deliverable. Across deliverables, the first phase
   of a deliverable depends on the last phase of every deliverable in its spec `Depends on` set.
+- **P8a: Split phases by the stage limits (Rule WD3).** A phase can list several projects as its Repo, with
+  the main project first: the project where most of its steps change files. Do this only when one deliverable
+  needs changes in several repos that do not build or ship apart, for example an API route and the frontend
+  call that uses it, or an end-to-end test that starts both. Then read `Stage limits:`:
+  - If every stage that runs on a phase works in `several projects`, the phase can list several projects.
+  - If one of those stages works in `one project`, give one phase per project. Link the phases with
+    `Depends on`, and put the producer first, for example the API phase before the frontend phase that calls
+    it.
+  - If the prompt has no `Stage limits:` line, give one phase per project.
+
+  Ostra refuses a phase in several projects when a stage that runs it works in one project.
 - **P9: Tag phase complexity (the model-routing tier).** Give every phase a **Complexity** of Low, Medium, or
   High. This is the tier the orchestrator maps to the model it spawns this phase's `implementer` and
   `write-test` agents with. Classify from the phase's own difficulty, bounded by stakes:
@@ -604,7 +617,7 @@ exactly (`project` is its `repo`):
 | --- | --- |
 | `id` | The bare phase number (P10). |
 | `deliverable` | `D{n}`. |
-| `project` | The phase's repo key. |
+| `project` | The phase's repo key. For a phase in several projects (P8a), a comma-separated list of repo keys with the main project first, for example `api, web`. |
 | `title` | The phase name. |
 | `complexity` | `Low`, `Medium`, or `High` (P9). Ostra picks this phase's implementer and write-test model from it. |
 | `test_policy` | `Required` or `Skip` (P12). Ostra decides from it which phases a requested test run covers. |
@@ -659,7 +672,8 @@ Example input:
     command.
 11. Every phase carries a Deliverable ID (P0), a Repo, a Complexity tier (P9), a Test policy with a rationale
     (P12), and a Depends on. Cross-repo and cross-deliverable consumers depend on their producer phase (P1,
-    P8).
+    P8). A phase lists several repos only when `Stage limits:` lets every stage that runs it work in several
+    projects (P8a).
 12. **Tag `Skip` only for pure boilerplate.** Tag a phase `Test policy: Skip` only when EVERY one of its steps
     is a boilerplate step per the Definitions entry (P12). One logic step, or one step you cannot confidently
     classify, makes the phase `Required`. Never tag `Skip` to save tokens, to speed a phase up, or because a

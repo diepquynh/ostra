@@ -35,6 +35,10 @@ pub struct Common {
     pub repo_root: PathBuf,
     pub session_dir: PathBuf,
     pub repo_key: String,
+    /// Rule WD1: every project the run works in, key and folder, the main one first. Empty, or
+    /// one entry, for a run in one project, which renders no `Work dirs:` line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub work_dirs: Vec<(String, PathBuf)>,
 }
 
 /// Hard rule 13: phase-bound agents declare either their phase file or why there is none.
@@ -183,6 +187,15 @@ impl Block {
         self.path("Repo root", &c.repo_root);
         self.path("Session dir", &c.session_dir);
         self.line("Repo key", &c.repo_key);
+        // Rule WD1: a run in several projects lists each folder it works in.
+        if c.work_dirs.len() > 1 {
+            let v: Vec<String> = c
+                .work_dirs
+                .iter()
+                .map(|(k, p)| format!("{k}: {}", p.display()))
+                .collect();
+            self.list("Work dirs", &v);
+        }
     }
 
     fn work(&mut self, w: &WorkSource) {
@@ -278,6 +291,9 @@ pub struct FactCheckParams {
     pub changed_since_research: Option<Vec<String>>,
     /// Rule D4a, on a plan target: the engine-written code facts file.
     pub code_facts: Option<PathBuf>,
+    /// Rule WD3, on a plan target: one line per later stage, its agent, executor, and how many
+    /// projects one of its runs works in.
+    pub stage_limits: Vec<String>,
 }
 
 /// Rule D4, Hard rule 16: the plan agent gets the spec and no research document. Its other inputs
@@ -292,6 +308,9 @@ pub struct PlanParams {
     pub findings: Option<String>,
     pub phases_to_revise: Vec<u32>,
     pub master_plan: Option<PathBuf>,
+    /// Rule WD3: one line per later stage, its agent, executor, and how many projects one of its
+    /// runs works in, so the plan splits phases by them.
+    pub stage_limits: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -563,6 +582,7 @@ impl SpawnParams for FactCheckParams {
         b.paths("Research docs", &self.research_docs);
         b.changed(self.changed_since_research.as_deref());
         b.opt_path("Code facts", self.code_facts.as_deref());
+        b.list("Stage limits", &self.stage_limits);
         b.finish()
     }
     fn to_json(&self) -> Value {
@@ -589,6 +609,7 @@ impl SpawnParams for PlanParams {
             b.line("Phases to revise", &ids.join(", "));
         }
         b.opt_path("Master plan", self.master_plan.as_deref());
+        b.list("Stage limits", &self.stage_limits);
         b.finish()
     }
     fn to_json(&self) -> Value {
@@ -1023,6 +1044,7 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("repo_root", &["Repo root"], Kind::AbsoluteDir),
     ("session_dir", &["Session dir"], Kind::AbsolutePath),
     ("repo_key", &["Repo key"], Kind::RepoKey),
+    ("work_dirs", &["Work dirs"], Kind::Text),
     ("phase", &["Phase"], Kind::Phase),
     ("task", &["Task"], Kind::Text),
     ("stage", &["Stage"], Kind::Text),
@@ -1098,6 +1120,7 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("research_docs", &["Research docs"], Kind::Text),
     ("projects_in_scope", &["Repos in scope"], Kind::Text),
     ("master_plan", &["Master plan"], Kind::Path),
+    ("stage_limits", &["Stage limits"], Kind::Text),
     ("findings", &["Findings"], Kind::Text),
     ("failed_step", &["Failed step"], Kind::Text),
     ("problem", &["Problem"], Kind::Text),
