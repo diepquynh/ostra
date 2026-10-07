@@ -2,6 +2,78 @@
 
 Every release of Ostra, written from its commit titles by `./release.sh`.
 
+## 0.2.0 (2026-10-07)
+
+### Features
+
+- Add plugin SDK, programmatic workflows, and builders (687ea83)
+- cli: Add ostra plugin add to register a plugin program (3aa71ee)
+- sdk: Add web-dev example plugin with e2e testing (9aed217)
+- **Breaking:** Let documentation writers choose topics and write free pages (ee0ff45)
+- Run the docs stage as a survey, page writers, and synthesis rounds (b0b1416)
+- **Breaking:** Remove the architecture agent and check the shape of docs pages (ca15cbd)
+- sdk: Add typed result contracts for plugins (f9a8d48)
+- Run the docs as their own book stage after closing (ae381fb)
+- core: Name the work dirs of each execution (2ab303d)
+- policy: Confine each run to its named work dirs (8668256)
+- agents: Tell each agent the folders it works in (34315cd)
+- exec: Let native tools work in each work dir of a run (f70fe73)
+- engine: Name each run's work dirs and allow multi-project phases (e375c9e)
+- Let a phase create only its main project (fef0dab)
+- docs: Document every project of a session in one docs pipeline (ecaac79)
+- plan: Make each plan phase a working feature (a18486d)
+
+### Fixes
+
+- engine: Allow the eight arguments of Pipeline::helper_task (f1092d1)
+- engine: Keep the budget gate in the engine for every pipeline (301dffa)
+- default-plugin: Box the step that the pipeline's effects give back (6f6f605)
+- core: Show no project tag on session-wide docs runs (d83e1f5)
+- docs: Leave the part across projects out of Book parts (a1f8994)
+
+### Refactors
+
+- Move the standard plugin into ostra-default-plugin (7a493e5)
+- Run built-in stages as the standard plugin's pipeline (26f0eac)
+- Move the docs-stage generator out of the core book (106ae2f)
+- Keep the built-in stages' state in the pipeline (79ca396)
+- Route built-in steps, checks, and spawn inputs through the pipeline (d824ea8)
+- Split the large pipeline and runner files by stage and area (341fca2)
+- Move each built-in stage's files into stages/<stage>/ (3ecdc98)
+- Hand each gate, run, and judge decision to its stage (490a742)
+- Keep each stage's state and helpers in its stage folder (4b69da7)
+- Build each judge's input in the stage that asks it (647ab8a)
+- Move each stage's board cards and artifacts into its stage folder (30c87b1)
+- Answer each pipeline hook in the stage that owns it (ff8d867)
+- engine: Move the session fold into state/apply.rs (ca04530)
+- default-plugin: Group a track's docs state in DocsPipeline (013d209)
+
+### Documentation
+
+- Rewrite the plugin and workflow pages in STE (a2420ec)
+- Describe the standard plugin's pipeline and the book stage (214bdc9)
+- Describe the standard plugin's stage folders (91b9446)
+- Describe each stage's view module (82c448f)
+- Describe each stage's pipeline hooks (0679efe)
+
+### Tests
+
+- Wait for queued amendments in the attached-files test (3b1abc2)
+- code: Find the session fold in state/apply.rs (323e138)
+- browser: Remove the book architecture from the books spec (80ac259)
+
+### Build and chores
+
+- Update Cargo.lock for the engine's dropped dev-dependency (80343dc)
+
+### Other
+
+- Merge branch 'master' of github.com:diepquynh/ostra into feature/workflow (b559f64)
+- Merge branch 'worktree-agent-aca0e80d25281997e' into feature/workflow (29df98c)
+- Merge branch 'worktree-agent-a5797101d7fdd31b7' into feature/workflow (87352b4)
+- Merge branch 'worktree-agent-a4a79b28db7200904' into feature/workflow (0519637)
+- Merge pull request #7 from diepquynh/feature/workflow (60ecce9)
+
 ## 0.1.3 (2026-10-04)
 
 ### Documentation
