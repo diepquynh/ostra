@@ -205,6 +205,15 @@ impl Inner {
         gate: GateId,
     ) -> Result<(), EngineError> {
         let st = self.snapshot(session)?;
+        // Pattern 8: spending more is the user's decision, whatever the pipeline says.
+        if st.gates.get(&gate).is_some_and(|g| {
+            matches!(
+                g.payload,
+                ostra_core::event::GatePayload::BudgetReached { .. }
+            )
+        }) {
+            return Ok(());
+        }
         let Some(plan) = self.pipeline().yolo_plan(&st, &gate) else {
             return Ok(());
         };

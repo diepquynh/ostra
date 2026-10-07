@@ -325,6 +325,28 @@ impl SessionState {
 
     /// The request as it now stands, with every amendment (Rule D2), attached file (Rule C1), and
     /// upload (Rule C3).
+    /// Pattern 8: the user raises the session budget or stops the session.
+    fn budget_answered(&mut self, spent_usd: f64, budget_usd: f64, answer: &GateAnswer) {
+        self.budget_gate = None;
+        match answer {
+            GateAnswer::Choice { option, text } if option == "raise" => {
+                // The default raise is the budget again, so the session can spend as much once
+                // more before the next pause.
+                let extra = text
+                    .as_deref()
+                    .and_then(|t| t.trim().trim_start_matches('$').parse::<f64>().ok())
+                    .filter(|v| v.is_finite() && *v > 0.0)
+                    .unwrap_or(budget_usd.max(1.0));
+                self.budget_raised += extra + (spent_usd - budget_usd).max(0.0);
+            }
+            _ => {
+                self.failed = Some(format!(
+                    "Stopped at the session budget after spending ${spent_usd:.2}."
+                ))
+            }
+        }
+    }
+
     pub fn full_request(&self) -> String {
         let mut s = self.request.clone();
         s.push_str(&self.file_list(
@@ -811,6 +833,11 @@ impl SessionState {
                         answered_at: None,
                     },
                 );
+                // Pattern 8: the session budget is the engine's, whatever pipeline runs.
+                if let GatePayload::BudgetReached { .. } = payload {
+                    self.budget_gate = Some(id.clone());
+                    return;
+                }
                 self.pipeline.clone().gate_opened(self, id, payload);
             }
             SessionEvent::GateAnswered {
@@ -831,6 +858,14 @@ impl SessionState {
                 g.reason = reason.clone();
                 g.answered_at = Some(at);
                 let payload = g.payload.clone();
+                if let GatePayload::BudgetReached {
+                    spent_usd,
+                    budget_usd,
+                } = payload
+                {
+                    self.budget_answered(spent_usd, budget_usd, answer);
+                    return;
+                }
                 self.pipeline
                     .clone()
                     .gate_answered(self, id, &payload, answer, *routed);

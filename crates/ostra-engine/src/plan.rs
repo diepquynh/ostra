@@ -454,8 +454,10 @@ impl<'a> Planner<'a> {
         if s.yolo {
             for g in s.open_gates() {
                 // A budget is never raised by YOLO: spending more is the user's decision.
-                if !matches!(g.payload, GatePayload::Permission { .. })
-                    && !self.s.pipeline.yolo_leaves_open(s, &g.payload)
+                if !matches!(
+                    g.payload,
+                    GatePayload::Permission { .. } | GatePayload::BudgetReached { .. }
+                ) && !self.s.pipeline.yolo_leaves_open(s, &g.payload)
                 {
                     self.push(Step::YoloAnswer { gate: g.id.clone() });
                 }

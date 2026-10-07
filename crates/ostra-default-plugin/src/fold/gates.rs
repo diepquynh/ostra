@@ -184,7 +184,8 @@ impl FoldGates for SessionState {
                 }
             }
             GatePayload::Permission { .. } => {}
-            GatePayload::BudgetReached { .. } => self.budget_gate = Some(id.clone()),
+            // Pattern 8: the engine folds the budget gate.
+            GatePayload::BudgetReached { .. } => {}
             GatePayload::DocsRounds { project, .. } => {
                 self.ext
                     .os_mut()
@@ -585,28 +586,7 @@ impl FoldGates for SessionState {
                     _ => t.docs_continued = *rounds,
                 }
             }
-            GatePayload::BudgetReached {
-                spent_usd,
-                budget_usd,
-            } => {
-                self.budget_gate = None;
-                match choice {
-                    Some(("raise", text)) => {
-                        // The default raise is the budget again, so the session can spend as much
-                        // once more before the next pause.
-                        let extra = text
-                            .and_then(|t| t.trim().trim_start_matches('$').parse::<f64>().ok())
-                            .filter(|v| v.is_finite() && *v > 0.0)
-                            .unwrap_or(budget_usd.max(1.0));
-                        self.budget_raised += extra + (spent_usd - budget_usd).max(0.0);
-                    }
-                    _ => {
-                        self.failed = Some(format!(
-                            "Stopped at the session budget after spending ${spent_usd:.2}."
-                        ))
-                    }
-                }
-            }
+            GatePayload::BudgetReached { .. } => {}
         }
     }
 
