@@ -68,17 +68,22 @@ Browser (React)
   Settings · Memory · Cost · Quick-questions side panel
         │  REST + WebSocket (JSON events, binary PTY frames)
 Rust server `ostra` on 127.0.0.1
-  api ── engine (state machine, scheduler, judge)
+  api ── engine (state machine, scheduler, gates, workflows)
+          ├── pipeline: the built-in stages and judges, from the standard plugin `ostra`, in process
           ├── executors: native loop │ harness (PTY + hook bridge + MCP stdio shim)
           ├── policy (guards + permissions) ── tools
           ├── providers (anthropic, openai)
           ├── store (SQLite event log + FTS5 memory)
           ├── notify (Web Push)
+          ├── plugins (built in, or programs on stdio, through ostra-sdk)
           └── assets (embedded agent prompts, skills, refs)
 Disk
   ~/.config/ostra/config.toml                    providers, tiers, global permissions
   ~/.local/share/ostra/registry.db               workspace list, push subscriptions, VAPID keys
   <workspace>/.ostra/workspace.toml              workspace settings
+  <workspace>/.ostra/agents/<name>.md            custom agents
+  <workspace>/.ostra/workflows/<name>.toml       workflows
+  <workspace>/.ostra/transforms/<name>.toml      composite transform functions
   <workspace>/.ostra/workspace.db                sessions, events, executions, decisions
   <workspace>/.ostra/sessions/<session-id>/      session artifacts (spec, plan, phases, reports, ledgers)
   <project>/.ostra/                              INVENTORY.md, project.toml, skills/, memory/knowledge.sqlite3
@@ -445,6 +450,11 @@ execution result is appended to the `events` table. A session's state is the fol
 restart replays and continues. The artifacts agents write stay files in the session directory, because the
 prompts address them by path.
 
+The engine (`ostra-engine`) holds the generic parts of the state machine: the event log, the runner, slots,
+the budget, gates, workflows, custom and plugin stages, and messages between subagents. The stages in the
+diagram below are the built-in stages. They are the pipeline of the standard plugin (`ostra-default-plugin`,
+Rule PL4), which the engine reaches only through its `Pipeline` trait.
+
 ```
 Intake → Classify* → Explore ×N (parallel, per project or area) → Sufficiency* → Track* ─┐
 ┌─────────────────────── light: one inline phase per project ────────────────────────────┤
@@ -456,7 +466,8 @@ Intake → Classify* → Explore ×N (parallel, per project or area) → Suffici
 → Implementation review (gate) ⟲ feedback → Feedback* → revision phases (reviewed, staged)
 → Format (per project, once)
 → Closing gate (tests? docs?) → EPA ×N (parallel) → WriteTest (one phase at a time, review loop, stage)
-→ Module documentation → Completion report*
+→ Book: Scan → Survey → Page writers ×N (parallel) → Fact-check and synthesis rounds ⟲ → Book write
+→ Completion report*
 
 * judge call     ⟲ FAIL goes back to the owning agent with the previous findings
 ```
@@ -475,7 +486,8 @@ QUICK ANSWER (routed to the side panel). Ostra adds QUICK CHANGE (one implemente
 ### 8.2 Rules as code
 
 Every rule ID stays, and the code that implements a rule cites it in a one-line comment. Section references are
-to `UC/commands/orchestrate/prompt.md`.
+to `UC/commands/orchestrate/prompt.md`. A rule of a built-in stage is code in the standard plugin's pipeline
+(`crates/ostra-default-plugin/src/planner/` and `fold/`). A generic rule is code in the engine.
 
 | Rule | Engine behavior |
 | --- | --- |
@@ -513,7 +525,7 @@ to `UC/commands/orchestrate/prompt.md`.
 | P2 | Continuing a paused session resumes each execution the pause interrupted, where it stopped and under its own id: the engine appends `ExecutionResumed` instead of starting a new execution, so its row, Activity, transcript, terminal log, and usage continue, and it runs on the executor and model it started on. A native execution replays its stored transcript, so the provider's prompt cache still covers it, and adds one turn with the prompt "Continue the workflow."; a harness execution runs its resume command with the stored session id and that prompt. A harness is sent Esc before it is stopped, so its session is saved whole. Context added while paused cancels the resume: those executions re-run from their spawn blocks as new executions, because a resumed conversation would not see it. |
 | P3 | Ostra pauses a session as in P1 on the third containment signal of one execution, YOLO included. A signal is a Layer 1 denial by the `secret-read`, `self-protection`, or `git-metadata` guard, an egress proxy refusal of a loopback, private, or link-local destination, or a process opening one of the decoy credential files the sandbox plants in hidden credential paths (`~/.ssh/id_rsa` and `id_ed25519` where no SSH port is reachable, `~/.git-credentials`, `~/.vault-token`, plus the workspace's `sandbox_decoys`): on Linux a fake file watched with inotify, on macOS an existing file the policy refuses to read, reported through the system log on an admin account. A refused public host is not a signal, because builds call telemetry hosts; it shows in the Activity view only. The engine records at most three signals per execution, so a retry loop cannot flood the log, and the board names the execution that paused the session. Continuing (P2) is the user's "this was fine": the resumed execution's signal count starts at zero. |
 | U1 | The user may skip a running execution whose task the session can do without: research (except a helper's or a rescue's), a phase's test analysis, a docs writer, or the architecture overview. The engine appends `ExecutionSkipped`, stops the run as an interrupt, and the fold ends its task as abandoning its failure gate does, so nothing re-runs it and no gate opens. Context the user adds can skip research too: the Route answer judge lists in `skip` the unfinished research tasks the user names, a running one stops, and a queued one never starts. Work, review, spec, plan, and fact-check are never skipped, because later rules need their results. |
-| U2 | The user may send a correction to one running execution, or to one the pause stopped (Rule P2). A running execution stops at once and resumes in place, as P2 does, with the correction as its next message, so it keeps its conversation and its work; a correction sent to a running execution cannot be withdrawn. A paused execution reads the correction when the session continues, and the user may withdraw it until then (`SteerWithdrawn`). Corrections sent before the run reads them join in order. A run that ends before the correction stops it, or one that Send now context (Rule C2) restarts from its spawn block, drops it. A run waiting on another subagent (Rule H2) takes none, because only that answer wakes it. |
+| U2 | The user may send a correction to one running execution, or to one the pause stopped (Rule P2). A running execution stops at once and resumes in place, as P2 does, with the correction as its next message, so it keeps its conversation and its work; a correction sent to a running execution cannot be withdrawn. A paused execution reads the correction when the session continues, and the user may withdraw it until then (`SteerWithdrawn`). Corrections sent before the run reads them join in order. A run that ends before the correction stops it, or one that Send now context (Rule C2) restarts from its spawn block, drops it. A run waiting for a message (Rule SM3) takes none, because only a message wakes it. |
 | P4 | An execution the user stops ends `cancelled` and opens its failure gate, titled "You stopped ...". Nothing retries it without the user: YOLO leaves that gate open, and a created project's init step goes to the user instead of the advisor. Only a user stops a run in a live session, because a pause or an interrupt records `interrupted` and a stopped session ends. |
 
 ### 8.3 Judge calls
@@ -567,16 +579,16 @@ write in Simplified Technical English (section 20), because people and agents bo
 | B2 | The user steers the part. The writer follows, in this order, the docs-stage notes (`User notes:`), the request (the `DOCS` request in `ostra-docs-request.md`, or the session request), and the workspace instructions that the brief adds for the agent (`instructions.all` and `instructions.agents.documentation`). They can set the audience, the topics, the depth, and what to leave out. The rules of the prompt's Constraints win over them. |
 | B3 | A `mermaid` code block in a page body is a diagram. A sequence diagram has at most 8 participants and 20 messages, and a flowchart at most 15 nodes; other Mermaid kinds have no cap. A body starts its headings at `##`, because the title is the only level-1 heading. `validate_submit` refuses a larger diagram or a level-1 heading with the instruction to fix it. The architecture diagram also must match its declared kind. |
 | B4 | No agent writes a system architecture. A book of two or more projects is its parts and the glossary, and a user who wants the book to cover how the projects work together supplies an architecture document in the request, which each survey lists as a user source. The `system-architecture` agent is retired (`RETIRED_AGENTS`): a saved route for it still validates, an old execution row reads as `documentation`, and an old log's `ExecPurpose::Architecture` run folds to nothing. A `book.json` from before keeps loading and drops its architecture. |
-| B5 | The engine writes the book after the last docs execution settles (`Step::WriteBook`), records `BookWritten`, and only then completes the session. It writes `<workspace>/.ostra/docs/<book>/book.json`, `index.md`, `glossary.md`, and `<project>/<section>.md`, and removes the files of sections that no longer exist. No agent writes that folder (the `workspace-docs` guard, a read-only sandbox mount). A failed write is recorded with its error and the session goes on. |
-| B6 | A book is named after its sorted project keys joined with `_` (`api_web`), so a later session on the same projects updates it. The New task form may pick an existing book (`docs_book`). A session's part for a project replaces that project's part in the book, a new architecture replaces the old one, and glossary entries merge by term with the newer definition kept. Each writer gets the existing `book.json` as `Existing book:` and keeps the pages its change does not reach, because its submit replaces the part. The engine reads, merges, and writes a book under one lock, so two sessions updating the same book both keep their parts. |
-| B7 | The runs of the docs stage fan out at once, across every step and project of the pipeline (survey, page, fact-check, and synthesis runs), as read-only stages do (Rule M1). The workspace's `limits.max_parallel_executions` bounds how many run at the same time, through the slot limiter, and `MAX_DOCS_PAGES` (30 per project) bounds how many exist. |
+| B5 | The engine writes the book after the last docs execution settles (`Step::WriteBook`), records `BookWritten`, and only then completes the session. It merges the update that the pipeline gives (`Pipeline::book_update`): one `PartUpdate` for each documented project, with the overview, the glossary, the inventory, and each planned page in order as `PageUpdate::Write` (a page this session wrote) or `PageUpdate::Keep` (a page the book keeps). It writes `<workspace>/.ostra/docs/<book>/book.json`, `index.md`, `glossary.md`, and `<project>/<section>.md`, and removes the files of sections that no longer exist. No agent writes that folder (the `workspace-docs` guard, a read-only sandbox mount). A failed write is recorded with its error and the session goes on. |
+| B6 | A book is named after its sorted project keys joined with `_` (`api_web`), so a later session on the same projects updates it. The New task form may pick an existing book (`docs_book`). A session's part for a project replaces that project's part in the book, and glossary entries merge by term with the newer definition kept. Each writer gets the existing `book.json` as `Existing book:` and keeps the pages its change does not reach, because its submit replaces the part. The engine reads, merges, and writes a book under one lock, so two sessions updating the same book both keep their parts. |
+| B7 | The runs of the docs stage fan out at once, across every step and project of the pipeline (survey, page, fact-check, and synthesis runs), as read-only stages do (Rule M1). With a book stage, they start after the closing stage of every project ends. The workspace's `limits.max_parallel_executions` bounds how many run at the same time, through the slot limiter, and `MAX_DOCS_PAGES` (30 per project) bounds how many exist. |
 | B8 | Every agent that learns code has the `docs_search` capability (`DocsSearch` natively, `docs_search` from Ostra's MCP server). It ranks passages, not whole pages: a page is cut at its `##` headings into units (the text above the first `##` belongs to the page unit with its summary and code references), and each unit into its paragraphs, each diagram (by its labels, not its Mermaid syntax), each other code block, and lists and tables in windows of five, with a `###` or deeper heading as the label of the passages under it. BM25 ranks each passage over its label, its inline code and paths, and its text. A unit (a page, a `##` part, a glossary term, or an architecture aspect) ranks by its title once, its best passage, a share of its second, and a BM25 score of its whole text, and a hit shows only the passages that matched, and within a list or table only the lines that name a query word, so an agent does not read a whole page to find one fact. `tests/evals/book_retrieval/` holds the questions, the labeled books, and the floors. The brief names the tool when the workspace has a book. |
 | B9 | Books and logs from before free pages still load. A typed section in `book.json` loads as a page: its purpose is the summary, its fields are `###` headings, and each sub-section is a `##` part with its fields under `####`, so it stays its own search unit. A `DocsPlanned` event, which split a large part among area writers, folds to nothing, and one writer runs per project. The next docs run rewrites an old part in the new shape. |
+| B10 | The docs stage is the built-in stage `ostra:book`, which runs after `ostra:closing` in the default `implement`, `test`, and `docs` workflows (node `docs`). It reads the closing choice itself, because a built-in stage takes no conditions (Rule WB5): for each project that the closing gate chose docs for and that has no open BLOCKER (Hard rule 21), it runs the pipeline below, then the book write (Rule B5). A workflow without an `ostra:book` stage, and a session whose log recorded no workflow, run the docs stage and the book write in `ostra:closing`, the path from before the book stage. This path is deprecated, and `WorkflowDef::notices` (`WorkflowInfo.notices` in the API) tells the user to add the stage. The docs stage is a pipeline, not one agent. For each project: (0) `OstraStep::ScanDocs` (a `Step::Pipeline` step) reads the project's modules (its module map, or its source folders, with a folder of 3 or more source subfolders split per subfolder) and its named constants outside test files (at most 1500) and records `DocsScanned`, and the runner writes them as `reference.md` for every later run; (1) a `documentation` run with `Docs mode: survey` makes one brief pass over the code, project memory, workspace artifacts, the user's uploads and attachments, and the existing book, and returns the overview, an `inventory` of everything the book must cover (each item with exactly one owning page, or `out_of_scope` with a reason, plus its `settings` and its `names`, with one item for each mechanism that two or more pages use), and 1 to `MAX_DOCS_PAGES` (30) broad pages in groups; (2) one run with `Docs mode: page` writes each page's first draft; (3) synthesis rounds repeat until done: a `fact-check` run with target type `page` checks each changed page (`ExecPurpose::DocsCheck`), then one run with `Docs mode: synthesis` reads every draft, the inventory, the findings, and the engine's checks, judges the definition of done check by check, and lists edits per page; each page that the edits, a failed check, or an engine check names gets a revision run with `Revise:`. The pipeline's checks (`mechanical_issues` in the standard plugin's `book/checks.rs`) are links to pages that do not exist, the words and punctuation the writing standard forbids in prose, inventory items without an owning page, modules that no inventory item covers, an item's `settings` that its owner page does not name inside a `For the user` block, a page that names an item it does not own (by the item's `names` or `settings`, skipping names that most pages use) in a `##` part without a link to the owner or, outside the `Reference` group, in 3 or more paragraphs, and a page with `code_refs` and no code excerpt; the synthesis pass also gets the named constants that no page mentions. A synthesis pass can add inventory items, and each new item's owning page gets a revision to cover it. A done pass ends the loop only when no inventory item or module lacks an owner; otherwise the next round runs another synthesis pass. Only HIGH and MEDIUM fact-check findings block done; a stated rule without the reason that a source gives is MEDIUM. A fact-check re-pass diffs the page against its previous draft (`<page>.prev.md`) and checks only the changed lines and the prior findings. The loop ends when a synthesis pass sets `done` and no page needs a revision, or when a round revised nothing. After each `DOCS_ROUNDS` (3) rounds without done, a `DocsRounds` gate asks `continue` or `accept`; YOLO answers `continue`, and the session budget bounds the loop. The runner writes the drafts, `index.md`, and `inventory.md` into `ostra-docs-drafts/<project>/` in the session root before each run. Every submit names its `step`, and a run that answers another step fails. The core checks the book format of a `documentation` submit (`book::check_pages`), and the pipeline checks the fields of its step at submit time (`Pipeline::check_submit`, through `ExecutionHost::check_submit`). A page with `rewrite: false` keeps its text from the book. A log whose whole-part writer (`ExecPurpose::Docs` without a page) already started keeps it. |
 | DOCS | A `DOCS` request documents existing code. Classify always sets `opts_in.docs`. The fold adds one done inline phase per project with closing `(tests no, docs yes)` and format settled, so the session goes straight to the docs stage with no closing gate, and the runner writes `ostra-docs-request.md` with the request as each writer's implementer report. |
 
 ## 9. Agents and prompts
 
-| B10 | The docs stage is a pipeline, not one agent. For each project: (0) `Step::ScanDocs` reads the project's modules (its module map, or its source folders, with a folder of 3 or more source subfolders split per subfolder) and its named constants outside test files (at most 1500) and records `DocsScanned`, and the runner writes them as `reference.md` for every later run; (1) a `documentation` run with `Docs mode: survey` makes one brief pass over the code, project memory, workspace artifacts, the user's uploads and attachments, and the existing book, and returns the overview, an `inventory` of everything the book must cover (each item with exactly one owning page, or `out_of_scope` with a reason, plus its `settings` and its `names`, with one item for each mechanism that two or more pages use), and 1 to `MAX_DOCS_PAGES` (30) broad pages in groups; (2) one run with `Docs mode: page` writes each page's first draft; (3) synthesis rounds repeat until done: a `fact-check` run with target type `page` checks each changed page (`ExecPurpose::DocsCheck`), then one run with `Docs mode: synthesis` reads every draft, the inventory, the findings, and the engine's checks, judges the definition of done check by check, and lists edits per page; each page that the edits, a failed check, or an engine check names gets a revision run with `Revise:`. The engine's checks (`book::mechanical_issues`) are links to pages that do not exist, the words and punctuation the writing standard forbids in prose, inventory items without an owning page, modules that no inventory item covers, an item's `settings` that its owner page does not name inside a `For the user` block, a page that names an item it does not own (by the item's `names` or `settings`, skipping names that most pages use) in a `##` part without a link to the owner or, outside the `Reference` group, in 3 or more paragraphs, and a page with `code_refs` and no code excerpt; the synthesis pass also gets the named constants that no page mentions. A synthesis pass can add inventory items, and each new item's owning page gets a revision to cover it. A done pass ends the loop only when no inventory item or module lacks an owner; otherwise the next round runs another synthesis pass. Only HIGH and MEDIUM fact-check findings block done; a stated rule without the reason that a source gives is MEDIUM. A fact-check re-pass diffs the page against its previous draft (`<page>.prev.md`) and checks only the changed lines and the prior findings. The loop ends when a synthesis pass sets `done` and no page needs a revision, or when a round revised nothing. After each `DOCS_ROUNDS` (3) rounds without done, a `DocsRounds` gate asks `continue` or `accept`; YOLO answers `continue`, and the session budget bounds the loop. The runner writes the drafts, `index.md`, and `inventory.md` into `ostra-docs-drafts/<project>/` in the session root before each run. Every submit names its `step`, and a run that answers another step fails. A page with `rewrite: false` keeps its text from the book. A log whose whole-part writer (`ExecPurpose::Docs` without a page) already started keeps it. |
 ### 9.1 Assets
 
 Each agent is `assets/agents/<name>/agent.toml` plus `prompt.md`, embedded in the binary. `agent.toml` carries
@@ -630,6 +642,81 @@ Port `UC/hooks/lib/context-brief.js` as the repo brief appended to every executi
 path), conventions not already in the inventory, the full review rule set for the reviewer, and the module-map
 rows matching paths the task names. Add the workspace's custom instructions (`instructions.all`, then the
 agent's own entry). Never include routing settings.
+
+### 9.4 Agent definitions
+
+Every agent is defined the same way, and none gets special treatment. Ostra's own thirteen agents are the
+standard plugin `ostra` (10.10), which reads each one's `assets/agents/<name>/agent.toml` and `prompt.md` with
+the SDK's definition parser; a workspace adds agents as markdown files in `.ostra/agents/<name>.md` (TOML
+frontmatter between `+++` lines, then the instructions); a plugin adds agents in its manifest. All three are an
+SDK `PluginAgent` until the catalog turns them into definitions. The standard plugin's definitions are in
+`crates/ostra-standard`, and the code of the built-in stages that run its agents is in
+`crates/ostra-default-plugin` (Rule PL4).
+
+```markdown
++++
+description = "Writes specs in the house format."
+returns = "spec"                     # the result contract; default: stage
+capabilities = ["read", "search_text", "glob", "document_spec", "coordinate"]
+write_scope = "session"              # read_only, session, project, or setup
+brief = ["stack", "modules"]         # repo brief sections; default: all but testing and review
+default_tier = "advanced"
+timeout_seconds = 2400
+helper = false                       # true lets SendMessage start it as a helper
+[effort]
+native = "high"
++++
+Write one spec ... Use {{ tool_read }} for files.
+```
+
+Rules:
+
+- **CA1.** A workspace agent's name is its file name, or `name` in its frontmatter, in lowercase kebab-case, and
+  may not be a built-in agent's. The workspace's agents are re-read per execution like its settings, and a
+  definition that does not parse or names a built-in agent is a settings error. Instructions are rendered with
+  the same tool tokens, shared guides, and harness vocabulary as a built-in prompt; a `stage` agent's also start
+  with a guide to the stage contract.
+- **CA2.** `write_scope` bounds where the agent writes, enforced by the write-scope guard: `read_only` writes
+  nothing, `session` writes its session dir and the OS temp dir, `project` writes the repo root and its session
+  dir, and `setup` writes the project's `.ostra/` runtime and its skills dir. Without `write_scope`, an agent with
+  `write` or `edit` gets `project` and any other `session`. No agent writes `.ostra/agents`, `.ostra/workflows`, or
+  `.ostra/transforms`.
+- **CA3.** The `stage` contract is `{verdict, summary, findings, question, options, report_path, data}`:
+  `verdict` is `pass`, `fail`, or `needs_user` (which needs a `question`), and `data`, when the agent declares a
+  `data_schema`, is required and checked against it (`type`, `properties`, `required`, `items`, `enum`,
+  `minItems`, `maxItems`, `additionalProperties: false`). Only a `stage` agent declares `data_schema`.
+- **CA4.** An agent's route is `routing.*.byAgent.<name>` when set, else its `default_tier` on its executor. Routes
+  by phase complexity apply to agents whose contract runs per plan phase (`implementation`, `tests`).
+- **CA5.** An agent declares the result contract it submits (`returns`): `research`, `spec`, `fact-check`,
+  `plan`, `implementation`, `review`, `path-analysis`, `tests`, `documentation`, `prompt`,
+  `setup`, `answer`, `advice`, `stage`, or a plugin's own `<plugin>:<contract>` (Rule PL5). The engine reads a
+  result by its contract and never by which agent wrote it: the submit schema and its checks, the spawn block,
+  the brief's skill filter, and whether a report file must exist before the submit all follow the contract.
+  Every run records its contract when it starts, and runs logged before contracts follow their agent's.
+- **CA6.** Integrations are capabilities any agent may request; none is reserved. `document_research`,
+  `document_spec`, and `document_plan` give the Document tool for that typed document and the right to write it;
+  `review_ledger`, `security_block`, and `progress_log` give the right to write those engine-read files;
+  `test_files` gives the right to write test files and directories in the repo; `manage_projects` gives the
+  project tools. The guards check these grants, never an agent's name. Every agent file, like every plugin, waits
+  for the user's approval of the workspace file (Rule A1), which is what lets any of them hold any grant.
+
+### 9.5 The agent screen
+
+The console lists every agent the workspace can run and edits the workspace's own.
+
+- **AG1.** The agent list says where each definition comes from (`ostra`, a workspace file, or a plugin), the
+  contract it returns, its write scope, and whether it is a helper or programmatic. An agent's page
+  (`GET .../agents/<name>`) adds its full definition, the system prompt as the native executor renders it, its
+  submit schema, and the workflow nodes that run it or bind it.
+- **AG2.** Only a workspace agent's file is edited in Ostra (`PUT` and `DELETE .../agents/<name>`); Ostra's and
+  a plugin's agents are read only, and the screen can duplicate one into a new workspace agent. A save is the
+  file a user would write (frontmatter and prompt), checked as a load checks it (Rule CA1), refused when a
+  plugin holds the name or no running plugin defines the contract it returns, and refused when it would stop a
+  workflow that runs now from running. A delete is refused while a workflow uses the agent. A save keeps an
+  approved workspace approved (Rule A1); an agent whose file waits for approval shows as waiting.
+- **AG3.** The plugin list (`GET .../plugins`) shows the built-in plugins and each `[[plugins]]` entry with its
+  state (running, starting, disabled, waiting for approval, failed with the reason) and, once it runs, its
+  manifest: agents, stages, and contracts. Env values never leave the server.
 
 ## 10. Executors, tools, and policy
 
@@ -698,8 +785,8 @@ owns every session. Push channels and wake commands disappear.
 
 Native tool names match Claude Code's, because the prompts are tuned to them: `Read`, `Write`, `Edit`, `Bash`,
 `Grep`, `Glob`, `Skill`, `WebSearch`, `WebFetch`, plus `Report`, `Document`, `Memory`, `MemoryRecall`, the
-management tools `ProjectList` and `ProjectCreate` (section 10.7), the subagent tools `SubagentList`,
-`SubagentAsk`, and `SubagentReply` (section 10.8), and the `submit_*` tools.
+management tools `ProjectList` and `ProjectCreate` (section 10.7), the messaging tools `ListAgents`,
+`SendMessage`, and `WaitForMessage` (section 10.8), and the `submit_*` tools.
 
 - `Edit` requires the file to have been read in this execution, and its old string must match exactly once.
 - `Grep` and `Glob` use the ripgrep crates (`grep-searcher`, `grep-regex`, `ignore`, `globset`).
@@ -946,70 +1033,326 @@ Rules:
   the approved plan creates still joins the session (Rule O3). With no pin, every initialized project is in
   the session and the Classify judge chooses the scope.
 
-### 10.8 Subagent coordination
+### 10.8 Messages between subagents
 
 Agents talk to each other directly instead of only through reports, because an agent that reads another's
 report cold loses the context the writer had, and neither agent nor judge can see inside the other's
-conversation. Every run keeps its conversation, so a subagent that is asked something, or woken to fix its
-own work, continues from its message history, which also keeps the prompt cache warm.
+conversation. Every run keeps its conversation, so a subagent that gets a message, or is woken to fix its own
+work, continues from its message history, which also keeps the prompt cache warm.
 
 A **subagent ID** names one conversation. It is the id of the conversation's first execution, and every run
 that continues that conversation keeps it: a run resumed in place, and a new run that continues it
-(`resumes`). The pipeline still holds every gate; coordination changes how a run gets its input, never
-whether a stage passed.
+(`resumes`). The pipeline still holds every gate; messages change how a run gets its input, never whether a
+stage passed.
 
 | Tool | Input | Effect |
 | --- | --- | --- |
-| `SubagentList` | none | This run's own subagent ID, then every subagent of the session: ID, agent, label, status, what it waits on, its report. Marks the subagents this run works with (author and checker, implementer and reviewer). |
-| `SubagentAsk` | `message`, and `agent` or `subagent_id`, optional `project` | Asks a new helper (`agent`, only `explore`) or an existing subagent. The asking run waits for the answer. |
-| `SubagentReply` | `message` | Answers the question that woke this run. |
+| `ListAgents` | none | This run's own subagent ID, then every subagent of the session: ID, agent, label, status, what it waits on, its report. Marks the subagents this run works with (author and checker, implementer and reviewer, the stages before a workflow stage) and the helpers `SendMessage` can start. |
+| `SendMessage` | `message`, and `to` (a subagent ID) or `agent` (a new helper), optional `project` and `wait` | Queues a message. With `wait`, the run pauses until a message arrives for it. |
+| `WaitForMessage` | none | Pauses the run until a message arrives for it. |
 
-On harnesses they come from Ostra's MCP server as `subagent_list`, `subagent_ask`, and `subagent_reply`.
+On harnesses they come from Ostra's MCP server as `list_agents`, `send_message`, and `wait_for_message`.
 Agents with the `coordinate` capability get them: explore, generate-spec, fact-check, plan, implementer,
-code-reviewer, write-test.
+code-reviewer, write-test, and every custom agent unless its definition leaves the capability out.
 
 Rules:
 
-- **H1.** A subagent ID resolves to the subagent's latest run. Only subagents of the same session are
-  reachable.
-- **H2.** Asking waits. A native run ends with status `waiting`, and when the answer arrives Ostra resumes it
-  in place from its stored messages, with the answer as the new user turn. A harness run keeps its process:
-  Ostra frees its execution slot while it waits, types the answer into its terminal when it arrives, and does
-  not count the wait against its timeout. After a server restart a harness run that waited is recorded as
-  `waiting`, and its answer resumes the harness session. Coordination tools never ask the user, because they change no file.
-- **H3.** Where a question goes. To `agent: explore`, Ostra starts a helper research task from the message
-  (an ask-bound explore that does not hold the research stage). Its submit is the answer: the findings summary
-  and the research document, which joins the session's research documents. To a subagent ID: a subagent that
-  waits on the asker (its helper, or the subagent it asked) is woken in place with the question and answers
-  with `SubagentReply`, then waits again. A subagent whose last run ended `ok` answers in a consult run that
-  continues its conversation, may not write files, and ends with `SubagentReply`. A subagent that is running,
-  or waits on someone else, gets the question when it becomes free. A subagent that fails, or ends a run
-  without replying, answers with that failure, so no asker waits forever. A run that owes an answer (a consult run,
-  or a run woken with a question) is refused its submit until it replies, and every reminder it gets names
-  `SubagentReply`, not its submit tool: the native loop's reminder after a turn without a tool call, a harness's
-  turned-back Stop, and the typed nudge of a quiet session.
-- **H4.** Asks are bounded, because each can start a run. A run may start at most `MAX_HELPERS_PER_RUN` (3)
-  helpers and a session at most `MAX_SESSION_ASKS` (24) asks. A helper and a consult run may not start
-  helpers; a consult run, and a run that owes a reply, may not ask. Every helper and consult run goes through
-  the slot limiter and the budget guard.
+- **SM1.** A subagent ID resolves to the subagent's latest run. Only subagents of the same session are
+  reachable, and a run cannot message its own subagent.
+- **SM2.** Every message is queued, never delivered in the middle of a model request, because text spliced
+  into a request in flight would break the receiver's prompt cache and its turn. Ostra hands queued messages
+  over at the receiver's next turn boundary: a running native run reads them after its current turn's tool
+  results, in the same user turn and after the cached prefix; a running harness run reads them once its turn
+  ends, typed into its terminal (the Stop hook lets that Stop through, and the run's process stays up); a
+  programmatic agent reads them after its current tool call. `MessagesDelivered` records each hand-over.
+- **SM3.** A run pauses with `wait` or `WaitForMessage`. A native run ends with status `waiting`, and the next
+  message for it resumes it in place from its stored messages. A harness or programmatic run keeps its process:
+  Ostra frees its execution slot while it waits, hands it the message when it arrives, and does not count the
+  wait against its timeout. After a server restart a harness run that waited is recorded as `waiting`, and its
+  message resumes the harness session. A run that waits on a subagent hears when that subagent ends its run
+  without messaging it, and a run that waits for any message hears when no other subagent of the session is
+  running or waiting and no message waits for a subagent that a message can still continue, so no run waits
+  forever. Messages never ask the user, because they change no file.
+- **SM4.** A message to a subagent whose run ended `ok`, `stuck`, or `handoff` continues that subagent's
+  conversation in a new run (`Message` purpose) with its own agent, tools, executor, model, report path, and
+  stage, and the messages as its new turn. It ends with its submit call, which the pipeline records but does
+  not read again. A subagent that failed, or whose conversation already has `MAX_CONVERSATION_RUNS` runs, takes
+  no message, and `SendMessage` says so.
+- **SM5.** Messages are bounded, because each can start or wake a run. A session's agents may send at most
+  `MAX_SESSION_MESSAGES` (48), a run may start at most `MAX_HELPERS_PER_RUN` (3) helpers, a helper may not start
+  helpers, and every continued or helper run goes through the slot limiter and the budget guard.
+- **SM6.** A sender that waits for a reply is owed one. The run that read its message may not submit until it
+  messages that sender, and every reminder it gets names `SendMessage` and the sender's ID: the native loop's
+  reminder after a turn without a tool call, a harness's turned-back Stop, and the typed nudge of a quiet
+  session. Such a run may not `WaitForMessage` either, because its sender would wait on it in turn.
+- **SM7.** `SendMessage` with `agent` starts a helper with the message as its task: `explore` (an ask-bound
+  explore that writes a research document and does not hold the research stage), or a custom agent whose
+  definition sets `helper = true`. The helper's submit comes back to the sender as a result message. A result
+  for a sender whose run already ended is dropped, because nothing waits for it.
+- **SM8.** Every step is an event: `MessageSent` when a run sends, `AgentWaiting` when it waits without
+  sending, and `MessagesDelivered` when Ostra hands messages to a run (with the notice of SM3 when no message
+  will come). A helper's start is its message's delivery. Text the user added while a run waited is appended to
+  the messages that wake it. Logs written before messaging (`AgentAsked`, `AgentReplied`, `MessageDelivered`)
+  fold into the same messages.
+- **SM9.** A session does not complete while a message waits for a receiver that can still take it, or a
+  subagent waits.
+
+Pair loops keep their own rules:
+
 - **H5.** The pipeline's pair loops continue conversations instead of starting cold. After a spec or plan
   fact-check fails, the author is woken with the findings; the next fact-check pass continues the checker.
   After a review with findings, the fix continues the phase's last worker when the fix agent is the same
-  agent; the next review continues the reviewer. A rescue and a resume after a handoff continue the worker
-  too. The continued run's new turn is a fixed header plus the new spawn block, which carries only what the
-  run needs next (findings, answers, prior findings). Pass or fail, caps, and gates are unchanged.
+  agent; the next review continues the reviewer. A rescue, a resume after a handoff, and the next round of a
+  workflow stage continue their worker too. The continued run's new turn is a fixed header plus the new spawn
+  block, which carries only what the run needs next. Pass or fail, caps, and gates are unchanged.
 - **H6.** A pair loop starts a fresh run instead when the previous run did not end `ok` with a submit, the
   agent was moved to another executor, a harness run left no session id, the user amended the request since
   the previous run started, or the conversation already has `MAX_CONVERSATION_RUNS` (6) runs. A continued run
   stays on its conversation's executor and model.
-- **H7.** A conversation has at most one live run: a continuation or a consult waits while another run of the
-  same subagent is live.
-- **H8.** Every coordination step is an event: `AgentAsked` when a run asks, `AgentReplied` when a run
-  answers, and `MessageDelivered` when Ostra hands a question or an answer to a run that waits. A helper or
-  consult run gets its question as its spawn, so its `ExecutionStarted` is the delivery. The fold derives the
-  helper's answer and every failure answer from the log. Text the user added while a run waited is appended to
-  the message that wakes it.
-- **H9.** A session does not complete while a question is open or a subagent waits.
+- **H7.** A conversation has at most one live run: a continuation waits while another run of the same subagent
+  is live.
+
+### 10.9 Workflows
+
+The pipeline is a graph of stages, so a team can run its own steps between Ostra's: an audit after the build, a
+release check before docs, a design review after the plan. A **workflow** lists its stages and what each waits
+for. Built-in stages run Ostra's own rules; custom stages run a custom agent (9.4) or a plugin's stage logic
+(10.10).
+
+```toml
+# <workspace>/.ostra/workflows/secure.toml
+description = "The implement pipeline with a security audit before the closing stages."
+extends = "implement"          # a built-in pipeline or another workflow of the workspace
+default_for = ["implement"]    # categories that run it when the user names none
+remove = ["feedback"]          # stages of the extended workflow to leave out
+
+[[stage]]
+id = "audit"
+agent = "security-auditor"     # or uses = "ostra:<stage>", or plugin = "<plugin>:<stage>"
+after = ["build"]              # default: the stage before it in the file; in an extending workflow,
+                               # the extended workflow's last stage; for a phase stage, what the build waits for
+before = ["closing"]           # stages that wait for this one
+scope = "project"              # session (default), project, or phase
+on_fail = "retry"              # gate (default), retry, continue, or fail
+max_rounds = 3
+instructions = "Check every changed file for secrets and unsafe input handling."
+```
+
+The built-in stages are `ostra:research`, `ostra:track`, `ostra:spec`, `ostra:stakes`, `ostra:plan`,
+`ostra:build`, `ostra:feedback`, `ostra:closing`, and `ostra:book`. Each base pipeline (`research`, `spec`, `plan`,
+`implement`, `verify`, `test`, `docs`, `prompt`, `quick-change`) has a default workflow with its stages in a
+chain, shipped as a TOML file in `assets/workflows/` (Rule WF9).
+
+Rules:
+
+- **WF1.** A session records its workflow. A new task names a workflow, or runs the workspace's workflow for the
+  category Classify picks (the file whose `default_for` lists it, else the built-in one). Ostra resolves it once,
+  applies `extends` and `remove`, and records the result in `WorkflowResolved` before any stage runs, so an edit
+  to a workflow file never changes a running session. A named workflow is resolved before Classify, and its base
+  is the session's category. Logs written before workflows run the built-in workflow of their category.
+- **WF2.** Built-in stages keep their order and their rules. A workflow may leave out only `ostra:feedback`,
+  `ostra:closing`, `ostra:book`, and `ostra:track` (with `track = "light"` or `"full"` in its place), because the
+  engine has a defined path without them. Without `ostra:book`, `ostra:closing` writes the docs and the book, a
+  deprecated path that `WorkflowDef::notices` names (Rule B10). Each built-in stage waits, directly or through other stages, for the built-in stage
+  before it.
+- **WF3.** `track` fixes the implement pipeline's track and skips the Track judge.
+- **WF4.** A stage runs once every stage in its `after` is done, so stages with the same dependencies run side by
+  side, each through the slot limiter. A `project` stage runs once per project in scope; a `phase` stage runs once
+  per plan phase after that phase's review passes, inside the build stage, and phases that depend on the phase
+  wait for it. A custom agent's spawn names the stage, the round, the request, the spec, the master plan, the
+  research documents, the phase file and implementer report of a phase stage, one line per earlier custom stage
+  with its verdict and summary, the user's answers at the stage's gates, and the node's instructions. The session
+  completes when every stage is done.
+- **WF5.** A custom agent ends with a verdict: `pass` finishes the stage; `needs_user` opens a stage gate with its
+  question and options; `fail` follows the stage's `on_fail`: `retry` runs the stage again with its findings up
+  to `max_rounds`, then asks; `gate` asks; `continue` records the failure and goes on; `fail` stops the session.
+  At a stage gate the user picks `retry` (with guidance), `continue`, or `stop` after a failure, and an option,
+  `other` with an answer, or `stop` for a question. The next round continues the agent's conversation (H5).
+  Under YOLO a question takes its first option and a failure runs again while rounds are left; after the last
+  round the gate waits for the user.
+- **WF6.** A stage's agent can message the subagents it works with: `ListAgents` marks the author of the spec,
+  the author of the plan, the agents of the stages before it, and the implementer of the work it checks.
+- **WF7.** A workflow holds at most `MAX_CUSTOM_STAGES` (24) custom stages, a stage's `max_rounds` is at most 10,
+  and no stage waits for a phase stage directly. A workflow file that does not resolve, or names an agent or
+  plugin stage the workspace lacks, is a settings error at save time and refuses a session that names it.
+- **WF8.** A built-in stage runs, for each contract it reads, the agent its workflow binds, else the standard
+  plugin's agent for that contract. A stage binds with `agents = { review = "strict-reviewer" }`, and a workflow
+  binds a contract in every built-in stage that reads it with a top-level `[agents]` table. A bound agent must
+  exist and return the contract it fills. Research reads `research`; spec reads `spec` and `fact-check`; plan
+  reads `plan` and `fact-check`; build reads `implementation`, `review`, `prompt`, and `advice`; closing reads
+  `path-analysis`, `tests`, `review`, `documentation`, `implementation`, and `advice`; book reads `documentation`
+  and `fact-check`. A
+  custom stage runs an agent that returns `stage` or a plugin contract.
+- **WF9.** No workflow is defined in code. Ostra ships one default workflow per base pipeline as a TOML file in
+  `assets/workflows/<base>.toml`, embedded in the binary as a workflow of the standard plugin (Rule PL4), and the
+  order of built-in stages each base needs (Rule WF2) is read from its default. The `implement`, `test`, and
+  `docs` defaults end with a node `docs` that uses `ostra:book` after the `closing` node. A new workspace starts with a copy of each in `.ostra/workflows/`, which
+  the user edits like any workflow; a folder that arrives with its own files gets none. A session of a category
+  runs the workflow whose `default_for` lists it, else the workspace's file named after the category, else
+  Ostra's default, so a workspace missing a copy still runs. A workflow named after a category keeps that
+  `base`. `extends = "ostra:<base>"` names Ostra's default even where the workspace has a copy. Settings lists
+  the defaults the workspace has no copy of and adds them on request (`POST .../workflows/defaults`), as a save
+  made in Ostra (Rule A1).
+
+### 10.10 Plugins
+
+A plugin adds agents, workflow stage logic, whole workflows, and transform functions to Ostra in Rust code,
+through the `ostra-sdk` crate. It runs in one of two ways:
+
+- **Built in.** A binary built on `ostra-server` passes its plugins to `ostra_server::cli::main_with`, and they
+  serve every workspace. The `ostra` binary passes none.
+- **As a program.** A workspace lists it under `[[plugins]]` with `name`, `command`, optional `env`, `enabled`,
+  and `timeout_secs`. Ostra starts the program in the workspace folder and speaks newline-delimited JSON-RPC with
+  it on stdio (`initialize`, `stage/decide`, `agent/run`; the plugin calls back `host/tool` and
+  `host/complete`; Ostra also asks `result/handle` for a result of the plugin's own contract and
+  `transform/run` for one of its transform functions; the plugin saves checkpoints with `host/checkpoint`).
+  `ostra_sdk::stdio::serve` is the program's side.
+
+Rules:
+
+- **PL1.** A plugin program starts only while the workspace's folder file is approved (Rule A1): `[[plugins]]`,
+  the custom agent files, and the workflow files are part of the hash the user approves, so a folder that arrives
+  with its own agents, workflows, or plugins runs none of them until then. A program restarts when its entry
+  changes, and a program that does not start or stops is a settings issue.
+- **PL2.** A plugin's agent with a `prompt` runs on a model like a markdown agent. One without a prompt is
+  programmatic: the plugin's `run_agent` does its work in code. Each tool it calls passes the same policy,
+  sandbox, and permission asks as a model's call, only the tools its capabilities give it are available, its
+  model calls run on the agent's route and count toward the run's usage, it may make at most 2,000 calls, and its
+  result is checked against the agent's submit schema. A programmatic agent that pauses for a message waits
+  alive, like a harness run. The core keeps the submit struct of each built-in result contract, and
+  `ostra_sdk::contracts` ties each to its struct (`ContractType`), so a `ContractAgent` returns the struct, and
+  `to_submit` runs the engine's own check (`validate_submit_with`). A typed agent of a built-in contract binds in
+  built-in stages like any agent (Rule WF8).
+- **PL3.** A workflow stage `plugin = "<plugin>:<stage>"` is driven by the plugin's `decide_stage`, one decision
+  at a time: run an agent of the workspace (with instructions), pass, fail, or ask the user. Ostra asks again
+  each time a run it started ends and after each answer at the stage's gate, and records every decision as
+  `StageDecided`, so the fold never calls the plugin. A run's verdict informs the plugin and decides nothing. A
+  decision to run beyond `max_rounds` counts as a failure, and a plugin that cannot decide counts as one too.
+- **PL4.** Ostra's own agents and default workflows are the standard plugin `ostra`, written with `ostra-sdk`
+  like any other plugin in its own crate (`crates/ostra-standard`): it reads each agent's files with the
+  SDK's definition parser, offers each default workflow (Rule WF9) as one of its workflows, and sets nothing else, so its agents' contracts, grants, scopes, and briefs are data any agent can declare. No
+  other plugin may take the name. Its agents keep the built-in names, which is how a run of one is named, and
+  are the default for every contract a built-in stage reads (Rule WF8). The built-in stages are the standard
+  plugin's pipeline (`crates/ostra-default-plugin`), which implements the engine's `Pipeline` trait in process:
+  its own state in each session (`SessionState::ext`), the fold of the events its stages read, the planning of
+  each built-in stage, its own steps (`Step::Pipeline`) and their effects, the judges and the YOLO answers, the
+  checks of gate answers and of submits (`check_submit`, which executors reach through
+  `ExecutionHost::check_submit`), and the session views. The same crate holds the spawn factory
+  (`AgentsFactory`, which the server gives as `Services::factory`). The engine gets the pipeline from
+  `Services::pipeline`, depends on no part of the standard plugin, and writes the book itself (Rule B5). The
+  fold stays a function of the log, because the pipeline is deterministic code that never runs over stdio.
+- **PL5.** A plugin may define result contracts of its own (`contracts`, each a name and a schema). An agent that
+  returns one submits against that schema, and when its run ends the engine asks the plugin's `handle_result` for
+  the outcome (`Step::HandleResult`), records it as `ResultHandled`, and only then lets anything read the run: a
+  custom stage applies the outcome as its verdict, a plugin stage sees it with the run, and a helper's starter
+  gets it as the result message. A plugin that cannot handle the result yields a `fail` outcome.
+  A plugin declares a typed contract with `ostra_sdk::contracts::contract_def`, reads results as structs with
+  `SubmitExt::submit_as` and `StageViewExt`, and handles them with a `ResultHandler`.
+- **PL6.** A plugin may build workflows in code (`workflows`, each a name and a workflow in the shape of a
+  workflow file, written with `ostra_sdk::workflow::{Workflow, Node}`). Each is named `<plugin>:<name>`: a session
+  names it like any workflow, another workflow extends it, and it may extend `ostra:<base>` or another plugin
+  workflow. It runs only when named, never as a category's default. The console lists it with its plugin and
+  opens it in the builder read only, because its source is code; a new workflow can start from it, and a save
+  under its name is refused. A plugin workflow that cannot run is a settings issue under `plugins`.
+- **PL7.** A plugin may run transform functions in code (`transforms`, each declared like Ostra's with typed
+  inputs, arguments, and output, written with `ostra_sdk::workflow::TransformFn`, and run by
+  `Plugin::transform`). A node calls one as `transform = "<plugin>:<name>"`; it is checked at save time and typed
+  in the data flow (Rules WB2 and WB6) like Ostra's, and listed in the palette under its plugin. The runner calls
+  the plugin and records the output or error in `NodeRan`, so the fold never calls it; a resolved workflow
+  records what each plugin function it calls takes and gives (`WorkflowDef.plugin_transforms`). A composite
+  (Rule WB7) cannot call one, because a composite runs inside Ostra in one step.
+- **PL8.** A plugin keeps its working metadata in the session as checkpoints: keys of its own with JSON values,
+  saved through the `Checkpoints` that every stage decision, result handler, and programmatic run receives, and
+  recorded as `PluginCheckpoint` events, so they survive the plugin program and Ostra. Each call reads the
+  plugin's checkpoints in the session, and nothing else reads them: a save decides nothing. A program that stops
+  during a call starts again and is asked again, at most twice per call; a programmatic run continues under the
+  same execution with `resumed` set. Checkpoints are bounded: 256 keys, 64 KiB per value, 5,000 saves per plugin
+  and session.
+
+### 10.11 Workflow builder
+
+The Workflow builder edits a workflow as a diagram: nodes and the edges between them, where each edge is an
+`after` entry, and a node may carry conditions. Besides built-in stages, agents, and plugin stages, two node
+kinds run inside the engine with no agent, and any node may read what earlier nodes produced. Together they let
+a workflow branch on results and reshape data between steps.
+
+```toml
+[[stage]]
+id = "high"
+transform = "filter"                     # one of Ostra's transform functions
+after = ["audit"]
+inputs = { items = "audit.findings" }    # name = "<node>.<path>"
+args = { field = "data.risk", op = "eq", to = "high" }
+
+[[stage]]
+id = "triage"
+prompt = "Group the findings by the fix they need."   # a prompt node
+tier = "fast"
+after = ["high"]
+inputs = { findings = "high.output" }
+when = [{ ref = "high.output", op = "not_empty" }]   # runs only when this holds
+output_schema = { type = "object", required = ["groups"], properties = { groups = { type = "array" } } }
+
+[layout]                                 # where the builder draws each node; the engine never reads it
+high = [320.0, 120.0]
+```
+
+Rules:
+
+- **WB1.** The builder reads a workflow with every node written out (`WorkflowFile::from_def`): `extends`,
+  `remove`, `before`, and the top-level `[agents]` are applied, so a save writes the whole graph. A save is
+  checked before anything is written: the workflow must resolve and run (Rules WF2, WF7), give no category two
+  default workflows, and break no workflow that extends it; otherwise it is refused with the problems. A save
+  keeps an approved workspace approved and a waiting one waiting (Rule A1). `[layout]` holds node positions.
+  `POST .../workflows/<name>/check` returns what a save would be refused for without saving, so the builder
+  checks the graph while the user edits and marks the nodes the problems name.
+  The palette (`GET .../builder`) lists the 9 built-in stages with what each reads, the plugin stages, the
+  transform functions with their typed inputs and arguments, the condition operators, and the tiers; agents
+  come from the workspace's agent list.
+- **WB2.** A transform node (`transform = "<function>"`) runs one of Ostra's typed functions in the engine:
+  `pick`, `count`, `filter`, `map`, `concat`, `unique`, `sort`, `group_count`, `sum`, `compare`, `all`, `any`,
+  `not`, `merge`, `template`, `constant`, and `findings`. Each declares its inputs, its arguments with their JSON
+  types, and its output type, and a node that misses a required one, names an unknown one, or gives an argument
+  of the wrong type is refused at save time. The planner emits `Step::RunNode`; the runner runs the function and
+  records `NodeRan` with the output or the error, so the fold never runs code.
+- **WB3.** A prompt node (`prompt = "..."`) makes one model call through the judge path on its `tier` (default
+  `balanced`) and `effort` (default `medium`), with the node's inputs as JSON and a forced answer matching its
+  `output_schema`, which must be an object schema. An answer that does not match is retried once, then fails
+  the node. Its cost is recorded in `NodeRan` and counts toward the session budget, and a budget gate holds it
+  like a spawn (pattern 8). A failed transform or prompt node follows its `on_fail` like an agent's `fail`
+  verdict (Rule WF5); a retry after a gate gives the prompt the user's guidance.
+- **WB4.** A reference is `<node>.<path>`: `audit.verdict`, `audit.data.risk`, `count.output`,
+  `audit.findings.0.file`, `session.track`, or `scope.project`. An agent or plugin node's value is its submit
+  with `output` set to its `data`; a transform or prompt node's is `{verdict: "pass", output}`; a built-in
+  stage's is the facts it settled (research documents, track, spec file, stakes, master plan, phase count,
+  the closing stage's `docs`, the book stage's `book`); a skipped node's is null. In the default workflows,
+  `closing.docs` is a boolean from a project instance (docs chosen and no open BLOCKER) and the list of those
+  projects from anywhere else, and `docs.book` is the ID of the book the session wrote. A node that runs per project or phase reads a node of the same scope as its own
+  instance, and from anywhere else as the list of all instances. A node may read only nodes it waits for,
+  directly or through others. An agent's spawn lists its inputs (`Inputs:`), and a plugin stage's view carries
+  them.
+- **WB5.** `when` lists conditions (`ref`, `op`, and `value` for the operators that take one: `eq`, `ne`, `gt`,
+  `ge`, `lt`, `le`, `contains`, `in`; `exists`, `empty`, `not_empty`, `truthy`, `falsy` take none), all of which
+  must hold, or one with `when_mode = "any"`. Once the nodes a node waits for are done, a node whose conditions
+  do not hold is skipped (`StageSkipped`) and counts as done, so branches join again. Built-in stages take no
+  conditions, inputs, or arguments, because they always run on their own rules.
+- **WB6.** Data is checked before it flows. Each node's value has a shape, as a JSON Schema: an agent's submit with
+  its `data_schema` as `data` and `output`, a transform's declared output kind (`filter`, `sort`, and `unique` keep
+  the shape of their items), a prompt node's `output_schema`, a built-in stage's facts, and `session` and `scope`;
+  a node read across scopes is a list of its instances. Every input and condition reference is followed through
+  these shapes when a workflow is checked (`check_runnable`): a field the shape does not declare, a field read on
+  a list or a text, and an input of a transform wired from a value of another kind than it takes are refused with
+  the fix. A shape that declares nothing (a plugin stage's data, an agent without `data_schema`) accepts any path.
+- **WB7.** A workspace builds its own transform functions from others in `.ostra/transforms/<name>.toml`:
+  typed `[[input]]` and `[[arg]]` entries, `[[step]]` entries that each run one function (Ostra's or another
+  composite) in order, reading the function's inputs as `input.<name>` and earlier steps as `<step>.output`, with a
+  string argument `"$<name>"` taking the function's argument, and `output` naming the step whose output it
+  returns. A composite is listed and used like any transform, and is refused when it does not check: an unknown
+  function, an input or step that does not exist or comes later, an undeclared argument, a call back to itself,
+  more than 32 steps, or a name Ostra's functions hold. Calls nest at most 8 deep. A resolved workflow records
+  every composite it reaches (`WorkflowDef.functions`), so a session runs the version it started with. The files
+  are part of the hash the user approves (Rule A1), agents cannot write them, and a save or delete is refused
+  when it would break a workflow or function that uses it (`GET`, `PUT`, `DELETE .../transforms/<name>`).
 
 ## 11. Sessions and resume
 
@@ -1032,8 +1375,8 @@ Memory stays in each project's `.ostra/memory/knowledge.sqlite3`, using `UC/mcp/
 
 - **Server restart:** replay events. Executions left `running` become `interrupted`, and the engine re-runs
   each with the same spawn block. The implementer resumes from its progress log.
-- **Native execution:** continue from `messages`. A run that waits for another subagent's answer (Rule H2) is
-  resumed the same way when the answer arrives, and a pair-loop round continues the previous run's messages
+- **Native execution:** continue from `messages`. A run that waits for a message (Rule SM3) is
+  resumed the same way when the message arrives, and a pair-loop round continues the previous run's messages
   (Rule H5).
 - **Harness execution:** open the harness's resume command with the stored native session id in a new PTY.
 - **Pause:** the user can pause a session, for example when a provider quota runs out, and continue it later
@@ -1054,9 +1397,20 @@ Each workspace opens as one console, laid out like a code editor:
 ![The workspace overview: the Sessions tree on the left, the New task form, and the session list](docs/images/console/workspace.png)
 
 
-- **Title bar.** The workspace menu (switch workspace; Overview, Cost with this week's spend, Settings, Memory;
-  New workspace; Add project; Run the setup guide again), breadcrumbs for the open resource, a search field that
-  opens ⌘K, and toggles for the left dock and the quick-question dock.
+- **Title bar.** The workspace menu (switch workspace; Overview, Cost with this week's spend, Settings, Memory,
+  Skills, Documentation, Agents, Workflows; New workspace; Add project; Run the setup guide again), breadcrumbs
+  for the open resource, a search field that opens ⌘K, and toggles for the left dock and the quick-question dock.
+- **Agents** (`/w/<ws>/agents`, Rules AG1 to AG3) lists every agent by source with a filter, shows the selected
+  agent's definition, routes, schemas, rendered prompt, and the workflow nodes that use it, edits and deletes
+  workspace agents, duplicates any agent into a new one, and lists the plugins with their state.
+- **Workflows** (`/w/<ws>/workflows`, Rules WB1 and WF9) lists the workflows, offers Ostra's defaults the workspace
+  has no copy of, and starts a new workflow from any base. `/w/<ws>/workflows#<name>` opens the Workflow builder:
+  a palette of every node kind (Ostra's stages not yet in the graph, stage agents, plugin stages, transforms, and
+  a prompt), the diagram, where dragging from one node's right handle to another's left adds an `after` edge and
+  Delete removes the selected node or edge, and an inspector for the selected node's id, agent bindings, prompt,
+  tier, output schema, inputs (with references suggested), arguments, conditions, scope, `on_fail`, and
+  `max_rounds`. Save sends the whole graph with the node positions. Settings shows the same missing-defaults
+  banner.
 - **Left dock with three tabs.** Sessions is a tree: each session, its execution groups (one agent on one
   project, or one agent across the session for spec, plan, their fact-checks,
   and quick answers, which cover every project in scope and carry no project tag), the runs of each group with their live one-line summary, and the session's artifacts. `tree_patch`
@@ -1393,8 +1747,11 @@ ostra/
   crates/
     ostra-core                    ids, domain types, event types
     ostra-sandbox                 profiles, bubblewrap and Seatbelt backends, egress proxy, decoys, per-OS layer
-    ostra-engine                  state machine, scheduler, judge calls, rule implementations
+    ostra-engine                  state machine, scheduler, judge calls, gates, workflows, the Pipeline trait
     ostra-agents                  asset loading, minijinja rendering, spawn structs, repo brief
+    ostra-sdk                     plugin SDK: helpers, typed result contracts, workflow builders, stdio transport
+    ostra-standard                the standard plugin's definitions: agent files and default workflows
+    ostra-default-plugin          the standard plugin's pipeline: built-in stages, judges, views, spawn factory
     ostra-exec-native             agent loop
     ostra-exec-harness            PTY, per-harness launch and adapters, hook bridge, MCP stdio shim
     ostra-tools                   file, search, shell, web, memory, report, skill, submit

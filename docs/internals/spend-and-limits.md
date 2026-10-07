@@ -40,7 +40,7 @@ The two limits are on the General tab of Settings:
 ## Parallel executions: the slot limiter
 
 Each agent execution needs a slot before it starts. The limiter is a counter and a notifier on the engine of
-the workspace, in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs):
+the workspace, in [`crates/ostra-engine/src/runner/driver.rs`](../../crates/ostra-engine/src/runner/driver.rs):
 
 ```rust
 /// Wait for a slot under the workspace's parallelism limit, re-read each time so a settings
@@ -224,14 +224,23 @@ restarts and applies only to that session. Other sessions keep the budget of the
 
 In YOLO mode, the engine answers gates and does not wait for you: approvals, open questions, and failed
 executions. It does not answer the budget gate. Two places enforce this rule, so that one mistake cannot remove
-it. The planner skips budget gates when it emits YOLO answers. Also, `yolo_plan` in
-[`crates/ostra-engine/src/judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) returns no plan for a
-budget gate:
+it. Both places are in the engine, so the rule holds for every pipeline. The planner in
+[`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) emits no YOLO answer for a budget
+gate. Also, `perform_yolo` in
+[`crates/ostra-engine/src/runner/judges.rs`](../../crates/ostra-engine/src/runner/judges.rs) returns before it
+asks the pipeline for a plan:
 
 ```rust
-// Spending more is the user's decision, so YOLO leaves a budget gate open.
-GatePayload::BudgetReached { .. } => return None,
+// Pattern 8: spending more is the user's decision, whatever the pipeline says.
+if st.gates.get(&gate).is_some_and(|g| {
+    matches!(g.payload, ostra_core::event::GatePayload::BudgetReached { .. })
+}) {
+    return Ok(());
+}
 ```
+
+The engine also folds the budget gate itself. `SessionState::apply` records the open gate and the answer in
+`budget_gate` and `budget_raised`, and it does not give the gate to the pipeline.
 
 A YOLO session that gets to its budget waits for you, the same as all other sessions. If push notifications
 are on, the open gate sends a notification.
@@ -319,10 +328,12 @@ because the running server holds the session. In that case, use the board or the
 | --- | --- |
 | `Limits` and their defaults, save-time checks | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
 | Limits kept in the registry (Rule A2) | [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs) |
-| Slot limiter, budget in `plan_ctx`, live cost updates, stop and pause | [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
+| Slot limiter, budget in `plan_ctx`, live cost updates, stop and pause | [`crates/ostra-engine/src/runner/`](../../crates/ostra-engine/src/runner/) |
 | Budget guard and the budget gate | `Planner::push` in [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) |
-| `spent_usd`, `budget_raised`, and how a raise folds | [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
-| YOLO handling of each gate | `yolo_plan` in [`crates/ostra-engine/src/judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) |
-| Init caps | [`crates/ostra-engine/src/init.rs`](../../crates/ostra-engine/src/init.rs) |
+| `spent_usd` and `budget_raised` | [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
+| How a raise folds | `SessionState::budget_answered` in [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
+| YOLO and the budget gate | `Planner::next_steps` in [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) and `perform_yolo` in [`crates/ostra-engine/src/runner/judges.rs`](../../crates/ostra-engine/src/runner/judges.rs) |
+| YOLO handling of each other gate | `yolo_leaves_open` and `yolo_plan` in [`crates/ostra-default-plugin/src/judge_input/yolo.rs`](../../crates/ostra-default-plugin/src/judge_input/yolo.rs) |
+| Init caps | [`crates/ostra-default-plugin/src/init.rs`](../../crates/ostra-default-plugin/src/init.rs) |
 | Prices and the cost formula | [`crates/ostra-core/src/pricing.rs`](../../crates/ostra-core/src/pricing.rs), [`crates/ostra-server/src/prices.rs`](../../crates/ostra-server/src/prices.rs) |
 | Harness transcript usage | [`crates/ostra-exec-harness/src/transcript.rs`](../../crates/ostra-exec-harness/src/transcript.rs) |

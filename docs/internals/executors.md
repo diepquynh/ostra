@@ -625,7 +625,7 @@ half second. On each pass, it checks these conditions:
   - Ostra adds the wait time to the deadline.
 
   Ostra types the message into the terminal, and the checks start again. On the side of the engine
-  (`EngineHost::wait_for_wake` in `crates/ostra-engine/src/runner.rs`), the wait checks the fold for messages
+  (`EngineHost::wait_for_wake` in `crates/ostra-engine/src/runner/host.rs`), the wait checks the fold for messages
   at least every 2 seconds. It also checks each time an event is appended to a session of the workspace, because
   `Inner::append` signals the wait. The wait releases the slot on its first empty check. It gets a slot again
   before it returns. It returns nothing only when the session ended or the run no longer waits. If a run can get
@@ -769,6 +769,6 @@ executions spent. Thus, recovery can resume them (refer to [The event log](event
 | How a harness run ended | `crates/ostra-exec-harness/src/outcome.rs` |
 | Terminal and screen model | `crates/ostra-exec-harness/src/pty.rs` |
 | Live harness cost | `crates/ostra-exec-harness/src/usage_watch.rs`, `transcript.rs` |
-| Running an execution | `crates/ostra-engine/src/runner.rs` |
+| Running an execution | `crates/ostra-engine/src/runner/spawn.rs`, `crates/ostra-engine/src/runner/host.rs` |
 
 Next: [Tools](tools.md) describes each tool that an agent can call.

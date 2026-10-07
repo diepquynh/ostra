@@ -641,6 +641,6 @@ and hosts of the workspace. You set them on the Settings screen, and Ostra keeps
 | Custom agent, workflow, and plugin checks | `agent_issues`, `workflow_issues` in [`crates/ostra-workspace/src/runtime.rs`](../../crates/ostra-workspace/src/runtime.rs), and `plugin::validate` in [`crates/ostra-core/src/plugin.rs`](../../crates/ostra-core/src/plugin.rs) |
 | Machine facts for validation | `WorkspaceHost::environment` in [`crates/ostra-server/src/app.rs`](../../crates/ostra-server/src/app.rs) |
 | Saving settings | `save_settings` in [`crates/ostra-workspace/src/runtime.rs`](../../crates/ostra-workspace/src/runtime.rs) |
-| Route resolution at spawn time | `perform_spawn` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
-| Effort and instructions reaching the agent | [`crates/ostra-engine/src/factory.rs`](../../crates/ostra-engine/src/factory.rs) |
+| Route resolution at spawn time | `perform_spawn` in [`crates/ostra-engine/src/runner/spawn.rs`](../../crates/ostra-engine/src/runner/spawn.rs) |
+| Effort and instructions reaching the agent | [`crates/ostra-default-plugin/src/factory.rs`](../../crates/ostra-default-plugin/src/factory.rs) |
 | The design brief for settings | [HANDOVER section 7](../../HANDOVER.md#7-settings) |

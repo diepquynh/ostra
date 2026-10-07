@@ -21,7 +21,7 @@ The compiler embeds the two files in the `ostra` binary. Thus, a running server 
 from disk. A user cannot replace a built-in definition through a change to a file.
 
 The engine does not refer to the thirteen agents by name. They are the agents of the standard plugin `ostra`
-([`ostra-default-plugin`](../../crates/ostra-default-plugin/src/lib.rs)). This plugin uses `ostra-sdk`, the same
+([`ostra-standard`](../../crates/ostra-standard/src/lib.rs)). This plugin uses `ostra-sdk`, the same
 as each other plugin (Rule PL4). It reads the `agent.toml` and the `prompt.md` of each agent with the definition
 parser of the SDK (`ostra_sdk::definition::parse_toml`). It sets no other value. Thus, all the facts that make
 the reviewer a reviewer are data in its files, in fields that each agent can declare:
@@ -294,7 +294,7 @@ The test suite renders each struct and parses the result. Thus, a struct and its
 ### From planner decision to spawn
 
 The planner of the engine decides *that* an agent must run, and with which inputs. It gives this decision as a
-`SpawnRequest` that holds loose `SpawnInputs`. The spawn factory (`crates/ostra-engine/src/factory.rs`) changes
+`SpawnRequest` that holds loose `SpawnInputs`. The spawn factory of the standard plugin (`crates/ostra-default-plugin/src/factory.rs`) changes
 these inputs into the typed struct of the agent. In the factory, missing data becomes a clear error ("missing
 spec file"), not an unclear prompt. Also, the engine makes these decisions in the factory, and the agent does
 not make them:
@@ -364,7 +364,7 @@ creates the project before the user approves the plan that needs it:
   the base requirements into the context of the first phase in the key.
 - **implementer** holds the `manage_projects` capability by default. Each agent that holds this capability gets
   the same treatment when it runs a phase in a project that the plan names as new (`creates_project` in
-  `runner.rs`, the guard in `guards.rs`). The implementer of that first phase gets a `New project:` spawn line,
+  `runner/spawn.rs`, the guard in `guards.rs`). The implementer of that first phase gets a `New project:` spawn line,
   and its session dir as `Repo root:`. It reads the phase file. Then it calls `ProjectCreate` with these facts
   and no other data (rule O2). After the project exists, Ostra stops the run and initializes the project. Then
   Ostra starts the phase again in the project. If the user denies the call, the implementer returns stuck, with
@@ -373,7 +373,7 @@ creates the project before the user approves the plan that needs it:
 ### What the advisor is given
 
 The engine keeps little context about the cause of a failed step. Thus, the spawn of the advisor carries what
-the step saw and did. `advisor_request` in [`init.rs`](../../crates/ostra-engine/src/init.rs) builds it:
+the step saw and did. `advisor_request` in [`init.rs`](../../crates/ostra-default-plugin/src/init.rs) builds it:
 
 | Line | Content |
 | --- | --- |
@@ -829,7 +829,7 @@ agent has the capability, unless its definition removes it.
 
 The tools never ask you for permission in any mode, because they change no file. But a deny rule can still
 refuse them. The engine checks each call against the fold. It records the call as an event before the tool
-returns (`Engine::coordinate` in `crates/ostra-engine/src/runner.rs`, the checks in
+returns (`Engine::coordinate` in `crates/ostra-engine/src/runner/sessions.rs`, the checks in
 `crates/ostra-engine/src/coord.rs`).
 
 ### Messages are queued
@@ -1047,7 +1047,8 @@ and must submit the two results.
 | Agent definitions and prompts | `assets/agents/<name>/` |
 | Tool names per executor | `assets/tool-mapping.toml` |
 | Loading definitions and rendering prompts | `crates/ostra-agents/src/lib.rs`, `mapping.rs` |
-| The standard plugin of Ostra's own agents and default workflows | `crates/ostra-default-plugin/src/lib.rs` |
+| The standard plugin of Ostra's own agents and default workflows | `crates/ostra-standard/src/lib.rs` |
+| The standard plugin's pipeline: the built-in stages | `crates/ostra-default-plugin/src/` |
 | Definition files (markdown and `agent.toml`) | `crates/ostra-sdk/src/definition.rs` |
 | Custom agents and the catalog | `crates/ostra-agents/src/catalog.rs`, `assets/custom-agent.md` |
 | The agent screen's reads and saves | `crates/ostra-workspace/src/builder.rs` |
@@ -1055,7 +1056,7 @@ and must submit the two results.
 | The custom submit and its `data` check | `crates/ostra-core/src/submit.rs` (`CustomSubmit`), `crates/ostra-core/src/schema_check.rs` |
 | Spawn structs and the block parser, by contract | `crates/ostra-agents/src/spawn.rs` |
 | The repo brief | `crates/ostra-agents/src/brief.rs` |
-| Planner inputs to spawn structs | `crates/ostra-engine/src/factory.rs` |
+| Planner inputs to spawn structs | `crates/ostra-default-plugin/src/factory.rs` |
 | Submit schemas and `validate_submit_with`, by contract | `crates/ostra-core/src/submit.rs` |
 | Submit document checks | `crates/ostra-core/src/doc/check.rs` |
 | Messages: tool inputs and limits | `crates/ostra-core/src/coord.rs` |

@@ -16,11 +16,18 @@ Read [The event log](event-log.md) first, because it explains the source of the 
 
 ## A pure function
 
-The whole planner is one function in `crates/ostra-engine/src/plan.rs`:
+The planner is one function in `crates/ostra-engine/src/plan.rs`:
 
 ```rust
 pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step>
 ```
+
+The engine's planner holds the generic parts: the YOLO answers, the workflow walk, custom and plugin stages,
+transform and prompt nodes, and messages between subagents. The rules of the built-in stages are in the pipeline
+of the standard plugin, split by stage, with track and stakes in `shared.rs` in `crates/ostra-default-plugin/src/planner/`
+([Plugins](plugins.md#the-pipeline)). The planner calls the pipeline (`Pipeline::plan` and
+`Pipeline::builtin_stage`) with the same `Planner`, so both parts push steps into one list. The pipeline is
+deterministic Rust code, so the function stays pure.
 
 The function takes the folded session state and a small context, and returns steps. It reads no files and
 calls no model. It starts no process, writes no event, and reads no clock. If you call it two times with the
@@ -29,9 +36,10 @@ same inputs, you get the same list.
 This design is important for three reasons:
 
 - **The rules are in one place.** Each orchestration rule from HANDOVER section 8.2 and the Ultracode
-  orchestrator is a branch in this file. A comment next to the branch gives its rule ID. Examples are Rule D1
+  orchestrator is a branch of the planner: in `plan.rs` for a generic rule, and in the stage's file of the
+  pipeline for a rule of a built-in stage. A comment next to the branch gives its rule ID. Examples are Rule D1
   "full-track IMPLEMENT always passes through Spec", Rule M2 "one implement pipeline per project", and Rule D9
-  "a failed phase removes its dependents". To find why Ostra did something, read this file.
+  "a failed phase removes its dependents". To find why Ostra did something, read these files.
 - **Models do not control the pipeline.** A model never decides that the spec is good enough for a plan. A
   model never decides that three review passes are enough. The planner decides from the structured data that
   agents submitted. Models only answer the named judgment questions (Classify, Sufficiency, Stakes, and the
@@ -183,6 +191,8 @@ if !s.created || s.is_terminal() || s.paused {
 1. **YOLO first.** In YOLO mode, each open gate gets a `YoloAnswer` step. The exceptions are budget gates, the
    failure gate of an execution that you stopped (Rule P4), and a custom stage that failed in its last round.
    These gates stay open for you. Permission asks also get no step, because the runner allows them first.
+   After the YOLO answers, the planner calls the pipeline (`Pipeline::plan`). The standard pipeline does steps 2
+   to 7 (`session_flow` in `crates/ostra-default-plugin/src/planner/shared.rs`).
 2. **Init sessions** use their own flow: detect, scouts, propose, skill approval, generate skills, and generate
    the inventory.
 3. **A named workflow** gets a `ResolveWorkflow` step first, because its base sets the category (Rule WF1).
@@ -195,19 +205,23 @@ if !s.created || s.is_terminal() || s.paused {
 6. **Explore tasks** spawn in each stage, because a rescue can add a research task in the middle of a build.
 7. **The workflow walk.** QUICK ANSWER keeps its own flow. All other categories walk the stages of their workflow
    in dependency order (`workflow_flow`). A stage runs when all stages in its `after` list are done. A built-in
-   stage calls the same function that the fixed pipeline called (`builtin_stage`):
+   stage goes to the pipeline (`Pipeline::builtin_stage`), which calls the same function that the fixed pipeline
+   called:
    - Research runs `explore_complete`.
    - Track and stakes ask their judges.
    - Spec and plan run `spec_flow` and `plan_flow`.
    - Build runs `phases` and the phase stages.
    - Feedback runs `implementation_review` (Rule F1).
    - Closing runs `closing_stages`.
+   - Book runs `book_flow`: the docs stage of each project that the closing gate chose docs for, then the book
+     write. Without a book stage, closing runs these steps itself.
 
    A custom stage runs its agent or asks its plugin. See [Workflows](workflows.md).
 
    Each agent that a built-in stage spawns comes from `SessionState::agent_for(stage, contract)` (Rules WF8 and
    PL4). This is the agent that the workflow binds to that contract in that stage. If the workflow binds no
-   agent, it is the agent of the standard plugin for the contract (`Standard::default_for`). The planner never
+   agent, it is the agent of the standard plugin for the contract (`Pipeline::default_agent`, which reads
+   `Standard::default_for`). The planner never
    names an agent. A work loop records the contracts of its work and fix runs (`WorkLoop::work` and `fix`), not
    agents. Examples are `implementation`, `prompt`, and `tests`. The fold creates loops at Classify time, before
    Ostra resolves the workflow, so the planner binds the agent when it spawns. Steps outside all built-in stages
@@ -251,7 +265,8 @@ loop and changes it into a step.
 
 ## The runner and the driver loop
 
-The runner (`crates/ostra-engine/src/runner.rs`) does the steps. Each live session has one driver. The driver is
+The runner (`crates/ostra-engine/src/runner/`) does the steps. A step that only the pipeline plans is
+`Step::Pipeline`, and the runner gives it back to the pipeline (`Pipeline::perform`). Each live session has one driver. The driver is
 a Tokio task that runs this loop:
 
 ```rust
@@ -411,17 +426,18 @@ finding. It asserts that no review-cap gate opens. A security block has no cap, 
 (Hard rule 21).
 
 Fixtures are the contract for changes to the engine. A new rule or a changed rule needs a new or changed fixture
-in the same change. The rule ID must be in the section comment of the fixture. It must also be at the line in
-`plan.rs` or `state.rs` that implements the rule. To see what Ostra does in a situation, write the history as a
+in the same change. The rule ID must be in the section comment of the fixture. It must also be at the line in the
+planner or the fold that implements the rule. To see what Ostra does in a situation, write the history as a
 fixture and print `h.summaries()`. This runs the planner without a server or a model.
 
 ### Beyond fixtures
 
 Fixtures test the planner and the fold. Other tests examine the runner around them:
 
-- `crates/ostra-engine/tests/runner.rs` runs a real `Engine` with fake services and executors. Thus, the driver
-  loop, the slots, and the appends are real.
-- `crates/ostra-engine/tests/recover.rs` and `pause.rs` test restart recovery, and pause and continue.
+- `crates/ostra-default-plugin/tests/runner.rs` runs a real `Engine` with the standard pipeline and fake
+  services and executors. Thus, the driver loop, the slots, and the appends are real.
+- `crates/ostra-default-plugin/tests/recover.rs` and `pause.rs` test restart recovery, and pause and continue.
+  These tests are in the plugin crate, because the engine does not depend on the standard plugin.
 - `crates/ostra-server/tests/e2e.rs` runs the full server. A scripted provider acts as each agent.
 
 ## Adding behavior
@@ -442,10 +458,15 @@ Fixtures cannot see such logic, and a restart loses it.
 | What | Where |
 | --- | --- |
 | `next_steps`, `PlanCtx`, `Step`, `key()` | `crates/ostra-engine/src/plan.rs` |
-| Loop state the planner reads (`WorkLoop`, `LoopNext`) | `crates/ostra-engine/src/state.rs` |
-| Driver loop, `perform`, slots, `validate_answer` | `crates/ostra-engine/src/runner.rs` |
-| Spawn parameters from planner inputs | `crates/ostra-engine/src/factory.rs` |
-| The workflow walk (`workflow_flow`, `builtin_stage`, `build_done`, `phase_stages`) | `crates/ostra-engine/src/plan.rs` |
+| The `Pipeline` trait | `crates/ostra-engine/src/pipeline.rs` |
+| The rules of the built-in stages, split by stage, with track and stakes in `shared.rs` | `crates/ostra-default-plugin/src/planner/` |
+| Loop state the planner reads (`WorkLoop`, `LoopNext`) | `crates/ostra-default-plugin/src/data.rs` |
+| Driver loop, `perform`, slots | `crates/ostra-engine/src/runner/driver.rs` |
+| `validate_answer` | `crates/ostra-engine/src/runner/control.rs` |
+| The pipeline's own steps (`OstraStep`) and their effects | `crates/ostra-default-plugin/src/steps.rs`, `crates/ostra-default-plugin/src/pipeline/effects.rs` |
+| Spawn parameters from planner inputs | `crates/ostra-default-plugin/src/factory.rs` |
+| The workflow walk (`workflow_flow`, `phase_stages`) | `crates/ostra-engine/src/plan.rs` |
+| `builtin_stage`, `build_done`, `book_flow` | `crates/ostra-default-plugin/src/planner/` |
 | Custom stage fold and actions | `crates/ostra-engine/src/workflow.rs` |
 | Plugin stage planning and the stage view | `crates/ostra-engine/src/plugin_stage.rs` |
 | Messages in the fold, `wakes_due`, `continuations_due`, `helpers_due` | `crates/ostra-engine/src/coord.rs` |

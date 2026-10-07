@@ -84,11 +84,11 @@ The fold reads the result of a plugin contract only after its plugin handles it:
 
 ## The fold
 
-A session's state is `SessionState::fold(events)` in `crates/ostra-engine/src/state.rs`:
+A session's state is `SessionState::fold(pipeline, id, events)` in `crates/ostra-engine/src/state.rs`:
 
 ```rust
-pub fn fold(id: SessionId, events: &[StoredEvent]) -> Self {
-    let mut s = SessionState::new(id);
+pub fn fold(pipeline: crate::pipeline::PipelineRef, id: SessionId, events: &[StoredEvent]) -> Self {
+    let mut s = SessionState::new(pipeline, id);
     for e in events {
         s.apply(e);
     }
@@ -96,7 +96,12 @@ pub fn fold(id: SessionId, events: &[StoredEvent]) -> Self {
 }
 ```
 
-`apply` is one large `match` on the event kind. It sets the data that the rest of the engine reads:
+`apply` is one large `match` on the event kind. The engine folds the generic events itself: gates, decisions,
+executions, messages, workflow stages, checkpoints, the budget, and pause. For each event that a built-in stage
+reads, `apply` calls the pipeline at the same point (`Pipeline::event`, `started`, `finished`, `decision`,
+`gate_opened`, `gate_answered`). The standard pipeline keeps its state in `SessionState::ext`
+(`OstraState` in `crates/ostra-default-plugin/src/data.rs`), and its fold is in
+`crates/ostra-default-plugin/src/fold/`. Together, the two parts set the data that the planner reads:
 
 - The explore tasks and their research documents.
 - The spec and plan tracks: runs, fact-check passes, pending answers, and approval.
@@ -130,9 +135,9 @@ answer from the original run.
 Thus, the runner records the list in the `params` of the execution when it starts the review:
 
 ```rust
-// crates/ostra-engine/src/runner.rs, perform_spawn
-if matches!(req.purpose, ExecPurpose::Review { .. }) && let Value::Object(map) = &mut params {
-    let ids = profile.as_ref().map(|p| p.auto_fixable_ids()).unwrap_or_default();
+// crates/ostra-default-plugin/src/pipeline/hooks.rs, spawn_params (perform_spawn calls it)
+if matches!(req.purpose, ExecPurpose::Review { .. }) && let Value::Object(map) = params {
+    let ids = profile.map(|p| p.auto_fixable_ids()).unwrap_or_default();
     map.insert(AUTO_FIXABLE_PARAM.into(), serde_json::to_value(ids).unwrap_or_default());
 }
 ```
@@ -140,7 +145,7 @@ if matches!(req.purpose, ExecPurpose::Review { .. }) && let Value::Object(map) =
 The fold reads the list from the event, not from the file:
 
 ```rust
-// crates/ostra-engine/src/state.rs, loop_finished
+// crates/ostra-default-plugin/src/fold/loops.rs, loop_finished
 // Recorded at spawn from the project's Review Rule Set, so the fold stays a pure function
 // of the event log.
 let autofix_ids: BTreeSet<String> = rec.params.get(AUTO_FIXABLE_PARAM) ...
@@ -176,7 +181,8 @@ category, which is the same chain of stages that the pipeline ran before workflo
 
 ## One place appends
 
-Each event goes through one function, `Inner::append` in `crates/ostra-engine/src/runner.rs`. It holds the
+Each event goes through one function, `Inner::append` in `crates/ostra-engine/src/runner/driver.rs`. The
+pipeline's step effects append through `StepHost::append`, which calls the same function. It holds the
 state lock of the session and does five steps in this sequence:
 
 1. **Store.** Write the event to SQLite and get its sequence number.
@@ -235,7 +241,7 @@ planner decides the next step. For the work loop of a phase, the fold sets the n
 re-run (`WorkKind::Rerun`) with the same instructions:
 
 ```rust
-// crates/ostra-engine/src/state.rs
+// crates/ostra-default-plugin/src/fold/loops.rs
 if status == ExecutionStatus::Interrupted {
     // Re-run with the same spawn block (HANDOVER 11.2).
     l.next = match in_flight { LoopNext::Work { instructions, .. } => LoopNext::Work {
@@ -249,7 +255,7 @@ finished. Check the progress log and continue." The implementer writes a progres
 during its work. Thus, a re-run reads the point where the last run stopped, and it does not start the phase
 again. Ostra marks an interrupted spec, plan, EPA, or docs run as a run to do again, and the planner starts it.
 
-`crates/ostra-engine/tests/recover.rs` tests this behavior. The test does these steps:
+`crates/ostra-default-plugin/tests/recover.rs` tests this behavior. The test does these steps:
 
 1. It starts a session whose executor reports $0.50 of usage and then hangs.
 2. It opens the same database from a second `Engine`, as if the first process crashed.
@@ -375,11 +381,13 @@ project, because it is part of the repository and lives longer than one workspac
 | --- | --- |
 | Event and gate types | `crates/ostra-core/src/event.rs` |
 | The fold and `SessionState` | `crates/ostra-engine/src/state.rs` |
+| The fold of the built-in stages and `OstraState` | `crates/ostra-default-plugin/src/fold/`, `crates/ostra-default-plugin/src/data.rs` |
 | Messages in the fold, and old coordination events | `crates/ostra-engine/src/coord.rs` |
 | Workflow and plugin stage fold | `crates/ostra-engine/src/workflow.rs`, `crates/ostra-engine/src/plugin_stage.rs` |
-| `Inner::append`, `recover`, pause, stop | `crates/ostra-engine/src/runner.rs` |
+| `Inner::append` | `crates/ostra-engine/src/runner/driver.rs` |
+| `recover`, pause, stop | `crates/ostra-engine/src/runner/sessions.rs`, `crates/ostra-engine/src/runner/control.rs` |
 | Storage of events | `crates/ostra-store/src/workspace/events.rs` |
 | WebSocket routing of events | `crates/ostra-server/src/ws.rs` |
-| Restart and pause tests | `crates/ostra-engine/tests/recover.rs`, `crates/ostra-engine/tests/pause.rs` |
+| Restart and pause tests | `crates/ostra-default-plugin/tests/recover.rs`, `crates/ostra-default-plugin/tests/pause.rs` |
 
 Next: [The planner](planner.md) tells how Ostra decides what to do with the state from the fold.

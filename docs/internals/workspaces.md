@@ -630,7 +630,7 @@ registered workspace, because the command line does not know which workspace hol
 | `workspace.db` and its `.gitignore` | [`crates/ostra-store/src/workspace/mod.rs`](../../crates/ostra-store/src/workspace/mod.rs) |
 | All workspace paths | [`crates/ostra-core/src/paths.rs`](../../crates/ostra-core/src/paths.rs) |
 | `WorkspaceSettings`, `seeded`, `validate_workspace` | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
-| Execution slots | `acquire_slot` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
+| Execution slots | `acquire_slot` in [`crates/ostra-engine/src/runner/driver.rs`](../../crates/ostra-engine/src/runner/driver.rs) |
 | Workspace artifacts: paths, tags, listing | [`crates/ostra-core/src/artifacts.rs`](../../crates/ostra-core/src/artifacts.rs) |
 | Workspace artifacts: upload, save, hide, delete | [`crates/ostra-server/src/artifacts.rs`](../../crates/ostra-server/src/artifacts.rs) |
 | The design brief | [HANDOVER section 6](../../HANDOVER.md#6-workspaces-and-projects) |

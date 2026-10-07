@@ -12,8 +12,8 @@ of stages. A plugin gives the parts that need code:
 
 This page covers these topics:
 
-- The `ostra-sdk` crate.
-- The standard plugin, which holds the agents of Ostra.
+- The `ostra-sdk` crate, and its typed result contracts.
+- The standard plugin, which holds the agents of Ostra and runs the built-in stages.
 - The two ways to run a plugin, and the stdio protocol.
 - Programmatic agents, plugin stages, and plugin contracts.
 - Plugin workflows and transform functions.
@@ -76,12 +76,61 @@ same as a custom agent: routes, the Settings list, `SendMessage` helpers, workfl
 bindings. An agent can request each capability, which includes the document, ledger, and project-management
 grants, because no capability is reserved ([Agents](agents.md#result-contracts-and-grants)).
 
+## Typed result contracts
+
+A result contract is a struct in `ostra-core`, for example `CodeReviewerSubmit` for `review`. The core keeps these
+structs, because more than one part reads each: the engine, a built-in stage, a plugin, and the console. The
+module `ostra_sdk::contracts` ([`crates/ostra-sdk/src/contracts.rs`](../../crates/ostra-sdk/src/contracts.rs))
+ties each contract to its struct, so a plugin reads and writes results as Rust values, not as JSON:
+
+```rust
+pub trait ContractType: Send + Sync + 'static {
+    type Submit: Serialize + DeserializeOwned + Send + Sync;
+    fn contract() -> Contract;
+    fn schema() -> Value { /* the schema of the core struct */ }
+    fn parse(submit: &Value) -> Result<Self::Submit, String> { /* ... */ }
+    fn to_submit(submit: &Self::Submit, schema: &Value) -> Result<Value, String> { /* ... */ }
+}
+```
+
+The module has one type for each built-in contract: `Research`, `Spec`, `FactCheck`, `Plan`, `Implementation`,
+`Review`, `PathAnalysis`, `Tests`, `Prompt`, `Advice`, `Answer`, `Setup`, and `Stage`. `documentation` has no
+type, because its struct belongs to the docs stage of the standard plugin. A plugin implements `ContractType` for
+each contract of its own, and `contract_def::<C>(description)` makes the `PluginContractDef` of its manifest.
+
+`to_submit` runs the same check as the engine (`validate_submit_with`). Thus, a typed agent that returns a bad
+result fails in the plugin with the message that a model gets.
+
+The module gives these parts:
+
+- `ContractAgent`: a programmatic agent whose `run` returns the struct of its contract. `TypedAgents` lists such
+  agents: `definitions()` gives each agent with `returns` set from its type, for the manifest, and `run(name, ...)`
+  runs one from `Plugin::run_agent`. `PluginAgentExt::returns_type::<C>()` sets `returns` on a `PluginAgent`.
+- `SubmitExt::submit_as::<C>()` reads the submit of a `StageRunView` or a `ResultView` as the struct of `C`.
+  `StageViewExt::submits_of::<C>()` and `last_submit_of::<C>()` read the runs of a plugin stage. `handled(run)`
+  reads the outcome that the handler of the plugin gave a run.
+- `ResultHandler`: a handler for the results of a contract of the plugin, which gets each submit as its struct.
+  `handle_result(handler, result, checkpoints)` calls it from `Plugin::handle_result`.
+
+A typed agent that returns a built-in contract fills the same contract as the agent of Ostra. Thus, a workflow can
+bind it to a built-in stage (Rule WF8). The example
+[`crates/ostra-sdk/examples/typed_review.rs`](../../crates/ostra-sdk/examples/typed_review.rs) has a programmatic
+reviewer that returns `review`, a contract of its own with a typed handler, and a stage that reads its runs as
+structs.
+
 ## The standard plugin
 
-The agents and default workflows of Ostra are also a plugin: the standard plugin `ostra` (Rule PL4). The plugin
-is `Standard` in its own crate, [`crates/ostra-default-plugin/src/lib.rs`](../../crates/ostra-default-plugin/src/lib.rs).
-It uses `ostra-sdk`, and it is the reference for a new plugin. Its manifest lists the 13 built-in agents and the
-9 default workflows. It lists no stages or contracts, because the built-in stages are rules of the planner. It
+The agents and default workflows of Ostra are also a plugin: the standard plugin `ostra` (Rule PL4). Two crates
+hold it:
+
+- `ostra-standard` holds its definitions: `Standard` in
+  [`crates/ostra-standard/src/lib.rs`](../../crates/ostra-standard/src/lib.rs), the agent files, and the
+  default workflows.
+- `ostra-default-plugin` exports the definitions again and adds the pipeline: the code of the built-in stages
+  (see [The pipeline](#the-pipeline), below).
+
+`Standard` uses `ostra-sdk`, and it is the reference for a new plugin. Its manifest lists the 13 built-in agents
+and the 9 default workflows. It lists no stages or contracts, because the pipeline runs the built-in stages. It
 makes each agent from its embedded `assets/agents/<name>/agent.toml` and `prompt.md` files with `parse_toml`,
 and it sets nothing more:
 
@@ -106,6 +155,45 @@ a bare `<base>` when the workspace has no copy of it ([Workflows](workflows.md#d
 the standard plugin has no defaults. Thus, the server and the workspace add the standard plugin to each set that
 they make (`add_workflows`). A workspace `[[plugins]]` entry cannot have the name `ostra`, so a plugin program
 cannot take the name of the standard plugin.
+
+### The pipeline
+
+The built-in stages of Ostra (research, track, spec, stakes, plan, build, feedback, closing, and book) are not
+plugin stages. They are the pipeline of the standard plugin: `OstraPipeline` in
+[`crates/ostra-default-plugin/src/pipeline/`](../../crates/ostra-default-plugin/src/pipeline/), which implements
+the `Pipeline` trait of the engine ([`crates/ostra-engine/src/pipeline.rs`](../../crates/ostra-engine/src/pipeline.rs)).
+The engine gets the pipeline from `Services::pipeline`. The server gives `ostra_default_plugin::pipeline()`, and
+each session state carries it.
+
+A plugin stage decides one step at a time over stdio, and Ostra records each decision as an event. The pipeline
+runs in the process instead. It folds its own state and plans its own steps, the same as the engine:
+
+- The engine keeps the state of the pipeline in each session as an opaque box, `SessionState::ext`. The
+  standard pipeline keeps `OstraState` in it
+  ([`crates/ostra-default-plugin/src/data.rs`](../../crates/ostra-default-plugin/src/data.rs)): the research
+  tasks, the spec and plan tracks, the phases and their loops, and each project's closing and docs track.
+- The fold calls the pipeline for each event that the built-in stages read
+  ([`fold/`](../../crates/ostra-default-plugin/src/fold/)). The fold stays a pure function of the log, because
+  the pipeline is deterministic Rust code.
+- The planner calls `Pipeline::builtin_stage` for each built-in node of the workflow
+  ([`planner/`](../../crates/ostra-default-plugin/src/planner/), split by stage, with track and stakes in `shared.rs`). A step that only the
+  pipeline plans is `Step::Pipeline`, with a key and a summary from the pipeline. The runner hands it back to
+  `Pipeline::perform` ([`pipeline/effects.rs`](../../crates/ostra-default-plugin/src/pipeline/effects.rs)), for
+  example the format command, an autofix, or the docs scan.
+- A spawn's `SpawnInputs` holds the generic fields. The pipeline's own inputs travel in `SpawnInputs::extra`, as
+  `OstraInputs` ([`inputs.rs`](../../crates/ostra-default-plugin/src/inputs.rs)), and the spawn factory
+  (`AgentsFactory` in [`factory.rs`](../../crates/ostra-default-plugin/src/factory.rs)) reads them.
+- The judges, their inputs, the YOLO answers, and the checks of gate answers are in the pipeline
+  ([`judge.rs`](../../crates/ostra-default-plugin/src/judge.rs),
+  [`judge_input/`](../../crates/ostra-default-plugin/src/judge_input/)).
+- `Pipeline::check_submit` adds checks to a submit at submit time, after the shape check. The executors call it
+  through `ExecutionHost::check_submit`. The standard pipeline checks a `documentation` submit there.
+- The board, the run labels, and the artifacts of a session come from the pipeline
+  ([`view/`](../../crates/ostra-default-plugin/src/view/)).
+
+The engine performs the book write itself (`Step::WriteBook`, Rule B5), from the update that
+`Pipeline::book_update` gives. The engine depends on no part of the standard plugin. The tests of a real engine
+with the standard pipeline are in [`crates/ostra-default-plugin/tests/`](../../crates/ostra-default-plugin/tests/).
 
 ## Two ways to run
 
@@ -438,7 +526,8 @@ Over stdio, a request carries the checkpoints from the time that Ostra sent it. 
 that copy and its own saves. If two calls of one plugin run at the same time, they do not see the later saves of
 each other.
 
-The engine part is `SessionCheckpoints` in [`runner.rs`](../../crates/ostra-engine/src/runner.rs). It reads the
+The engine part is `SessionCheckpoints` in [`runner/`](../../crates/ostra-engine/src/runner/) (the struct in
+`mod.rs`, its `Checkpoints` impl in `driver.rs`). It reads the
 state of the session, checks the write, and appends the event. A checkpoint decides nothing, because no planner
 rule reads one. Thus, a save never starts, stops, or retries anything. The `pl8_*` fixtures in
 [`tests/conformance/main.rs`](../../tests/conformance/main.rs) test this.
@@ -585,11 +674,14 @@ blocker, and you decide whether the session continues without these tests. To ru
 | `WorkflowSet::add_plugin`, plugin workflow resolution | [`crates/ostra-core/src/workflow.rs`](../../crates/ostra-core/src/workflow.rs) |
 | `PluginTransforms`, `function_info_with` | [`crates/ostra-core/src/transform.rs`](../../crates/ostra-core/src/transform.rs) |
 | Agent files: `parse_markdown`, `parse_toml` | [`crates/ostra-sdk/src/definition.rs`](../../crates/ostra-sdk/src/definition.rs) |
-| The standard plugin, `Standard::default_for`, the default workflows | [`crates/ostra-default-plugin/src/lib.rs`](../../crates/ostra-default-plugin/src/lib.rs) |
+| Typed result contracts: `ContractType`, `ContractAgent`, `TypedAgents`, `SubmitExt`, `StageViewExt`, `ResultHandler` | [`crates/ostra-sdk/src/contracts.rs`](../../crates/ostra-sdk/src/contracts.rs) |
+| The standard plugin's definitions: `Standard`, `Standard::default_for`, the default workflows | [`crates/ostra-standard/src/lib.rs`](../../crates/ostra-standard/src/lib.rs) |
+| The `Pipeline` trait, `PipelineBox`, `Step::Pipeline` | [`crates/ostra-engine/src/pipeline.rs`](../../crates/ostra-engine/src/pipeline.rs), [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) |
+| The standard pipeline: `OstraPipeline`, its state, fold, planner, judges, views, and step effects | [`crates/ostra-default-plugin/src/`](../../crates/ostra-default-plugin/src/) |
 | The stdio transport, `serve`, `StdioPlugin` | [`crates/ostra-sdk/src/stdio.rs`](../../crates/ostra-sdk/src/stdio.rs) |
 | `PluginHost`, `ProgramExecutor`, the `Restart` of a run, `contracts`, `infos` | [`crates/ostra-server/src/plugins.rs`](../../crates/ostra-server/src/plugins.rs) |
 | The restart of a plugin during a stage decision, result handler, or transform: `call_plugin` | [`crates/ostra-server/src/services.rs`](../../crates/ostra-server/src/services.rs) |
-| The save of checkpoints into the log: `SessionCheckpoints` | [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
+| The save of checkpoints into the log: `SessionCheckpoints` | [`crates/ostra-engine/src/runner/`](../../crates/ostra-engine/src/runner/) |
 | `main_with` | [`crates/ostra-server/src/cli.rs`](../../crates/ostra-server/src/cli.rs) |
 | Example plugins: `release_gate`, and `web_dev` with its prompt and report summarizer | [`crates/ostra-sdk/examples/`](../../crates/ostra-sdk/examples/) |
 | Programmatic runs | [`crates/ostra-exec-native/src/program.rs`](../../crates/ostra-exec-native/src/program.rs) |

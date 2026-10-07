@@ -744,7 +744,7 @@ the session, the session ends. The fixtures `p3_three_containment_signals_pause_
 `p3_decoy_opens_are_signals_like_the_others`, `p3_a_resumed_execution_counts_signals_from_zero`, and
 `p3_two_signals_or_signals_spread_over_executions_do_not_pause` test the rule. The test
 `containment_signals_pause_the_session` in
-[`crates/ostra-engine/tests/pause.rs`](../../crates/ostra-engine/tests/pause.rs) runs it on a real engine.
+[`crates/ostra-default-plugin/tests/pause.rs`](../../crates/ostra-default-plugin/tests/pause.rs) runs it on a real engine.
 
 ## What YOLO changes, and what it does not
 
@@ -781,7 +781,7 @@ each check (`policy.set_yolo(host.yolo())` in both executors). So the change app
 | Permission rule syntax and matching | [`crates/ostra-policy/src/perms.rs`](../../crates/ostra-policy/src/perms.rs) |
 | Containment signals and the classifier | [`crates/ostra-core/src/containment.rs`](../../crates/ostra-core/src/containment.rs) |
 | Decoy credential files, their inotify watch, and the macOS log reader | [`crates/ostra-sandbox/src/decoy.rs`](../../crates/ostra-sandbox/src/decoy.rs), [`sys/linux/inotify.rs`](../../crates/ostra-sandbox/src/sys/linux/inotify.rs), [`sys/macos/log.rs`](../../crates/ostra-sandbox/src/sys/macos/log.rs) |
-| Recording signals and the auto-pause | `EngineHost::record_signal` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs), the fold in [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
+| Recording signals and the auto-pause | `EngineHost::record_signal` in [`crates/ostra-engine/src/runner/host.rs`](../../crates/ostra-engine/src/runner/host.rs), the fold in [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
 | Guard and permission fixtures | [`crates/ostra-policy/tests/policy.rs`](../../crates/ostra-policy/tests/policy.rs) |
 | Harness payload adapters | [`crates/ostra-exec-harness/src/adapters/`](../../crates/ostra-exec-harness/src/adapters/mod.rs) |
 | Hook bridge, fail-closed handling | [`crates/ostra-exec-harness/src/bridge.rs`](../../crates/ostra-exec-harness/src/bridge.rs) |

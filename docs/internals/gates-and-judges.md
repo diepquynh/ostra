@@ -25,8 +25,13 @@ answers:
 - An open-questions answer that leaves a question blank.
 - A rejection of a spec or plan with no feedback ("Say what to change.").
 
-A valid answer becomes a `GateAnswered` event. The fold in [`state.rs`](../../crates/ostra-engine/src/state.rs)
-(`on_gate_answered`) changes it into new state, and the planner acts on that state. An answer with content, for
+A valid answer becomes a `GateAnswered` event. The engine's fold in
+[`state.rs`](../../crates/ostra-engine/src/state.rs) records the answer on the gate and gives it to the pipeline
+(`Pipeline::gate_answered`). The standard pipeline's `on_gate_answered`
+([`fold/gates.rs`](../../crates/ostra-default-plugin/src/fold/gates.rs)) changes it into new state, for each
+gate kind but one, and the planner acts on that state. The budget gate never goes to the pipeline: the engine
+folds it itself, because the session budget belongs to the engine (see
+[Spend and limits](spend-and-limits.md)). An answer with content, for
 example the answer to a question or any text, goes to a judge first. The judge decides where the answer goes
 (Rule J1, [below](#every-answer-goes-through-a-judge-first)).
 
@@ -286,7 +291,8 @@ YOLO, the policy changes each ask into an allow, and the runner records an `Allo
 YOLO, the runner also allows each permission ask that waits.
 
 For each gate, `judge_input::yolo_plan` in
-[`judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) returns one of three things:
+[`judge_input/yolo.rs`](../../crates/ostra-default-plugin/src/judge_input/yolo.rs) returns one of three things.
+The engine asks it through `Pipeline::yolo_plan`:
 
 - A fixed answer with a stated reason.
 - A call to the YOLO-answer judge, with a JSON schema for the answer of that gate.
@@ -364,8 +370,12 @@ Judges are the only places where a model makes an orchestration decision. Each j
 
 - A short prompt in [`assets/judges/`](../../assets/judges/).
 - An output struct with a JSON schema in
-  [`crates/ostra-engine/src/judge.rs`](../../crates/ostra-engine/src/judge.rs).
-- An input builder in `judge_input.rs` that decides exactly what the judge sees.
+  [`crates/ostra-default-plugin/src/judge.rs`](../../crates/ostra-default-plugin/src/judge.rs).
+- An input builder in [`judge_input/`](../../crates/ostra-default-plugin/src/judge_input/) that decides
+  exactly what the judge sees.
+
+The judges belong to the standard pipeline. The engine makes the judge call (`Step::Judge`, `Services::judge`)
+and asks the pipeline for the input and the schema (`Pipeline::judge_input`, `Pipeline::judge_schema`).
 
 Judges run on the `judge` route, which resolves to the `advanced` tier by default. The engine stores each
 decision as an event with its input summary and reason. The board shows it as "Ostra chose X because Y".
@@ -648,9 +658,9 @@ change breaks.
 
 | To see | Read |
 | --- | --- |
-| Where each gate opens | `Planner` methods in [`plan.rs`](../../crates/ostra-engine/src/plan.rs): `spec_flow`, `plan_flow`, `loop_steps`, `closing_stages`, `exec_failed_gate`, `push` for the budget |
-| What an answer does | `on_gate_answered` in [`state.rs`](../../crates/ostra-engine/src/state.rs) |
-| What a judge decision does | `on_decision` in `state.rs` |
-| YOLO answers per gate | `yolo_plan` and `yolo_answer_from_judge` in [`judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) |
-| Answer validation | `validate_answer` in [`runner.rs`](../../crates/ostra-engine/src/runner.rs) |
+| Where each gate opens | The standard pipeline's planner in [`planner/`](../../crates/ostra-default-plugin/src/planner/): `spec_flow`, `plan_flow`, `loop_steps`, `closing_stages`, and `docs_stage` for `docs_rounds`. The engine's [`plan.rs`](../../crates/ostra-engine/src/plan.rs): `exec_failed_gate`, and `push` for the budget |
+| What an answer does | `on_gate_answered` in [`fold/gates.rs`](../../crates/ostra-default-plugin/src/fold/gates.rs) |
+| What a judge decision does | `on_decision` in [`fold/decisions.rs`](../../crates/ostra-default-plugin/src/fold/decisions.rs) |
+| YOLO answers per gate | `yolo_plan` and `yolo_answer_from_judge` in [`judge_input/yolo.rs`](../../crates/ostra-default-plugin/src/judge_input/yolo.rs) |
+| Answer validation | `validate_answer` in [`runner/control.rs`](../../crates/ostra-engine/src/runner/control.rs), which asks the pipeline first for a gate of a built-in stage |
 | Fixtures | `yolo_answers_gates_and_extends_review_budget`, `t2_yolo_answers_the_closing_gate`, `d9_blocked_phase_removes_dependents`, and `approval_without_pass_is_ignored_by_the_fold` in [`tests/conformance/main.rs`](../../tests/conformance/main.rs) |

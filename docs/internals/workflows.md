@@ -31,9 +31,9 @@ functions.
 ## Default workflows
 
 No workflow is defined in code (Rule WF9). Ostra supplies one default workflow for each base pipeline, as a TOML
-file in [`assets/workflows/`](../../assets/workflows/). The standard plugin `ostra`
-([`crates/ostra-default-plugin/src/lib.rs`](../../crates/ostra-default-plugin/src/lib.rs),
-[Plugins](plugins.md#the-standard-plugin)) embeds these files in the binary. It gives them as the workflows of its
+file in [`assets/workflows/`](../../assets/workflows/). The definitions of the standard plugin `ostra`
+([`crates/ostra-standard/src/lib.rs`](../../crates/ostra-standard/src/lib.rs),
+[Plugins](plugins.md#the-standard-plugin)) embed these files in the binary. It gives them as the workflows of its
 manifest, and `WorkflowSet::add_plugin` keeps them as the `defaults` of the set. Each file lists its built-in
 stages in a chain, and each stage waits for the stage before it:
 
@@ -42,9 +42,22 @@ stages in a chain, and each stage waits for the stage before it:
 | `research` | research |
 | `spec` | research, spec |
 | `plan` | research, spec, plan |
-| `implement` | research, track, spec, stakes, plan, build, feedback, closing |
+| `implement` | research, track, spec, stakes, plan, build, feedback, closing, book |
 | `verify`, `prompt`, `quick-change` | build |
-| `test`, `docs` | closing |
+| `test`, `docs` | closing, book |
+
+In each default file, the node of the book stage has the ID `docs`:
+
+```toml
+# assets/workflows/docs.toml (end)
+[[stage]]
+id = "closing"
+uses = "ostra:closing"
+
+[[stage]]
+id = "docs"
+uses = "ostra:book"
+```
 
 ```toml
 # assets/workflows/spec.toml
@@ -107,7 +120,26 @@ A file names the built-in stages `ostra:<stage>`:
 | `ostra:plan` | The plan, its fact-check, and its approval. Nothing on the light track or with low stakes |
 | `ostra:build` | The implement and review loop of each phase, and the phase stages |
 | `ostra:feedback` | The implementation review gate and its feedback rounds (Rule F1) |
-| `ostra:closing` | For each project: format, the closing gate, tests, docs, and the book |
+| `ostra:closing` | For each project: format, the closing gate, and tests. Without a book stage after it, also docs and the book |
+| `ostra:book` | For each project that the closing gate chose docs for: the docs stage of Rule B10, then the book write |
+
+### A workflow without the book stage
+
+The closing stage of Ostra wrote the docs and the book before the book stage existed. A workspace copy of a
+default workflow from that time has no `ostra:book` node. Such a workflow still writes the docs: without a book
+stage, the closing stage runs the docs stage and the book write, as it did before. A session from a log that
+recorded no workflow does the same.
+
+This behavior is deprecated. `WorkflowDef::notices` returns one notice for a workflow that has `ostra:closing`
+and no `ostra:book`: "Add a stage with `uses = "ostra:book"` after the closing stage. Without it, the closing
+stage writes the documentation book, and a later release removes that behavior." The API gives the notices of
+each workflow in `WorkflowInfo.notices`. The console does not show them yet. To remove the notice, add the node:
+
+```toml
+[[stage]]
+id = "docs"
+uses = "ostra:book"
+```
 
 ## The file format
 
@@ -191,12 +223,15 @@ behind each built-in stage (Rule WF8). `BuiltinStage::contracts` lists the contr
 | `ostra:spec` | `spec`, `fact-check` |
 | `ostra:plan` | `plan`, `fact-check` |
 | `ostra:build` | `implementation`, `review`, `prompt`, `advice` |
-| `ostra:closing` | `path-analysis`, `tests`, `review`, `documentation`, `architecture`, `implementation`, `advice` |
+| `ostra:closing` | `path-analysis`, `tests`, `review`, `documentation`, `implementation`, `advice` |
+| `ostra:book` | `documentation`, `fact-check` |
 | `ostra:track`, `ostra:stakes`, `ostra:feedback` | None. These stages ask judges or open gates |
 
 When the planner spawns an agent for a stage, it calls `SessionState::agent_for(stage, contract)`. This function
 returns the agent that the workflow binds to that contract on that stage. If there is no binding, it returns the
-agent of the standard plugin for the contract (`Standard::default_for`, Rule PL4).
+agent of the standard plugin for the contract (`Pipeline::default_agent`, which reads
+`Standard::default_for`, Rule PL4). In a workflow without a book stage, the docs stage reads the `documentation`
+binding of the closing stage.
 
 For example, `[agents] review = "strict-reviewer"` replaces `code-reviewer` in the review loops of the build stage
 and in the closing review. An `agents` key on one stage changes only that stage. A contract that no built-in
@@ -229,8 +264,9 @@ pattern 1). The steps are:
 5. The runner checks the agents and plugin stages that the workflow names against the workspace (`check_runnable`
    in [`crates/ostra-engine/src/workflow.rs`](../../crates/ostra-engine/src/workflow.rs)). Then it appends
    `WorkflowResolved` with the complete resolved workflow, or `SessionFailed` with the reason.
-6. The fold keeps the workflow. If the workflow has a fixed `track`, that track becomes the track of the session.
-   The exception is a track that the New task form set.
+6. The fold keeps the workflow and gives it to the pipeline (`Pipeline::workflow_resolved`). If the workflow has a
+   fixed `track`, the standard pipeline makes that track the track of the session. The exception is a track that
+   the New task form set.
 
 The check in step 5 requires these conditions:
 
@@ -263,7 +299,9 @@ Each kind of stage goes to its own function:
 
 Each of these functions first checks the conditions of the node (`skip_step`, below).
 
-A built-in stage calls the function that the fixed pipeline called (`builtin_stage`):
+A built-in stage goes to the pipeline (`Pipeline::builtin_stage`). The standard pipeline calls the function that
+the fixed pipeline called (`builtin_stage` in
+[`crates/ostra-default-plugin/src/planner/shared.rs`](../../crates/ostra-default-plugin/src/planner/shared.rs)):
 
 ```rust
 match b {
@@ -276,16 +314,22 @@ match b {
     BuiltinStage::Build => { self.phases(); self.phase_stages(wf); self.build_done(wf) }
     BuiltinStage::Feedback => self.implementation_review(),
     BuiltinStage::Closing => { self.closing_stages(); self.all_implement_done() }
+    BuiltinStage::Book => self.book_flow(),
 }
 ```
+
+The book stage is done (`book_flow`) when the docs stage of each project that the closing gate chose docs for is
+settled, and the engine wrote the book. A workflow without a book stage keeps that work in
+`all_implement_done` of the closing stage.
 
 The build stage is done (`build_done`) when two conditions are true:
 
 - Each phase ended its implement loop. A phase that a blocked dependency removed does not count.
 - Each phase stage of each passed phase is done.
 
-The built-in workflows chain these calls in the same order as the fixed pipeline. Thus, the conformance fixtures
-for that pipeline pass with no change.
+The built-in workflows chain these calls in the same order as the fixed pipeline. One order changed: with a book
+stage, the docs of a project start after the closing stage of every project is done. Without a book stage, the
+docs of one project can run at the same time as the tests of a different project.
 
 ## Custom stages
 
@@ -376,7 +420,8 @@ node, `session`, or `scope`. Each later part is an object key or an array index.
 as null.
 
 The value of each node is (`SessionState::node_value` in
-[`crates/ostra-engine/src/workflow.rs`](../../crates/ostra-engine/src/workflow.rs)):
+[`crates/ostra-engine/src/workflow.rs`](../../crates/ostra-engine/src/workflow.rs)). The pipeline gives the
+value of a built-in stage (`Pipeline::stage_value`) and the pipeline facts in `session` (`Pipeline::session_facts`):
 
 | Node | Value |
 | --- | --- |
@@ -389,7 +434,9 @@ The value of each node is (`SessionState::node_value` in
 | `ostra:stakes` | `{stakes}` |
 | `ostra:plan` | `{master_plan, phases}` |
 | `ostra:build` | `{phases}` |
-| `ostra:feedback`, `ostra:closing` | `{}` |
+| `ostra:feedback` | `{}` |
+| `ostra:closing` | `{docs}`. From a project instance, `docs` is `true` when the closing gate chose docs for that project and no BLOCKER is open (Hard rule 21). From a different scope, `docs` is the list of the projects with docs. |
+| `ostra:book` | `{book}`: the ID of the book that the session wrote, or null |
 | `session` | `{request, category, track, stakes, projects, title}` |
 | `scope` | `{kind: "session"}`, `{kind: "project", project}`, or `{kind: "phase", phase, project}` |
 
@@ -768,7 +815,7 @@ resolves it (`WorkflowDef::validate` and `check_runnable`). A workflow must keep
 
 - The stage IDs are unique and well formed. Each `after` names stages of the workflow, and there are no loops.
 - Each built-in stage of its base pipeline is present (Rule WF2). The exceptions are `ostra:feedback`,
-  `ostra:closing`, and `ostra:track` with a fixed `track`. No built-in stage is present that its base does not
+  `ostra:closing`, `ostra:book`, and `ostra:track` with a fixed `track`. No built-in stage is present that its base does not
   have.
 - Each built-in stage waits for the built-in stage before it, directly or through other stages.
 - There are at most 24 custom stages, and `max_rounds` is from 1 to 10.
@@ -848,8 +895,11 @@ audits, and the notes are all done.
 | The builder reads, checks, and saves of workflows and composites, and the restore of defaults | [`crates/ostra-workspace/src/builder.rs`](../../crates/ostra-workspace/src/builder.rs) |
 | The builder and the composite editor in the console | [`web/src/features/builder/`](../../web/src/features/builder/) |
 | `WorkflowResolved`, `StageSkipped`, `NodeRan`, `StageReview`, the `Stage` purpose | [`crates/ostra-core/src/event.rs`](../../crates/ostra-core/src/event.rs) |
-| The walk: `workflow_flow`, `builtin_stage`, `build_done`, `phase_stages` | [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) |
+| The walk: `workflow_flow`, `phase_stages` | [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) |
+| The built-in stages: `builtin_stage`, `build_done`, `book_flow`, the closing and book values | [`crates/ostra-default-plugin/src/planner/`](../../crates/ostra-default-plugin/src/planner/) |
+| The deprecation notices of a workflow | `WorkflowDef::notices` in [`crates/ostra-core/src/workflow.rs`](../../crates/ostra-core/src/workflow.rs) |
 | The stage fold, stage actions, node values, `skip_step`, `data_stage_action`, `check_runnable`, shapes and `check_types`, `agent_for`, `results_due`, `result_view`, partners | [`crates/ostra-engine/src/workflow.rs`](../../crates/ostra-engine/src/workflow.rs) |
-| `Step::ResolveWorkflow`, `Step::HandleResult`, `Step::SkipStage`, `Step::RunNode`, `prompt_node` | `perform` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
-| YOLO at a stage gate | `yolo_plan` in [`crates/ostra-engine/src/judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) |
+| `Step::ResolveWorkflow`, `Step::HandleResult`, `Step::SkipStage`, `Step::RunNode` | `perform` in [`crates/ostra-engine/src/runner/driver.rs`](../../crates/ostra-engine/src/runner/driver.rs) |
+| `prompt_node` | [`crates/ostra-engine/src/runner/judges.rs`](../../crates/ostra-engine/src/runner/judges.rs) |
+| YOLO at a stage gate | `yolo_plan` in [`crates/ostra-default-plugin/src/judge_input/yolo.rs`](../../crates/ostra-default-plugin/src/judge_input/yolo.rs) |
 | Fixtures (`wf*`, `wb*`, with `wb7_*` for composites, and `pl6_pl7_*` for plugin workflows and functions) | [`tests/conformance/main.rs`](../../tests/conformance/main.rs) |

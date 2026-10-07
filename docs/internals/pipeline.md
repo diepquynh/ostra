@@ -9,9 +9,12 @@ follows one request through every stage. For each stage, it tells what the stage
 
 Two facts apply to every section below.
 
-- **Code runs the pipeline, not a model.** The planner in
-  [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) decides which stage comes next,
-  when a loop stops, and how many agents run at the same time. The planner is a pure function from the
+- **Code runs the pipeline, not a model.** The planner decides which stage comes next, when a loop stops, and
+  how many agents run at the same time. The engine's planner in
+  [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) walks the workflow. The rules of
+  each built-in stage on this page are in the standard plugin's pipeline, split by stage, with track and stakes in `shared.rs` in
+  [`crates/ostra-default-plugin/src/planner/`](../../crates/ostra-default-plugin/src/planner/)
+  ([Plugins](plugins.md#the-pipeline)). The planner is a pure function from the
   session's state to a list of next steps. Models do the work inside a stage and answer a small set of named
   questions. These questions are the judges, which [Gates and judges](gates-and-judges.md) describes. No agent
   can decide to skip the review.
@@ -37,7 +40,7 @@ Intake → Classify* → Explore ×N (parallel) → Sufficiency* → Track*
 → Implementation review (gate) ⟲ feedback → Feedback* → revision phases
 → Format (once per project)
 → Closing gate (tests? docs?) → EPA ×N (parallel) → Write-test (one phase at a time, reviewed)
-→ Documentation ×N (parallel) → System architecture (2+ projects) → Book write
+→ Book stage: Scan → Survey → Page writers ×N (parallel) → Fact-check and synthesis rounds ⟲ → Book write
 → Completion report*
 
 * judge call     ⟲ a FAIL goes back to the author with the findings
@@ -73,6 +76,7 @@ leave out these parts:
 
 - The implementation review.
 - The closing stages.
+- The book stage.
 - The Track judge. A fixed track replaces it.
 
 Built-in stages keep their order and their rules. Thus, each gate on this page still applies. The session records
@@ -148,7 +152,7 @@ restarts the running work, and you cannot withdraw it:
 ![The Add context box with Send now and Queue for the next step](../images/console/add-context.png)
 
 When a task fails, the engine retries it automatically one time (`ERROR_RETRIES = 1` in
-[`state.rs`](../../crates/ostra-engine/src/state.rs)). Then it opens an execution-failed gate. If every task
+[`data.rs`](../../crates/ostra-default-plugin/src/data.rs)). Then it opens an execution-failed gate. If every task
 fails or is abandoned, the session fails with the message "there is no research document to write a spec from".
 The reason is Rule D1, which forbids a spec without research.
 
@@ -167,7 +171,7 @@ needed item, it also gives one more research task.
 The judge often gives the same task to several related items. For example, six gaps about the law of one country
 become one "research these statutes" task. So the engine keeps one task for each project and task text. It skips
 a copy of a task that is still queued or in progress. One round adds at most three tasks
-(`MAX_SUFFICIENCY_RESEARCH` in [`judge.rs`](../../crates/ostra-engine/src/judge.rs)), the first three that the
+(`MAX_SUFFICIENCY_RESEARCH` in [`judge.rs`](../../crates/ostra-default-plugin/src/judge.rs)), the first three that the
 judge names. Those tasks spawn, and the cycle repeats.
 
 The engine allows three sufficiency rounds (`SUFFICIENCY_ROUNDS`). After the third round, it continues to the
@@ -545,7 +549,7 @@ state:
 
 ### The implement and review loop
 
-Each phase is a loop, `WorkLoop` in [`state.rs`](../../crates/ostra-engine/src/state.rs):
+Each phase is a loop, `WorkLoop` in [`data.rs`](../../crates/ostra-default-plugin/src/data.rs):
 
 1. The `implementer` runs with `Phase file:`, which points at its phase, or with `No plan:` and a reason (Hard
    rule 13). It edits the code and submits its changed files and report path.
@@ -556,7 +560,7 @@ Each phase is a loop, `WorkLoop` in [`state.rs`](../../crates/ostra-engine/src/s
      instruction to remove the problem. This loop has no cap, and no gate can waive it (Hard rule 21). Also, the
      project's documentation does not run when a BLOCKER is open.
    - **Auto-fixable**: the engine applies these findings itself
-     ([`autofix.rs`](../../crates/ostra-engine/src/autofix.rs)), with no agent run. A finding is auto-fixable
+     ([`autofix.rs`](../../crates/ostra-default-plugin/src/autofix.rs)), with no agent run. A finding is auto-fixable
      when the project marks its rule ID auto-fixable and its fix text is exactly
      ``Change `x` to `y` on line N`` or ``Add `text` above line N: `anchor` ``.
    - **HIGH and MEDIUM** go to the fix agent exactly as written, with the path of the review ledger. For each
@@ -686,7 +690,7 @@ it picks `requirement_change`, because a spec that does not agree with the code 
 
 A revision does not continue the conversation of an earlier agent. The runner writes `ostra-session-context.md`
 in the session folder from the event log (Rule F2,
-[`crates/ostra-engine/src/context.rs`](../../crates/ostra-engine/src/context.rs)). It writes the file before a
+[`crates/ostra-default-plugin/src/context.rs`](../../crates/ostra-default-plugin/src/context.rs)). It writes the file before a
 revision spawns and before the review gate opens. The file lists these items:
 
 - the request with every amendment,
@@ -885,8 +889,8 @@ The standard is the same one that `CLAUDE.md` sets for this repository (HANDOVER
 ### Two ways in
 
 - **After a build.** If you ask for docs (the New task toggle, the request itself, or the closing gate), the
-  stage runs after the test stage. If you declined tests, it runs directly after format. Each writer reads the
-  implementer report of every passed phase and documents the code as the change left it.
+  book stage runs after the closing stage. Each writer reads the implementer report of every passed phase and
+  documents the code as the change left it.
 - **A `DOCS` request.** Ostra classifies a request such as "Write the architecture docs for these services" or
   "document the billing flow" as `DOCS`. Like a `TEST` request, the fold adds one done inline phase per project,
   with the closing choice already set to docs only. So no implementer runs and no gate opens. The runner writes
@@ -900,6 +904,32 @@ The standard is the same one that `CLAUDE.md` sets for this repository (HANDOVER
 Documentation stays opt-in. A workspace whose projects have no relation to each other gets no book until you ask
 for one. Each set of projects that you document gets its own book.
 
+### The book stage
+
+The docs run in their own workflow node, the built-in stage `ostra:book`. The default `implement`, `test`, and
+`docs` workflows end with a node `docs` that uses it, after the `closing` node. The stage reads the choice of the
+closing gate itself, because a built-in stage takes no `when` conditions (Rule WB5). For each project, it runs the
+docs pipeline below when the closing gate chose docs and no BLOCKER is open (Hard rule 21). Then the engine
+writes the book. The stage is done when the docs of each such project are settled and the book is written.
+
+The book stage waits for the whole closing stage. So the docs of a project start after the tests of every project
+end. Other nodes can read the choice as `closing.docs` and the book as `docs.book`, after the node IDs of the
+default workflows
+([Workflows](workflows.md#data-between-nodes)). A workflow can bind the agents of the stage with
+`agents = { documentation = "...", fact-check = "..." }` (Rule WF8).
+
+A workflow without an `ostra:book` node keeps the earlier behavior: the closing stage runs the docs pipeline and
+the book write itself, and the docs of one project can run at the same time as the tests of a different project.
+A session from a log without a recorded workflow does the same. This path is deprecated, and the workflow
+carries a notice that tells you to add the node ([Workflows](workflows.md#a-workflow-without-the-book-stage)).
+
+The code of the stage is in the standard plugin: the planner in
+[`planner/book.rs`](../../crates/ostra-default-plugin/src/planner/book.rs), the docs track and the checks in
+[`book/`](../../crates/ostra-default-plugin/src/book/), and the scan in
+[`docs_scan.rs`](../../crates/ostra-default-plugin/src/docs_scan.rs). The book format and its storage stay in
+[`crates/ostra-core/src/book.rs`](../../crates/ostra-core/src/book.rs), because the engine, the console, and the
+book search all read them.
+
 ### The docs pipeline
 
 The docs stage is a pipeline of runs, not one agent (Rule B10). One writer cannot write a thorough book of a large
@@ -911,7 +941,7 @@ pages, and linked to pages that no longer existed. So the stage writes in parall
 in rounds until the book meets a definition of done:
 
 0. **Scan.** Before the survey, the engine reads the project's modules and its named constants from disk
-   (`Step::ScanDocs`) and records them in `DocsScanned`, because the fold cannot read the file system. The
+   (`OstraStep::ScanDocs`, a `Step::Pipeline` step) and records them in `DocsScanned`, because the fold cannot read the file system. The
    modules come from the module map, or else from the source folders, with a folder of 3 or more source
    subfolders, such as `crates/`, split into one module per subfolder. The constants are the upper-case names
    that Rust, TypeScript, JavaScript, Go, Java, Kotlin, and Python code defines outside test files, at most 1500.
@@ -922,7 +952,8 @@ in rounds until the book meets a definition of done:
    lists everything that the book must cover, each item with exactly one owning page, or with an `out_of_scope`
    reason. Each mechanism that two or more pages use, such as the slot limiter, gets its own item. An item also
    lists its `settings` (the keys, environment variables, and CLI flags that a user sets) and its `names` (1 to
-   4 code names that belong to it alone). The plan has 1 to 30 broad pages (`MAX_DOCS_PAGES`) in groups such as `How it works` and `Security`,
+   4 code names that belong to it alone). The plan has 1 to 30 broad pages (`MAX_DOCS_PAGES` in
+   [`book/mod.rs`](../../crates/ostra-default-plugin/src/book/mod.rs)) in groups such as `How it works` and `Security`,
    like the pages of this documentation.
 2. **First drafts.** One run with `Docs mode: page` writes each planned page. A writer gets its page, the whole
    plan, and the inventory items that its page owns.
@@ -966,7 +997,8 @@ The synthesis pass judges nine checks, which copy what this documentation does:
 | Writing | Every page follows the writing standard. |
 | Self-contained parts | Each `##` part answers the questions that a reader asks about its sub-topic in full, because the book search returns each part alone. |
 
-The engine does not trust the pass alone. It runs its own checks on the drafts (`book::mechanical_issues`): a link
+The pipeline does not trust the pass alone. It runs its own checks on the drafts (`mechanical_issues` in
+[`book/checks.rs`](../../crates/ostra-default-plugin/src/book/checks.rs)): a link
 to `<page id>.md` that names no page, the words "would", "should", and "might", "e.g.", "i.e.", and "etc.", a
 semicolon or an em dash in prose, an inventory item without an owning page, and a module of the reference sheet
 that no inventory item covers. An item covers a module when one of its sources lies inside the module, or the
@@ -1061,10 +1093,16 @@ The instructions can set the audience, the topics, the depth, and what to leave 
 Leave out the admin UI." The rules in the Constraints of the prompt win over the instructions: grounding in the
 source, the writing standard, the diagram limits, and no file writes.
 
-#### What `validate_submit` checks
+#### What the submit checks refuse
 
-`validate_submit` checks the shape before the engine accepts the submit. The model gets each problem with its fix
-in the tool reply. `validate_submit` refuses these items:
+Two checks run on a `documentation` submit before the engine accepts it. The model gets each problem with its fix
+in the tool reply:
+
+- `validate_submit` in the core checks the book format of each page and of the glossary (`check_pages`).
+- The standard pipeline checks the step of the docs stage (`Pipeline::check_submit`, which the executor calls
+  through `ExecutionHost::check_submit`).
+
+Together they refuse these items:
 
 - a survey with no page or more than 30, a page without a title, a group, or what it covers, a page ID used twice,
   or an inventory item without an owning page or an `out_of_scope` reason,
@@ -1103,7 +1141,10 @@ architecture run. The fold ignores it.
 ### Writing the book
 
 The engine writes the book, not an agent (Rule B5). The planner emits `WriteBook` when the docs pipeline of every
-documented project is settled.
+documented project is settled. The runner asks the pipeline for the update of the session
+(`Pipeline::book_update`). The update holds one `PartUpdate` for each documented project: the overview, the
+glossary, the inventory, and every planned page in order. Each page is `PageUpdate::Write` with the page that
+the session wrote, or `PageUpdate::Keep` with the ID of a page that the book keeps.
 
 The runner merges the parts of the session into the book and writes these files:
 
@@ -1216,7 +1257,7 @@ A completion report names the stages that did not run and how to run them. It al
 
 | Limit | Value | Where |
 | --- | --- | --- |
-| Concurrent executions per workspace | `limits.max_parallel_executions` | Slot limiter in `runner.rs` |
+| Concurrent executions per workspace | `limits.max_parallel_executions` | Slot limiter in `runner/driver.rs` |
 | Session spend | `limits.session_budget_usd` | Budget gate in `Planner::push` |
 | Implement pipelines per project | 1 | Rule M2, `Planner::phases` |
 | Sufficiency rounds | 3 | `SUFFICIENCY_ROUNDS` |
@@ -1225,7 +1266,7 @@ A completion report names the stages that did not run and how to run them. It al
 | Review passes per loop | 3, or 10 under YOLO | `REVIEW_CAP`, `YOLO_REVIEW_BUDGET` |
 | Automatic retries after an error | 1 | `ERROR_RETRIES` |
 | Failing builds before build commands are refused | 5 | `DENY_THRESHOLD` in `build.rs` |
-| Pages one docs survey may plan | 30 | `book::MAX_DOCS_PAGES` |
+| Pages one docs survey may plan | 30 | `MAX_DOCS_PAGES` in the standard plugin's `book/mod.rs` |
 | Init scouts | 6 | `init::MAX_SCOUTS` |
 | Skills generated by default at init | 8 | `init::MAX_DEFAULT_GENERATE` |
 | Attached files per request | 50 | `MAX_CONTEXT_FILES` |
