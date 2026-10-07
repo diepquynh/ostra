@@ -4,19 +4,19 @@
 id = "engine-001"
 kind = "paraphrase"
 question = "How does Ostra stop the same step from being started twice while it is still running?"
-gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-002"
 kind = "paraphrase"
 question = "What happens when a session has spent all the money it was allowed to spend?"
-gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-003"
 kind = "lexical"
 question = "Where is limits.max_parallel_executions enforced and how does a waiting execution get a slot?"
-gold = ["crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-004"
@@ -28,37 +28,37 @@ gold = ["crates/ostra-engine/src/state.rs"]
 id = "engine-005"
 kind = "paraphrase"
 question = "When the server restarts in the middle of a run, what happens to the executions that were still going and to permission prompts nobody answered?"
-gold = ["crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-006"
 kind = "lexical"
 question = "What does stop_session_offline do when the server is not running?"
-gold = ["crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-007"
 kind = "paraphrase"
 question = "Which decisions does autopilot mode refuse to make on the user's behalf, leaving the question open?"
-gold = ["crates/ostra-default-plugin/src/judge_input.rs"]
+gold = ["crates/ostra-default-plugin/src/judge_input/mod.rs"]
 
 [[case]]
 id = "engine-008"
 kind = "paraphrase"
 question = "Under autopilot, how many times is a failed agent retried before the step is given up?"
-gold = ["crates/ostra-default-plugin/src/judge_input.rs"]
+gold = ["crates/ostra-default-plugin/src/judge_input/mod.rs"]
 
 [[case]]
 id = "engine-009"
 kind = "conceptual"
 question = "Why can a new event such as an execution start never slip in after a session was stopped?"
-gold = ["crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-010"
 kind = "lexical"
 question = "What does Inner::append do besides storing the event?"
-gold = ["crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-011"
@@ -76,13 +76,13 @@ gold = ["crates/ostra-engine/src/plan.rs"]
 id = "engine-013"
 kind = "paraphrase"
 question = "When does the code formatter run after the build, and is the user asked before it runs?"
-gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-014"
 kind = "conceptual"
 question = "Why is the format command skipped when the project's settings file was edited by hand?"
-gold = ["crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-015"
@@ -112,7 +112,7 @@ gold = ["crates/ostra-engine/src/plan.rs"]
 id = "engine-019"
 kind = "paraphrase"
 question = "When the documentation covers two or more projects, what extra agent runs and what does it read?"
-gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-020"
@@ -142,25 +142,25 @@ gold = ["crates/ostra-default-plugin/src/autofix.rs"]
 id = "engine-024"
 kind = "conceptual"
 question = "Why do the project's automatically fixable rule IDs travel inside the review execution's parameters instead of being read when the event is applied?"
-gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-025"
 kind = "paraphrase"
 question = "How does a revision after user feedback get the history of the session without replaying the whole conversation?"
-gold = ["crates/ostra-default-plugin/src/context.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-default-plugin/src/context.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-026"
 kind = "paraphrase"
 question = "What happens to running agents when the user pauses a session, and how do they continue afterwards?"
-gold = ["crates/ostra-engine/src/runner.rs", "crates/ostra-engine/src/state.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs", "crates/ostra-engine/src/state.rs"]
 
 [[case]]
 id = "engine-027"
 kind = "cross"
 question = "How many suspicious sandbox signals from one agent pause the whole session, and where is that count kept?"
-gold = ["crates/ostra-core/src/containment.rs", "crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-core/src/containment.rs", "crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-028"
@@ -178,7 +178,7 @@ gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-default-plugin/src/ini
 id = "engine-030"
 kind = "paraphrase"
 question = "When the user types more context into a session that is already running, who decides where it goes and what waits until then?"
-gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-031"
@@ -202,7 +202,7 @@ gold = ["crates/ostra-default-plugin/src/judge.rs", "crates/ostra-engine/src/sta
 id = "engine-034"
 kind = "paraphrase"
 question = "Which judge decisions can the user overrule later, and when is that no longer allowed?"
-gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-035"
@@ -238,7 +238,7 @@ gold = ["crates/ostra-engine/src/plan.rs"]
 id = "engine-040"
 kind = "paraphrase"
 question = "What happens to a project that an agent creates in the middle of a build before its phases can continue?"
-gold = ["crates/ostra-default-plugin/src/init.rs", "crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-default-plugin/src/init.rs", "crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-041"
@@ -256,13 +256,13 @@ gold = ["crates/ostra-default-plugin/src/init.rs"]
 id = "engine-043"
 kind = "conceptual"
 question = "When the user pins projects on the new task form, why does the classifier's choice of projects get ignored?"
-gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-default-plugin/src/judge_input.rs"]
+gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-default-plugin/src/judge_input/mod.rs"]
 
 [[case]]
 id = "engine-044"
 kind = "paraphrase"
 question = "What checks are done on files the user attaches to a request, and how many may be attached?"
-gold = ["crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-045"
@@ -280,7 +280,7 @@ gold = ["crates/ostra-engine/src/coord.rs", "crates/ostra-engine/src/plan.rs"]
 id = "engine-047"
 kind = "conceptual"
 question = "Why does a harness run that is waiting for a reply from another agent not keep its execution slot?"
-gold = ["crates/ostra-engine/src/runner.rs", "crates/ostra-engine/src/coord.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs", "crates/ostra-engine/src/coord.rs"]
 
 [[case]]
 id = "engine-048"
@@ -292,7 +292,7 @@ gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/coord.rs"]
 id = "engine-049"
 kind = "paraphrase"
 question = "How is the short status line on a session card chosen, for example when it is paused or waiting on a question?"
-gold = ["crates/ostra-default-plugin/src/view.rs"]
+gold = ["crates/ostra-default-plugin/src/view/mod.rs"]
 
 [[case]]
 id = "engine-050"
@@ -304,7 +304,7 @@ gold = ["crates/ostra-default-plugin/src/judge.rs"]
 id = "engine-051"
 kind = "paraphrase"
 question = "When a user denies or approves a tool request, what allow rule is suggested for a shell command?"
-gold = ["crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-052"
@@ -316,22 +316,22 @@ gold = ["crates/ostra-default-plugin/src/factory.rs", "crates/ostra-agents/src/s
 id = "engine-053"
 kind = "cross"
 question = "Where are session events written to disk and how are the materialized tables kept in step with the log?"
-gold = ["crates/ostra-engine/src/runner.rs", "crates/ostra-store/src/workspace/mod.rs"]
+gold = ["crates/ostra-engine/src/runner/mod.rs", "crates/ostra-store/src/workspace/mod.rs"]
 
 [[case]]
 id = "engine-054"
 kind = "cross"
 question = "How is the list of gate kinds defined, and where does the engine check that an answer has the right shape for a gate?"
-gold = ["crates/ostra-core/src/event.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-core/src/event.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "engine-055"
 kind = "cross"
 question = "How does an implementer for a project that does not exist yet learn that it must create it first, and where does it run until then?"
-gold = ["crates/ostra-default-plugin/src/factory.rs", "crates/ostra-engine/src/runner.rs", "crates/ostra-engine/src/state.rs"]
+gold = ["crates/ostra-default-plugin/src/factory.rs", "crates/ostra-engine/src/runner/mod.rs", "crates/ostra-engine/src/state.rs"]
 
 [[case]]
 id = "engine-056"
 kind = "cross"
 question = "Where do the settings the planner may use come from, such as each project's format command and the session budget?"
-gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner.rs", "crates/ostra-core/src/config.rs"]
+gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/runner/mod.rs", "crates/ostra-core/src/config.rs"]

@@ -113,7 +113,7 @@ gold = ["crates/ostra-core/src/containment.rs"]
 id = "core-019"
 kind = "cross"
 question = "When an agent opens a fake credential file planted as bait, what does the system record and when does the task stop?"
-gold = ["crates/ostra-core/src/containment.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-core/src/containment.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "core-020"
@@ -281,7 +281,7 @@ gold = ["crates/ostra-core/src/pipeline.rs", "web/src/lib/gateAnswers.ts"]
 id = "core-047"
 kind = "cross"
 question = "How does a documentation book get its folder name from the projects it covers, and how do two sessions writing the same book avoid losing each other's parts?"
-gold = ["crates/ostra-core/src/book.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-core/src/book.rs", "crates/ostra-engine/src/runner/mod.rs"]
 
 [[case]]
 id = "core-048"

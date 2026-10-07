@@ -26,8 +26,15 @@ pub use pipeline::{FORMAT_NOT_APPROVED, OstraPipeline};
 /// The extension traits that hold the built-in stages' logic over the engine's types.
 pub mod prelude {
     pub use crate::data::*;
-    pub use crate::fold::{OstraEvents, OstraFold, RecurringTrack, RoutingTrack, WorkLoopFold};
-    pub use crate::planner::{OstraFlows, OstraPlanner};
+    pub use crate::fold::{
+        FoldAnswers, FoldBook, FoldDecisions, FoldExecutions, FoldFeedback, FoldGates, FoldInit,
+        FoldLoops, FoldResearch, OstraEvents, OstraFold, RecurringTrack, RoutingTrack,
+        WorkLoopFold,
+    };
+    pub use crate::planner::{
+        OstraFlows, OstraPlanner, PlannerBook, PlannerBuild, PlannerClosing, PlannerFeedback,
+        PlannerPlan, PlannerResearch, PlannerSpec,
+    };
 }
 
 /// The standard pipeline, for an engine's `Services::pipeline`.

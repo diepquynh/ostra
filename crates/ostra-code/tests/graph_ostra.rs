@@ -82,7 +82,7 @@ fn planner_links() {
         let runner = n
             .used_by
             .iter()
-            .find(|l| l.path == "crates/ostra-engine/src/runner.rs")
+            .find(|l| l.path == "crates/ostra-engine/src/runner/driver.rs")
             .expect("the runner uses the planner");
         for name in ["PlanCtx", "Step", "next_steps"] {
             assert!(
@@ -126,7 +126,7 @@ fn planner_links() {
 fn engine_never_reaches_executors() {
     with_ostra(|ix| {
         let r = ix.reach(
-            &["crates/ostra-engine/src/runner.rs".to_string()],
+            &["crates/ostra-engine/src/runner/driver.rs".to_string()],
             Direction::Dependencies,
             10,
             5_000,
@@ -148,9 +148,9 @@ fn call_sites() {
         let c = ix.callers("next_steps", Some("crates/ostra-engine/src/plan.rs"), 100);
         assert_eq!(c.definitions.len(), 1);
         assert!(
-            c.callers
-                .iter()
-                .any(|x| { x.path == "crates/ostra-engine/src/runner.rs" && x.name.is_some() })
+            c.callers.iter().any(|x| {
+                x.path == "crates/ostra-engine/src/runner/driver.rs" && x.name.is_some()
+            })
         );
         assert!(
             c.callers
@@ -241,7 +241,10 @@ fn tools_answer_in_text() {
             out.contains("defined at:\n  crates/ostra-engine/src/plan.rs:"),
             "{out}"
         );
-        assert!(out.contains("crates/ostra-engine/src/runner.rs  "), "{out}");
+        assert!(
+            out.contains("crates/ostra-engine/src/runner/driver.rs  "),
+            "{out}"
+        );
         let out = t(
             "CodeOutline",
             json!({"path": "crates/ostra-engine/src/plan.rs"}),
@@ -328,12 +331,12 @@ fn graph_views_for_the_ui() {
         let f = ix.file_view("crates/ostra-engine/src/plan.rs", 1).unwrap();
         closed(&f);
         assert_eq!(col(&f, "crates/ostra-engine/src/plan.rs"), 0);
-        assert_eq!(col(&f, "crates/ostra-engine/src/runner.rs"), -1);
+        assert_eq!(col(&f, "crates/ostra-engine/src/runner/driver.rs"), -1);
         assert_eq!(col(&f, "crates/ostra-engine/src/state.rs"), 1);
         assert!(
             f.edges
                 .iter()
-                .any(|e| e.from == "crates/ostra-engine/src/runner.rs"
+                .any(|e| e.from == "crates/ostra-engine/src/runner/driver.rs"
                     && e.to == "crates/ostra-engine/src/plan.rs"
                     && e.names.iter().any(|n| n == "DecideStage"))
         );
@@ -352,7 +355,7 @@ fn graph_views_for_the_ui() {
             .find(|n| {
                 n.symbol
                     .as_ref()
-                    .is_some_and(|x| x.path == "crates/ostra-engine/src/runner.rs")
+                    .is_some_and(|x| x.path == "crates/ostra-engine/src/runner/driver.rs")
             })
             .expect("a runner function calls next_steps");
         assert_eq!(caller.column, -1);

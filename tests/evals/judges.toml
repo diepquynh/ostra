@@ -197,7 +197,7 @@ expect = { track = "full" }
 [[case.research]]
 project = "ostra"
 task = "Research how the workspace database stores session data and how materialized tables stay in step with the event log."
-scope = "crates/ostra-store/src/workspace.rs, crates/ostra-engine/src/runner.rs, crates/ostra-engine/src/state.rs"
+scope = "crates/ostra-store/src/workspace.rs, crates/ostra-engine/src/runner/mod.rs, crates/ostra-engine/src/state.rs"
 findings = "The workspace database is migrated by an ordered MIGRATIONS array keyed on user_version; materialized tables are written from the runner's append path."
 not_covered = ["Whether existing sessions need a backfill of the new table from their events"]
 doc = """
