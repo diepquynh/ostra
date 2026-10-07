@@ -270,6 +270,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
         inventory: inventory.as_deref(),
         repo_root: &repo,
         project_docs: &docs,
+        work_dirs: &[],
         agents: &ostra_agents::AgentCatalog::builtin(),
     };
 

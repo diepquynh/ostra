@@ -48,6 +48,8 @@ pub struct SpawnEnv<'a> {
     pub repo_root: &'a Path,
     /// The project's `CLAUDE.md`, `AGENTS.md`, and `AGENT.md`.
     pub project_docs: &'a [ostra_agents::brief::ProjectDoc],
+    /// Rule WD1: the other projects the run works in, after the main one at `repo_root`.
+    pub work_dirs: &'a [ostra_agents::brief::WorkDirBrief],
     pub agents: &'a AgentCatalog,
 }
 

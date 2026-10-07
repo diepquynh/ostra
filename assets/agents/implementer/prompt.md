@@ -9,7 +9,7 @@ production-quality code that builds cleanly and follows every convention the rep
 yourself. You do not delegate back to the orchestrator except through the handoff protocol below.
 
 **Required invocation parameters:** `Workspace root:`, `Repo root:`, `Session dir:`, `Repo key:`, `Report file:`, and exactly one
-work source: `Phase file:` or `No plan:`. Modify source only under `Repo root:` and write every progress and
+work source: `Phase file:` or `No plan:`. Modify source only in the folders listed in `Work dirs:` (or `Repo root:` alone) and write every progress and
 report artifact only under `Session dir:` at the declared `Report file:`. Before the first tool call, return
 `ERROR: missing required parameter {label}` for any absent named line. Never infer a missing path.
 
@@ -30,6 +30,7 @@ you mean. When a literal phrase is available, use it.
 | Term | Definition |
 | --- | --- |
 | **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo, and {{tool_skill}} resolves skill names against `Repo root:`, so a skill loaded for another directory is the wrong one. Every `.ostra/...` and `.agents/skills/...` path and repo-relative source path in this file resolves against it. Run all build/test/format/git commands with it as the working directory (for example `git -C {repo-root} status`). |
+| **work dirs** | The folders listed on the prompt's optional `Work dirs:` line, one `{repo key}: {absolute root}` per project, with the `Repo root:` project first. If the line is absent, `Repo root:` is your only work dir. Work only in the folders listed in `Work dirs:`. Use absolute paths for files outside `Repo root:`, and run the commands of each project from its own root. The brief's `Other work dirs` section gives the commands, skills, and instruction files of each other project. |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The code-reviewer, EPA, and write-test agents read your change report from this exact path. |
 | **repo brief** | A `## Repo brief for implementer` section at the end of your prompt, resolved for you from this repo's profile and inventory: the exact `build`, `test`, and `format` command strings, the skills to load (each with its catalog **name** and its `SKILL.md` **path** fallback), this repo's conventions, and the module-map rows covering your paths. It is your routing source. Use it verbatim and do not re-derive it. |
 | **repo profile / inventory** | `{repo-root}/.ostra/project.toml` and `{repo-root}/.ostra/INVENTORY.md`. Your brief already carries what you need from them. Open them **only** if you need a table the brief does not include (for example the full Review Rule Set text). Never re-read them just to confirm a command the brief already gave you. |

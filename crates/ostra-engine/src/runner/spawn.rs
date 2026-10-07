@@ -194,6 +194,11 @@ impl Inner {
         let profile: Option<ProjectProfile> = load_toml(&paths::project_profile(&repo_root)).ok();
         let inventory = std::fs::read_to_string(paths::project_inventory(&repo_root)).ok();
         let project_docs = ostra_agents::brief::project_docs(&repo_root);
+        let other_dirs: Vec<ostra_agents::brief::WorkDirBrief> = work_dirs
+            .iter()
+            .skip(1)
+            .map(|w| ostra_agents::brief::WorkDirBrief::read(&w.project, &w.path))
+            .collect();
         let _ = std::fs::create_dir_all(&req.session_dir);
         self.pipeline().spawn_files(&st, &req);
         // A paused run, and a run that continues a subagent for its messages, carry on with their
@@ -232,6 +237,7 @@ impl Inner {
                     inventory: inventory.as_deref(),
                     repo_root: &repo_root,
                     project_docs: &project_docs,
+                    work_dirs: &other_dirs,
                     agents: &agents,
                 },
             )

@@ -237,6 +237,31 @@ path that the engine selected:
 
 ![The Spawn parameters panel of an implementer run](../images/console/spawn.png)
 
+### A run in several projects
+
+A run can work in more than one project (Rule WD1). The planner names the projects of each run, with the main
+project first. For example, a phase that adds an API route in `backend` and the page that calls it in `web`
+names both projects. The workspace folder does not have to hold the projects. Thus, the spawn block gives the
+folder of each project:
+
+```text
+Workspace root: /ws
+Repo root: /ws/backend
+Session dir: /ws/.ostra/sessions/s1/backend
+Repo key: backend
+Work dirs:
+  backend: /ws/backend
+  web: /src/web
+```
+
+`Repo root:` stays the folder of the main project. The agent starts there, and a relative path resolves against
+it. For a file in another project, the agent uses the absolute path. A run in one project gets no `Work dirs:`
+line, so its block does not change. Each prompt that reads or writes project code tells the agent to work only
+in the folders listed in `Work dirs:`, or in `Repo root:` alone when the line is absent.
+
+The runner builds the line and the brief from the work dirs that the run gets (`work_dirs` in
+`crates/ostra-engine/src/runner/spawn.rs`). Thus, the block never names a folder that the run cannot use.
+
 ### Required parameters are checked by the compiler
 
 Each agent and each initializer mode has its own spawn struct in `crates/ostra-agents/src/spawn.rs`. Required
@@ -254,6 +279,7 @@ pub struct PlanParams {
     pub findings: Option<String>,
     pub phases_to_revise: Vec<u32>,
     pub master_plan: Option<PathBuf>,
+    pub stage_limits: Vec<String>,
 }
 ```
 
@@ -268,10 +294,23 @@ the code arrive as `code_facts` (Rule D4a). This is a file that the engine write
 and flows, and with no request text. For the same reason, `FactCheckParams` carries research documents only for
 a spec target (Rule D5). For a plan target, it carries the code facts file.
 
+The plan also gets `Stage limits:` (Rule WD3), and so does the fact-check of a plan. The list has one line for
+each stage that runs after the plan: the stage, its agent, its executor, and how many projects one run of that
+agent works in. For example: `build: implementer (harness:codex) one project`. The plan prompt splits phases by
+these lines:
+
+- A phase can list several projects in its `project` field (`api, web`, the main project first) only when each
+  stage that runs on a phase works in several projects.
+- If one of these stages works in one project, the plan writes one phase for each project. It links the phases
+  with `Depends on`, and the producer comes first, for example the API before the frontend that calls it.
+
+The fact-check of the plan reports a phase that breaks this rule as `HIGH`. The factory renders the line only
+when the list is not empty.
+
 These shapes occur in many structs:
 
 - **`Common`** holds the four lines that each spawn carries: workspace root, repo root, session dir, and repo
-  key.
+  key. For a run in several projects, it also holds the `Work dirs:` list.
 - **`WorkSource`** makes phase-bound agents (implementer, reviewer, write-test) declare one of two lines:
   `Phase file:`, or `No plan:` with a reason (Hard rule 13). An agent cannot declare both lines or neither line.
   When no plan exists, the engine writes the reason for the agent. For example: "A quick change: the request
@@ -427,12 +466,15 @@ reviewer grades against it. The result contract of the agent filters the skills 
 These parts come after the brief, in this order:
 
 1. The instruction files of the project (`CLAUDE.md`, `AGENTS.md`, `AGENT.md`).
-2. If the session created a project, a "Projects created in this session" section. For each created project,
+2. If the run works in more than one project, an "Other work dirs" section (Rule WD1). For each other project,
+   it gives the folder, the commands from `project.toml`, the skills with their paths, the inventory path, and
+   the instruction files of the project. The commands run from the folder of their own project.
+3. If the session created a project, a "Projects created in this session" section. For each created project,
    it gives the folder, stack, purpose, and base requirements from its `ProjectCreate` call. Such a project
    has no inventory or profile before its init runs.
-3. The workspace artifacts: the folder and at most 40 files (read
+4. The workspace artifacts: the folder and at most 40 files (read
    [Workspace artifacts](workspaces.md#workspace-artifacts)).
-4. The custom instructions of the workspace: first the entry for all agents, then the entry for this agent.
+5. The custom instructions of the workspace: first the entry for all agents, then the entry for this agent.
 
 If an instruction tags a file or an artifact with `@`, Ostra lists it under that instruction with its absolute
 path. If `AGENTS.md` in a repo is a symlink to `CLAUDE.md` or a copy of it, Ostra includes the file one time.

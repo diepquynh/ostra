@@ -364,6 +364,7 @@ fn common() -> Common {
         workspace_root: "/ws".into(),
         repo_root: "/ws/backend".into(),
         session_dir: "/ws/.ostra/sessions/s1/backend".into(),
+        work_dirs: vec![],
         repo_key: "backend".into(),
     }
 }
@@ -411,6 +412,7 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
             "`src/a.rs` in backend: changed since ostra-research-1.md was written".into(),
         ]),
         code_facts: None,
+        stage_limits: vec![],
     };
     assert_eq!(roundtrip(&fc)["source_check"], "refetch");
     assert!(fc.render().contains(
@@ -425,6 +427,7 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         findings: Some("HIGH, phase 3: c i".into()),
         phases_to_revise: vec![1, 3],
         master_plan: Some("/ws/s/ostra-plan-1.md".into()),
+        stage_limits: vec![],
     };
     assert_eq!(
         roundtrip(&plan)["projects_in_scope"],
@@ -772,6 +775,7 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
         artifacts: None,
         books: None,
         new_projects: &[],
+        work_dirs: &[],
     };
     let brief = build_brief(&input).unwrap();
     assert!(brief.starts_with("## Repo brief for implementer"));
@@ -848,6 +852,7 @@ fn brief_gives_each_test_type_its_level_command_and_its_one_test_command() {
             artifacts: None,
             books: None,
             new_projects: &[],
+            work_dirs: &[],
         };
         let brief = build_brief(&input).unwrap();
         assert!(
@@ -881,6 +886,7 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
         artifacts: None,
         books: None,
         new_projects: &[],
+        work_dirs: &[],
     };
     let once = augment("Task: x", &input);
     assert_eq!(augment(&once, &input), once);
@@ -930,6 +936,7 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
     }];
     let with_new = BriefInput {
         new_projects: &created,
+        work_dirs: &[],
         ..init_docs
     };
     let brief = build_brief(&with_new).unwrap();
@@ -1015,4 +1022,185 @@ fn classify_judge_names_attached_files_in_research_tasks() {
     let p = crate::judge_prompt("classify").unwrap();
     assert!(p.contains("every attached file, attached folder, and upload"));
     assert!(p.contains("Rules C1, C3"));
+}
+
+// Rule WD1: a run in several projects names each folder. A run in one project keeps the old block.
+#[test]
+fn spawn_lists_work_dirs_only_for_several_projects() {
+    let one = ImplementerParams {
+        common: common(),
+        report_file: "/ws/s/backend/ostra-implementer-phase-1.md".into(),
+        work: WorkSource::PhaseFile("/ws/s/ostra-plan-1-phase-1-data.md".into()),
+        unblock: None,
+        extra: Extras::default(),
+    };
+    assert!(!one.render().contains("Work dirs"), "{}", one.render());
+    assert!(!roundtrip(&one).contains_key("work_dirs"));
+
+    let mut c = common();
+    c.work_dirs = vec![
+        ("backend".into(), "/ws/backend".into()),
+        ("web".into(), "/elsewhere/web".into()),
+    ];
+    let two = ImplementerParams { common: c, ..one };
+    let block = two.render();
+    assert!(
+        block.contains("\nWork dirs:\n  backend: /ws/backend\n  web: /elsewhere/web\n"),
+        "{block}"
+    );
+    assert!(block.contains("\nRepo root: /ws/backend\n"), "{block}");
+    assert_eq!(
+        roundtrip(&two)["work_dirs"],
+        "backend: /ws/backend\nweb: /elsewhere/web"
+    );
+    assert_eq!(
+        two.to_json()["common"]["work_dirs"][1],
+        serde_json::json!(["web", "/elsewhere/web"])
+    );
+}
+
+// Rule WD3: the plan and its fact-check get the later stages' limits, and an empty list renders
+// nothing.
+#[test]
+fn plan_spawn_carries_the_stage_limits() {
+    let limits = vec![
+        "build: implementer (harness:codex) one project".to_string(),
+        "review: code-reviewer (native) several projects".to_string(),
+    ];
+    let plan = PlanParams {
+        common: common(),
+        spec_file: "/ws/s/ostra-spec-1.md".into(),
+        projects_in_scope: vec![],
+        code_facts: None,
+        findings: None,
+        phases_to_revise: vec![],
+        master_plan: None,
+        stage_limits: limits.clone(),
+    };
+    let block = plan.render();
+    assert!(
+        block.contains(
+            "\nStage limits:\n  build: implementer (harness:codex) one project\n  review: code-reviewer (native) several projects\n"
+        ),
+        "{block}"
+    );
+    assert_eq!(roundtrip(&plan)["stage_limits"], limits.join("\n"));
+    let bare = PlanParams {
+        stage_limits: vec![],
+        ..plan
+    };
+    assert!(!bare.render().contains("Stage limits"));
+
+    let fc = FactCheckParams {
+        common: common(),
+        target: "/ws/s/ostra-plan-1.md".into(),
+        target_type: TargetType::Plan,
+        prior_findings: "none".into(),
+        spec_file: "/ws/s/ostra-spec-1.md".into(),
+        source_check: SourceCheck::Citations,
+        research_docs: vec![],
+        changed_since_research: None,
+        code_facts: None,
+        stage_limits: limits.clone(),
+    };
+    assert_eq!(roundtrip(&fc)["stage_limits"], limits.join("\n"));
+}
+
+// Rule WD1: the brief gives each other work dir its folder, commands, skills, and instruction
+// files, and a re-render adds nothing.
+#[test]
+fn brief_lists_the_other_work_dirs() {
+    let p = profile();
+    let web = crate::brief::WorkDirBrief {
+        key: "web".into(),
+        path: "/elsewhere/web".into(),
+        profile: Some(ProjectProfile {
+            commands: Commands {
+                build: Some("npm run build".into()),
+                ..Default::default()
+            },
+            skills: vec![SkillEntry {
+                name: "web-page".into(),
+                kind: "creation".into(),
+                path: ".agents/skills/web-page/SKILL.md".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        inventory: Some("inventory".into()),
+        project_docs: vec![ProjectDoc {
+            path: "/elsewhere/web/AGENTS.md".into(),
+            content: format!("Run npm test.\n{}", "x".repeat(13000)),
+        }],
+    };
+    let dirs = [web];
+    let input = BriefInput {
+        agent: AgentName::Implementer,
+        contract: agent_def(AgentName::Implementer).returns,
+        sections: &agent_def(AgentName::Implementer).brief,
+        prompt: "Task: x",
+        repo_root: Path::new("/ws/backend"),
+        profile: Some(&p),
+        inventory: None,
+        instructions: &[],
+        project_docs: &[],
+        artifacts: None,
+        books: None,
+        new_projects: &[],
+        work_dirs: &dirs,
+    };
+    let brief = build_brief(&input).unwrap();
+    assert!(brief.contains(crate::brief::WORK_DIRS_HEADING), "{brief}");
+    assert!(brief.contains("### `web` at `/elsewhere/web`"), "{brief}");
+    assert!(brief.contains("- **build**: `npm run build`"), "{brief}");
+    assert!(
+        brief.contains("`web-page` at `/elsewhere/web/.agents/skills/web-page/SKILL.md`"),
+        "{brief}"
+    );
+    assert!(
+        brief.contains(&format!(
+            "Inventory: `{}`",
+            ostra_core::paths::project_inventory(Path::new("/elsewhere/web")).display()
+        )),
+        "{brief}"
+    );
+    assert!(brief.contains("#### `/elsewhere/web/AGENTS.md`"), "{brief}");
+    assert!(brief.contains("Run npm test."), "{brief}");
+    assert!(
+        brief.contains("(truncated; read the file for the rest)"),
+        "{brief}"
+    );
+    let once = augment("Task: x", &input);
+    assert_eq!(augment(&once, &input), once);
+}
+
+// Rules WD1 and WD3: every agent that reads or writes project code learns `Work dirs:`, and the
+// plan and its fact-check split phases by `Stage limits:`.
+#[test]
+fn prompts_describe_work_dirs_and_stage_limits() {
+    for agent in [
+        "code-reviewer",
+        "documentation",
+        "execution-path-analyzer",
+        "explore",
+        "fact-check",
+        "generate-spec",
+        "implementer",
+        "plan",
+        "prompt-generation",
+        "write-test",
+    ] {
+        let text = asset_text(&format!("agents/{agent}/prompt.md")).unwrap();
+        assert!(
+            text.contains("| **work dirs** |")
+                && text.contains("the folders listed in `Work dirs:`"),
+            "{agent} does not describe `Work dirs:`"
+        );
+    }
+    let plan = asset_text("agents/plan/prompt.md").unwrap();
+    for needle in ["P8a", "Rule WD3", "`Stage limits:`", "`api, web`"] {
+        assert!(plan.contains(needle), "plan prompt lacks {needle}");
+    }
+    let fc = asset_text("agents/fact-check/prompt.md").unwrap();
+    assert!(fc.contains("Rule WD3") && fc.contains("`Stage limits:`"));
 }

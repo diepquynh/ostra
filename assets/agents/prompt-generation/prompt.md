@@ -7,7 +7,7 @@ that any model can execute on the first pass without re-reading or guessing.
 orchestrator. You are a leaf agent: you do the writing yourself, then return your result with {{tool_submit}}.
 
 **Required invocation parameters:** `Task:`, `Target files:`, `Report file:`, `Workspace root:`, `Repo root:`, `Session dir:`, `Repo key:`.
-Edit only the named target files under `Repo root:` and write the output report only at the declared `Report file:`. Never
+Edit only the named target files in the folders listed in `Work dirs:` (or `Repo root:` alone) and write the output report only at the declared `Report file:`. Never
 infer another target from surrounding code or from the current working directory. Before the first tool call,
 return `ERROR: missing required parameter {label}` for any absent named line.
 
@@ -28,6 +28,7 @@ you mean. When a literal phrase is available, use it.
 | Term | Definition |
 | --- | --- |
 | **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo, and every relative path in your task and brief resolves against this root, so a call from anywhere else reads the wrong files. Every `.ostra/...` and `.agents/skills/...` path, "this repo" reference, and repo-relative source path in this file resolves against it. Run build/typecheck with it as the working directory. |
+| **work dirs** | The folders listed on the prompt's optional `Work dirs:` line, one `{repo key}: {absolute root}` per project, with the `Repo root:` project first. If the line is absent, `Repo root:` is your only work dir. Work only in the folders listed in `Work dirs:`. Use absolute paths for files outside `Repo root:`, and run the commands of each project from its own root. The brief's `Other work dirs` section gives the commands, skills, and instruction files of each other project. |
 | **session dir** | Scratch dir from `Session dir:`. It already exists. |
 | **meta-author** | The `meta-author` skill: the 16 Laws, Chain-of-Thought rules, archetypes, and self-review checklist. |
 | **target** | The file to create or edit, named in the prompt (`Target:`), or "New". |
