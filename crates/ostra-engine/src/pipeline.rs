@@ -188,6 +188,7 @@ pub trait Pipeline: Send + Sync {
 
     /// Rule SM7: take a message to an agent as one of the pipeline's own tasks, such as a
     /// research task. Returns the task's number, or `None` to start the agent as a helper.
+    #[allow(clippy::too_many_arguments)]
     fn helper_task(
         &self,
         s: &mut SessionState,
