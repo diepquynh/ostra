@@ -160,6 +160,56 @@ fn profile_args_bind_roots_hide_secrets_and_set_caches() {
 }
 
 #[test]
+fn every_work_dir_is_writable_with_its_git_and_memory_protected() {
+    // Rule WD1: a work dir outside the workspace root is writable, and its `.git` config and
+    // memory database stay read-only.
+    let (_d, root, home) = layout();
+    let other = root.parent().unwrap().join("api");
+    let ok = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(&other)
+        .status()
+        .unwrap();
+    assert!(ok.success());
+    let db = paths::project_memory_db(&other);
+    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+    std::fs::write(&db, "").unwrap();
+    let mut c = ctx(&root);
+    c.work_dirs = vec![
+        ostra_core::exec::WorkDir {
+            project: "p".into(),
+            path: root.join("repo"),
+        },
+        ostra_core::exec::WorkDir {
+            project: "api".into(),
+            path: other.clone(),
+        },
+    ];
+    let p = Profile::for_execution(&c, &SandboxConfig::default(), &home);
+    let writable = |dir: &Path| {
+        p.mounts
+            .iter()
+            .any(|m| matches!(m, Mount::Writable { src, .. } if src == dir))
+    };
+    let read_only = |file: &Path| {
+        p.mounts
+            .iter()
+            .any(|m| matches!(m, Mount::ReadOnly { path, .. } if path == file))
+    };
+    assert!(writable(&root) && writable(&root.join("repo")) && writable(&other));
+    assert!(read_only(&other.join(".git/config")));
+    assert!(read_only(&root.join("repo/.git/config")));
+    assert!(read_only(&db));
+    let alone = Profile::for_execution(&ctx(&root), &SandboxConfig::default(), &home);
+    assert!(
+        !alone
+            .mounts
+            .iter()
+            .any(|m| matches!(m, Mount::Writable { src, .. } if src == &other))
+    );
+}
+
+#[test]
 fn planted_commondir_files_are_undone() {
     let d = tempfile::tempdir().unwrap();
     let repo = d.path().join("repo");

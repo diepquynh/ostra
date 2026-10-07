@@ -240,12 +240,13 @@ impl Profile {
             policy: egress::Policy::new(cfg),
             ..Profile::base()
         };
-        for root in [
-            &ctx.workspace_root,
-            &ctx.repo_root,
-            &ctx.session_root,
-            &ctx.session_dir,
-        ] {
+        // Rule WD1: every work dir the orchestrator named is writable, beside the workspace root.
+        let work = ctx.work_roots();
+        for root in [&ctx.workspace_root, &ctx.session_root, &ctx.session_dir]
+            .into_iter()
+            .map(PathBuf::as_path)
+            .chain(work.iter().copied())
+        {
             if !root.as_os_str().is_empty() {
                 p = p.writable(root);
             }
@@ -283,13 +284,17 @@ impl Profile {
                 .read_only_dir(&ostra_core::artifacts::dir(&ctx.workspace_root))
                 .read_only_dir(&ostra_core::book::dir(&ctx.workspace_root));
         }
-        for f in db_files(&ctx.memory_db) {
+        let memory_dbs = std::iter::once(ctx.memory_db.clone())
+            .chain(work.iter().map(|r| paths::project_memory_db(r)));
+        for f in memory_dbs.flat_map(|db| db_files(&db)) {
             p = p.read_only(&f);
         }
         for prot in &ctx.protected_paths {
             p = p.read_only(prot);
         }
-        p.protect_git(&[&ctx.repo_root, &ctx.workspace_root])
+        let mut git_roots = work;
+        git_roots.push(&ctx.workspace_root);
+        p.protect_git(&git_roots)
     }
 
     /// For a program Ostra starts for a project or workspace (a format command, a language

@@ -21,7 +21,7 @@ of three answers: allow, ask, or deny. Each execution has one `ExecutionPolicy`.
 of that execution:
 
 - The name of the agent.
-- The repo root.
+- The work dirs: the folder of each project that the orchestrator named for the run (Rule WD1).
 - The session dir.
 - The declared report path.
 - The permission mode.
@@ -128,8 +128,17 @@ outside that region. Each agent declares its scope in its definition. The agents
 | --- | --- | --- |
 | `read_only` | nothing: it answers in its submit call | quick-answer |
 | `session` | its session dir, and OS temp | explore, generate-spec, fact-check, plan, code-reviewer, EPA, advisor, documentation |
-| `project` | the repo root and the session dir | implementer, write-test, prompt-generation |
+| `project` | each work dir and the session dir | implementer, write-test, prompt-generation |
 | `setup` | `.ostra/` and `.agents/skills/` in the project, and the session dir | initializer |
+
+A run has one or more work dirs (Rule WD1). The planner names the projects of each run: a session-wide run gets
+each project in the session scope, and a phase run gets the projects of its phase. The engine resolves each key to
+the project folder and puts the list in `ExecContext::work_dirs`, with the main project first. The main work dir is
+the repo root: the run starts there, and a relative path resolves from it. A project folder does not have to be
+inside the workspace root, so the guard compares each write with each work dir. A write in a project that the
+planner did not name is outside the region. The refusal lists every work dir, so the agent can write in the right
+folder or report the missing project. A `setup` region stays in the main work dir, because the initializer sets up
+one project. A context from before work dirs has an empty list, and its run writes in the repo root alone.
 
 The guard reads the region from `ExecContext::scope`, the declared scope of the run (`check_scope` in
 [`guards.rs`](../../crates/ostra-policy/src/guards.rs)). It never reads the name of the agent, so a custom agent
@@ -152,7 +161,7 @@ For a `setup` agent, the guard refuses a write to the older `.ostra/skills/` onl
 land in `.agents/skills/`.
 
 A second scope rule applies to each agent without the `test_files` grant (Rule CA6). Such an agent cannot write a
-path in the repo that looks like a test, for example `*.test.ts`, `tests/`, `*_test.go`, or `FooTest.java`.
+path in a work dir that looks like a test, for example `*.test.ts`, `tests/`, `*_test.go`, or `FooTest.java`.
 `is_test_path` in [`guards.rs`](../../crates/ostra-policy/src/guards.rs) holds the full list of patterns. The implementer does not have the grant. Write-test, prompt-generation, and the initializer have it.
 Thus, tests belong to the test stage, which runs after the user asks for tests at the closing gate. If the
 implementer can edit a test until it passes, the test no longer checks the work of the implementer. This rule applies when tool enforcement is on
@@ -416,7 +425,7 @@ It follows the permission model of Claude Code closely, so that a user who knows
 | Mode | Behavior |
 | --- | --- |
 | `default` | Reads run. Edits to the project ask, and commands that are not known as read-only ask. |
-| `acceptEdits` | Edits inside the project run. `mkdir`, `touch`, `cp`, and `mv` with targets inside the project also run. Other commands ask. |
+| `acceptEdits` | Edits inside a work dir run. `mkdir`, `touch`, `cp`, and `mv` with targets inside a work dir also run. Other commands ask. |
 | `plan` | Read-only. Ostra refuses any write and any unknown command. The message tells the agent to put its findings in its report. |
 | `bypass` | No asks. Everything that layer 1 allows runs. |
 
@@ -437,8 +446,9 @@ deny  = ["Bash(git push *)", "Read(~/.ssh/**)"]
 ```
 
 - A `Bash(...)` rule is a glob over one simple command. A trailing ` *` also matches the bare command.
-- A path rule uses the gitignore style. `//x` is absolute, `~/x` is under home, `x/y` is relative to the repo
-  root, and a bare name matches at any depth. `Edit` covers every tool that writes files (Write, Edit, MultiEdit,
+- A path rule uses the gitignore style. `//x` is absolute, `~/x` is under home, `x/y` is relative to the work dir
+  that holds the path, and a bare name matches at any depth. Thus a relative rule applies in each project of a run,
+  as it does in a run with one project. `Edit` covers every tool that writes files (Write, Edit, MultiEdit,
   NotebookEdit, and the `apply_patch` of Codex). `Read` covers Grep and Glob.
 - `WebFetch(domain:docs.rs)` matches the host and its subdomains. It uses the same URL parser that makes the
   request. So Ostra judges a URL such as `https://evil.example\@docs.rs/` by the host that it actually reaches.
@@ -452,7 +462,7 @@ An ask becomes a card in the browser with three answers: allow once, always in t
 same time, Ostra sends a push notification, because a pipeline that waits on an ask that nobody sees makes no
 progress. "Always in this workspace" adds a rule that Ostra suggests from the call. Examples are
 `Bash(npm install *)` for `npm install left-pad`, an `Edit(...)` pattern for a file, and `WebFetch(domain:...)`
-for a URL.
+for a URL. A pattern for a file is relative to the work dir that holds the file.
 
 Some asks occur even when a plain reading of the mode allows the call:
 

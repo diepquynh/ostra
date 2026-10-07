@@ -531,7 +531,12 @@ impl ExecutionPolicy {
     }
 
     fn rule_decision(&self, subject: &Subject<'_>, allow_extra: &[Rule]) -> Option<PolicyDecision> {
-        let (repo, home) = (&self.roots.repo, &self.roots.home);
+        // Rule WD1: a relative path rule applies in each work dir, as it does in each project.
+        let repo = match subject {
+            Subject::Path { path, .. } => self.roots.repo_of(path),
+            _ => &self.roots.repo,
+        };
+        let home = &self.roots.home;
         if let Some(r) = self.deny.iter().find(|r| r.matches(subject, repo, home)) {
             return Some(PolicyDecision::deny(
                 RuleRef::permission(&r.raw),
@@ -929,10 +934,10 @@ impl ExecutionPolicy {
             Family::Edit => self
                 .write_paths(call)
                 .first()
-                .map(|(p, _)| perms::suggestion_for_path(&call.tool, p, &self.roots.repo)),
+                .map(|(p, _)| perms::suggestion_for_path(&call.tool, p, self.roots.repo_of(p))),
             Family::Read => self
                 .file_path(call)
-                .map(|(p, _)| perms::suggestion_for_path("Read", &p, &self.roots.repo)),
+                .map(|(p, _)| perms::suggestion_for_path("Read", &p, self.roots.repo_of(&p))),
             Family::WebFetch => call
                 .str_field("url")
                 .and_then(perms::url_host)

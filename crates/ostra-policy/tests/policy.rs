@@ -182,17 +182,77 @@ const BUILD_FAIL: &str = "Exit code 1\n[ERROR] /r/src/main/java/Foo.java:[11,2] 
 // ---------------------------------------------------------------------------------------------
 
 #[test]
+fn write_scope_covers_each_named_work_dir() {
+    // Rule WD1: a run writes in every work dir the orchestrator named, and only there.
+    let f = fx();
+    let api = f.repo.parent().unwrap().join("api");
+    let web = f.repo.parent().unwrap().join("web");
+    for d in [&api, &web] {
+        std::fs::create_dir_all(d.join("src")).unwrap();
+    }
+    let named = |agent: AgentName| {
+        let mut ctx = f.ctx(agent);
+        ctx.work_dirs = vec![
+            ostra_core::exec::WorkDir {
+                project: "backend".into(),
+                path: f.repo.clone(),
+            },
+            ostra_core::exec::WorkDir {
+                project: "api".into(),
+                path: api.clone(),
+            },
+        ];
+        ExecutionPolicy::new(ctx, PolicyInputs::default())
+    };
+    let imp = named(AgentName::Implementer);
+    allowed(&imp, &write(f.repo.join("src/a.ts")));
+    allowed(&imp, &write(api.join("src/a.ts")));
+    allowed(
+        &imp,
+        &bash(format!("echo x > {}", shp(api.join("src/b.ts")))),
+    );
+    let reason = denied(&imp, &write(web.join("src/a.ts")), "outside all of them");
+    assert!(reason.contains(&*api.to_string_lossy()), "{reason}");
+    denied(&imp, &write(api.join("src/a.test.ts")), "test file");
+    denied(
+        &imp,
+        &write(api.join(".ostra/memory/knowledge.sqlite3")),
+        "Memory tool",
+    );
+    // A suggested rule is relative to the work dir that holds the path, like a rule in one project.
+    assert_eq!(
+        imp.allow_rule_suggestion(&write(api.join("src/a.ts")))
+            .as_deref(),
+        Some("Edit(/src/**)")
+    );
+    // Without work dirs, the run writes in its repo root alone.
+    denied(
+        &f.policy(AgentName::Implementer),
+        &write(api.join("src/a.ts")),
+        "outside all of them",
+    );
+    // Project setup stays in the main work dir.
+    let init = named(AgentName::Initializer);
+    allowed(&init, &write(f.repo.join(".ostra/INVENTORY.md")));
+    denied(
+        &init,
+        &write(api.join(".ostra/INVENTORY.md")),
+        "outside the scope of initializer",
+    );
+}
+
+#[test]
 fn write_scope_per_agent() {
     let f = fx();
     denied(
         &f.policy(AgentName::PromptGeneration),
         &write("/etc/passwd"),
-        "outside both",
+        "outside all of them",
     );
     denied(
         &f.policy(AgentName::WriteTest),
         &write(f.repo.join("../outside.txt")),
-        "outside both",
+        "outside all of them",
     );
 
     for agent in [
@@ -376,7 +436,7 @@ fn bash_scope_per_agent() {
     denied(
         &f.policy(AgentName::Implementer),
         &bash("echo x > /tmp/ostra-test-scratch.log"),
-        "outside both",
+        "outside all of them",
     );
     denied(
         &rev,
@@ -394,7 +454,7 @@ fn bash_scope_per_agent() {
     denied(
         &f.policy(AgentName::WriteTest),
         &bash(format!("rm -rf {}", shp(f.repo.join("../sibling")))),
-        "outside both",
+        "outside all of them",
     );
     // A relative target after `cd` resolves against the new directory.
     denied(

@@ -51,12 +51,17 @@ fn canon(p: &Path) -> PathBuf {
 /// Canonical roots of one execution, computed once.
 #[derive(Debug, Clone)]
 pub struct Roots {
+    /// The main work dir: the run's working folder and the root of its project setup.
     pub repo: PathBuf,
+    /// Rule WD1: every work dir of the run, `repo` first.
+    pub repos: Vec<PathBuf>,
     pub session_dir: PathBuf,
     pub session_root: PathBuf,
     pub state_dir: PathBuf,
     pub sessions_root: PathBuf,
     pub memory_db: PathBuf,
+    /// Rule WD1: the memory database of each work dir, which only the Memory tool writes.
+    pub memory_dbs: Vec<PathBuf>,
     pub protected: Vec<PathBuf>,
     /// Files protected together with their `-wal`, `-shm`, and `-journal` siblings.
     pub protected_db_files: Vec<PathBuf>,
@@ -102,6 +107,7 @@ impl Roots {
         }
         Roots {
             repo: canon(&ctx.repo_root),
+            repos: ctx.work_roots().into_iter().map(canon).collect(),
             session_dir: canon(&ctx.session_dir),
             state_dir: paths::session_state_dir(&session_root),
             session_root,
@@ -111,6 +117,11 @@ impl Roots {
                 canon(&paths::sessions_root(ws))
             },
             memory_db: canon(&ctx.memory_db),
+            memory_dbs: ctx
+                .work_roots()
+                .into_iter()
+                .map(|r| canon(&paths::project_memory_db(r)))
+                .collect(),
             protected,
             protected_db_files,
             temps,
@@ -173,7 +184,7 @@ impl Roots {
 
     /// OS temp scratch. A project that itself lives under temp is project source, not scratch.
     pub fn in_temp(&self, p: &Path) -> bool {
-        self.temps.iter().any(|t| inside(t, p)) && !inside(&self.repo, p)
+        self.temps.iter().any(|t| inside(t, p)) && !self.in_repo(p)
     }
 
     /// Rule G2: the ignore files as this execution's searches see them, Ostra's own state and the
@@ -188,8 +199,27 @@ impl Roots {
         )
     }
 
+    /// Rule WD1: inside one of the run's work dirs.
     pub fn in_repo(&self, p: &Path) -> bool {
-        inside(&self.repo, p)
+        self.repos.iter().any(|r| inside(r, p))
+    }
+
+    /// Rule WD1: the work dir that holds `p`, the deepest when work dirs nest, else the main one.
+    pub fn repo_of(&self, p: &Path) -> &Path {
+        self.repos
+            .iter()
+            .filter(|r| inside(r, p))
+            .max_by_key(|r| r.components().count())
+            .unwrap_or(&self.repo)
+    }
+
+    /// Rule WD1: the work dirs, quoted and joined for a refusal.
+    pub fn repo_list(&self) -> String {
+        self.repos
+            .iter()
+            .map(|r| format!("\"{}\"", disp(r)))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     fn db_file_match(file: &Path, p: &Path) -> bool {
@@ -246,7 +276,9 @@ impl Roots {
     }
 
     pub fn is_memory_db(&self, p: &Path) -> bool {
-        Self::db_file_match(&self.memory_db, p)
+        std::iter::once(&self.memory_db)
+            .chain(self.memory_dbs.iter())
+            .any(|f| Self::db_file_match(f, p))
     }
 
     /// Engine state: this session's state dir, any session's `.state`, and the memory store.
@@ -751,7 +783,7 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
     // Rule CA6: test files need the `test_files` grant.
     if !ctx.has(Capability::TestFiles)
         && !in_session
-        && let Ok(rel) = target.strip_prefix(&roots.repo)
+        && let Ok(rel) = target.strip_prefix(roots.repo_of(target))
         && is_test_path(&rel.to_string_lossy())
     {
         return Some(deny(
@@ -783,15 +815,18 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
         if scope == WriteScope::Session && roots.in_temp(target) {
             return None;
         }
+        // Rule WD1: a run writes in each work dir the orchestrator named, and nowhere else.
         return Some(deny(
             WRITE_SCOPE,
             format!(
-                "Write only inside the repo root \"{}\" or your session dir \"{}\": \"{raw}\" is outside both.",
-                disp(&roots.repo),
+                "Write only inside a work dir ({}) or your session dir \"{}\": \"{raw}\" is outside all of them. \
+                 Name a needed project in your report.",
+                roots.repo_list(),
                 disp(&roots.session_dir)
             ),
         ));
     }
+    // Rule WD1: project setup writes only in the main work dir, the project it sets up.
     // The target is resolved through symlinks, so the dirs it is compared with are too: a skills
     // dir may be a link to `skills/` or `.claude/skills/` elsewhere in the project.
     let skills = canon(&paths::project_skills_dir(&roots.repo));
