@@ -498,6 +498,11 @@ async fn attached_files_and_folders_must_be_inside_a_project() {
         ContextDelivery::Queue,
     )
     .unwrap();
+    // A queued amendment joins the request only after the driver delivers it.
+    until("the amendments are delivered", || {
+        e.state(&s).unwrap().amendments.iter().all(|a| a.delivered)
+    })
+    .await;
     let st = e.state(&s).unwrap();
     assert_eq!(st.amendments[1].files, vec![file("docs/")]);
     assert!(st.full_request().contains("(folder, @app/docs/)"));
