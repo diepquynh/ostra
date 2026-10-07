@@ -165,7 +165,7 @@ fn call_sites() {
         assert!(
             fold.uses
                 .iter()
-                .any(|l| l.name == "apply" && l.path == "crates/ostra-engine/src/state.rs")
+                .any(|l| l.name == "apply" && l.path == "crates/ostra-engine/src/state/apply.rs")
         );
     });
 }
