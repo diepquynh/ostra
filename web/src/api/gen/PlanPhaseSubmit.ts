@@ -2,7 +2,7 @@
 
 export type PlanPhaseSubmit = { id: number, deliverable: string, 
 /**
- * Project key.
+ * Rule WD2: the project key, or a comma-separated list of keys with the main project first.
  */
 project: string, title: string, 
 /**

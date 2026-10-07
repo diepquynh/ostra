@@ -754,10 +754,13 @@ fn scope_value(s: &SessionState, scope: Option<&str>) -> Value {
         }
         Some(sc) if sc.starts_with("phase:") => {
             let id = sc["phase:".len()..].parse::<u32>().ok();
+            let info = id.and_then(|i| s.pipeline.phase(s, i)).map(|p| p.info);
             json!({
                 "kind": "phase",
                 "phase": id,
-                "project": id.and_then(|i| s.pipeline.phase(s, i)).map(|p| p.info.project),
+                "project": info.as_ref().map(|p| p.project.clone()),
+                // Rule WD2: every project of the phase, `project` first.
+                "projects": info.as_ref().map(|p| p.projects()),
             })
         }
         _ => json!({ "kind": "session" }),

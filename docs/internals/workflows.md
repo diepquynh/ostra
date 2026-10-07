@@ -442,7 +442,7 @@ value of a built-in stage (`Pipeline::stage_value`) and the pipeline facts in `s
 | `ostra:closing` | `{docs}`. From a project instance, `docs` is `true` when the closing gate chose docs for that project and no BLOCKER is open (Hard rule 21). From a different scope, `docs` is the list of the projects with docs. |
 | `ostra:book` | `{book}`: the ID of the book that the session wrote, or null |
 | `session` | `{request, category, track, stakes, projects, title}` |
-| `scope` | `{kind: "session"}`, `{kind: "project", project}`, or `{kind: "phase", phase, project}` |
+| `scope` | `{kind: "session"}`, `{kind: "project", project}`, or `{kind: "phase", phase, project, projects}` (`projects` lists every project of the phase, `project` first) |
 
 The scope decides which instance a reference reads:
 

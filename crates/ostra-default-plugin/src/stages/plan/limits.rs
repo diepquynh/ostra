@@ -110,24 +110,67 @@ pub fn split_message(phase: u32, single: &[(String, String)]) -> String {
 }
 
 /// Rule WD3: the plan's phases that name several projects while a single-project agent would run
-/// them, each with its correction.
+/// them, each with its correction. Rule O2: a phase creates only its main project, so a project
+/// that is not in scope yet must come first in its cell.
 pub fn check_plan(input: &Value, params: &Value) -> Vec<String> {
     let single = recorded(params);
-    if single.is_empty() {
-        return vec![];
-    }
+    let existing: Option<Vec<String>> = params
+        .get("projects_in_scope")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| e.get(0).and_then(Value::as_str).map(String::from))
+                .collect()
+        });
     let Some(phases) = input.get("phases").and_then(Value::as_array) else {
         return vec![];
     };
-    phases
-        .iter()
-        .filter(|p| {
-            let cell = p.get("project").and_then(Value::as_str).unwrap_or_default();
-            !crate::fold::phase_projects(cell).1.is_empty()
-        })
-        .map(|p| {
-            let id = p.get("id").and_then(Value::as_u64).unwrap_or_default() as u32;
-            split_message(id, &single)
-        })
-        .collect()
+    let mut issues = vec![];
+    for p in phases {
+        let cell = p.get("project").and_then(Value::as_str).unwrap_or_default();
+        let (_, also) = crate::fold::phase_projects(cell);
+        if also.is_empty() {
+            continue;
+        }
+        let id = p.get("id").and_then(Value::as_u64).unwrap_or_default() as u32;
+        if !single.is_empty() {
+            issues.push(split_message(id, &single));
+        }
+        if let Some(existing) = &existing {
+            for k in also.iter().filter(|k| !existing.contains(k)) {
+                issues.push(format!(
+                    "Put new project {k} first in the project cell of phase {id}, or give it its own phase: a phase creates only its main project."
+                ));
+            }
+        }
+    }
+    issues
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn plan(cell: &str) -> Value {
+        json!({ "phases": [{ "id": 2, "project": cell }] })
+    }
+
+    #[test]
+    fn a_multi_project_phase_needs_native_agents() {
+        let params = json!({ SINGLE_PROJECT_PARAM: [["implementer", "harness:codex"]] });
+        let issues = check_plan(&plan("api, web"), &params);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].starts_with("Split phase 2 into one phase per project"));
+        assert!(check_plan(&plan("api"), &params).is_empty());
+    }
+
+    #[test]
+    fn a_phase_creates_only_its_main_project() {
+        let params = json!({ "projects_in_scope": [["api", "/w/api"]] });
+        let issues = check_plan(&plan("api, newweb"), &params);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].starts_with("Put new project newweb first"));
+        assert!(check_plan(&plan("newweb, api"), &params).is_empty());
+    }
 }

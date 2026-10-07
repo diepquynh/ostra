@@ -336,6 +336,8 @@ missing something necessary, raise it as a Step 4 clarifying question. Never add
     `Depends on`, and put the producer first, for example the API phase before the frontend phase that calls
     it.
   - If the prompt has no `Stage limits:` line, give one phase per project.
+  - A phase creates only its main project. If a listed project does not exist yet, put it first, or give it
+    its own phase.
 
   Ostra refuses a phase in several projects when a stage that runs it works in one project.
 - **P9: Tag phase complexity (the model-routing tier).** Give every phase a **Complexity** of Low, Medium, or

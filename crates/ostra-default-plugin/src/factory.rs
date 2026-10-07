@@ -222,7 +222,7 @@ impl SpawnFactory for AgentsFactory {
                 changed_since_research,
                 code_facts: facts_file,
                 stage_limits: if x.target_type == Some(FactTarget::Plan) && !x.docs_check {
-                    stage_limits(i)
+                    x.stage_limits.clone()
                 } else {
                     vec![]
                 },
@@ -235,7 +235,7 @@ impl SpawnFactory for AgentsFactory {
                 findings: x.findings.clone(),
                 phases_to_revise: x.revise_phases.clone(),
                 master_plan: i.target.clone(),
-                stage_limits: stage_limits(i),
+                stage_limits: x.stage_limits.clone(),
             }),
             // Rule O8: an implementer the user sent to a stuck run fixes only what stopped it.
             Contract::Implementation if matches!(req.purpose, ExecPurpose::Unblock { .. }) => {
@@ -510,14 +510,6 @@ impl SpawnFactory for AgentsFactory {
             }),
         })
     }
-}
-
-/// Rule WD3: the later stages' limits the planner put in `SpawnInputs::extra`, one line each.
-fn stage_limits(i: &ostra_engine::plan::SpawnInputs) -> Vec<String> {
-    i.extra
-        .get("stage_limits")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default()
 }
 
 /// Rule W3: an instruction that tags files or artifacts carries their absolute paths, so every

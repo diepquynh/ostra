@@ -159,7 +159,7 @@ impl FactCheckSubmit {
 pub struct PlanPhaseSubmit {
     pub id: u32,
     pub deliverable: String,
-    /// Project key.
+    /// Rule WD2: the project key, or a comma-separated list of keys with the main project first.
     pub project: String,
     pub title: String,
     /// `Low`, `Medium`, or `High`.

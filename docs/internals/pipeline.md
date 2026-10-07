@@ -516,6 +516,11 @@ fold blocks such a phase if a plan passed without the check. If a harness run st
 runner keeps the main project only and shows "Harness run: works in `api` only, `web` left out (Rule WD3)" on
 the run.
 
+A phase creates only its main project, because the run that creates a project starts in the session dir (Rule
+O2). So the submit check also refuses a phase that names a new project after its main project, with this
+correction: "Put new project web first in the project cell of phase 2, or give it its own phase: a phase creates
+only its main project."
+
 When a phase ends blocked, Ostra removes from the queue every phase that depends on it, directly or through other
 phases. Independent phases continue (Rule D9). `removed_phases` calculates the removal again on every planner
 pass.
