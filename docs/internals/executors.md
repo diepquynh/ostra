@@ -57,7 +57,7 @@ An `ExecutionSpec` holds all the data that the run needs. The engine resolves th
 | `capabilities` | The tools that the agent can have, from its `agent.toml`. |
 | `submit_schema` | The JSON schema of `submit_<agent>`. |
 | `timeout_secs` | The hard time budget for this execution. |
-| `ctx` | The data that the policy needs: the repo root, the session dir, the report path, the permission mode and rules, the protected paths, the memory database, and the sandbox mode. |
+| `ctx` | The data that the policy needs: the repo root, the work dirs, the session dir, the report path, the permission mode and rules, the protected paths, the memory database, and the sandbox mode. |
 | `resume` | Set when this run continues an earlier run. After a pause, `resume.from` is the run's own id. |
 | `harness_session_id` | A session id that Ostra selects before the start, for the CLIs that accept one. |
 
@@ -130,8 +130,8 @@ Before the first model call, a run does the following, in order:
    variable to set.
 2. Opens the workspace's MCP servers for this execution ([MCP servers](mcp.md)). If the run cannot reach a
    server, it adds one status line and continues without that server.
-3. Builds the policy for this execution from the spec's context and the build and test commands of the project
-   profile. The build-streak guard uses those commands.
+3. Builds the policy for this execution from the spec's context and the build and test commands of the profile
+   of each work dir. The build-streak guard uses those commands.
 4. Builds the tool environment: the persistent shell directory, the set of files that the agent read, an HTTP
    client, and the list of environment variables that no child process can inherit.
 5. Decides the sandbox. The run reads the `[sandbox]` table fresh. If the table asks for a sandbox, these
@@ -148,6 +148,23 @@ Before the first model call, a run does the following, in order:
    last.
 7. Builds the message list. A new run starts with the first message. A resumed run rebuilds the stored
    transcript and adds a resume turn (below).
+
+### Work dirs
+
+A native run can work in more than one project (Rule WD1). The engine names the projects of the run in
+`ctx.work_dirs`, the main project first, and `ctx.repo_root` is the folder of the main project. The tools use
+the list in these ways:
+
+- Bash starts in the main project. Relative paths in every tool resolve against the shell's directory, so the
+  agent names a file in another work dir by its absolute path.
+- The Skill tool looks for a project skill in each work dir, the main project first.
+- `Memory` records a lesson in the main project's database. `MemoryRecall` also searches the database of each
+  other work dir.
+- A code navigation call goes to the index of the work dir that holds its `path`.
+- The build-streak guard counts the build and test commands of each work dir's profile.
+- The check that keeps a `.git` folder from changes covers each work dir and the workspace root.
+
+[Tools](tools.md) gives the details of each tool.
 
 Ostra marks the system prompt for caching. It also marks the last tool definition, the submit tool. Thus,
 there is one cache breakpoint after the system prompt and one after the tool list. Each turn after the first
@@ -416,6 +433,19 @@ The four supported CLIs:
 | Codex | `codex` | Captured from the first event or transcript | `rollout-*.jsonl` |
 | Grok Build | `grok` | Chosen by Ostra (`--session-id`) | `sessions/<cwd>/<id>/updates.jsonl` |
 | Antigravity | `agy` | Captured from the screen or transcript | None: its transcript records no usage |
+
+A harness run works in its main project only (Rule WD1). The engine gives it one work dir, even when the
+step names more projects, because the harness CLIs do not all reach folders outside their working directory in
+the same way:
+
+| Harness | Flag for another folder | Its own permission layer in an Ostra run |
+| --- | --- | --- |
+| Claude Code | `--add-dir` | `--permission-mode default`. Ostra's hooks decide each call. |
+| Codex | `--add-dir` (writable roots) | Off (`--dangerously-bypass-approvals-and-sandbox`). |
+| Grok Build | None. It has `--cwd` only. | Off (`bypassPermissions`). |
+| Antigravity | `--add-dir` | Off (`--dangerously-skip-permissions`). |
+
+Use the native executor for an agent that must work in several projects in one run.
 
 You can change the binary name for each harness with `[harness.<name>].command`. Put more arguments in
 `[harness.<name>].args`. We checked the launch flags against claude 2.1.280, codex 0.153.4, grok 1.0.30, and

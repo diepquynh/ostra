@@ -107,7 +107,15 @@ impl NativeExecutor {
             host,
             usage,
             cancel,
-            git_repos: ostra_sandbox::git_repos(&[&spec.ctx.repo_root, &spec.ctx.workspace_root]),
+            // Rule WD1: the checks cover every work dir.
+            git_repos: ostra_sandbox::git_repos(
+                &spec
+                    .ctx
+                    .work_roots()
+                    .into_iter()
+                    .chain([spec.ctx.workspace_root.as_path()])
+                    .collect::<Vec<_>>(),
+            ),
             spec,
         }
     }
@@ -218,10 +226,8 @@ enum TurnEnd {
     },
 }
 
+/// Rule WD1: the build and test commands of every work dir's profile.
 fn policy_inputs(ctx: &ExecContext) -> PolicyInputs {
-    let profile: ProjectProfile =
-        load_toml(&paths::project_profile(&ctx.repo_root)).unwrap_or_default();
-    let c = &profile.commands;
     let some = |v: &[&Option<String>]| -> Vec<String> {
         v.iter()
             .filter_map(|s| s.as_deref())
@@ -230,11 +236,26 @@ fn policy_inputs(ctx: &ExecContext) -> PolicyInputs {
             .map(String::from)
             .collect()
     };
-    PolicyInputs {
-        build_commands: some(&[&c.build, &c.test, &c.test_one, &c.lint, &c.typecheck]),
-        test_commands: some(&[&c.test, &c.test_one]),
+    let mut inputs = PolicyInputs {
+        build_commands: vec![],
+        test_commands: vec![],
         read_only_mcp_tools: vec![],
+    };
+    for root in ctx.work_roots() {
+        let profile: ProjectProfile = load_toml(&paths::project_profile(root)).unwrap_or_default();
+        let c = &profile.commands;
+        for cmd in some(&[&c.build, &c.test, &c.test_one, &c.lint, &c.typecheck]) {
+            if !inputs.build_commands.contains(&cmd) {
+                inputs.build_commands.push(cmd);
+            }
+        }
+        for cmd in some(&[&c.test, &c.test_one]) {
+            if !inputs.test_commands.contains(&cmd) {
+                inputs.test_commands.push(cmd);
+            }
+        }
     }
+    inputs
 }
 
 fn input_message(input: &Value) -> &str {
@@ -475,6 +496,7 @@ impl Run {
             agent: spec.agent,
             doc_kinds: ostra_core::doc::DocKind::granted(&spec.capabilities),
             repo_root: ctx.repo_root.clone(),
+            work_dirs: ctx.work_dirs.clone(),
             workspace_root: ctx.workspace_root.clone(),
             session_dir: ctx.session_dir.clone(),
             report_file: ctx.report_file.clone(),

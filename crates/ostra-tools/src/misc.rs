@@ -33,12 +33,15 @@ pub async fn skill(env: &ToolEnv, input: &Value) -> ToolOutput {
             "`{name}` is not a skill name. Pass a SKILL.md location as `path` instead."
         ));
     }
-    let repo = &env.config().repo_root;
-    if let Some(local) = ostra_core::paths::find_project_skill(repo, bare)
-        && let Ok(content) = tokio::fs::read_to_string(&local).await
-    {
-        env.mark_read(&local);
-        return skill_output(&local, &content);
+    // Rule WD1: each work dir's own skills, the main project's first.
+    let roots = env.config().work_roots();
+    for repo in &roots {
+        if let Some(local) = ostra_core::paths::find_project_skill(repo, bare)
+            && let Ok(content) = tokio::fs::read_to_string(&local).await
+        {
+            env.mark_read(&local);
+            return skill_output(&local, &content);
+        }
     }
     // HANDOVER 6.5: a custom skill kept as a workspace artifact, after the project's own.
     if let Some(path) = ostra_core::artifacts::skill_path(&env.config().workspace_root, bare)
@@ -50,8 +53,9 @@ pub async fn skill(env: &ToolEnv, input: &Value) -> ToolOutput {
     if let Some((path, content)) = (env.config().skill_resolver)(bare) {
         return skill_output(&path, &content);
     }
-    let tried = ostra_core::paths::project_skill_dirs(repo)
+    let tried = roots
         .iter()
+        .flat_map(|r| ostra_core::paths::project_skill_dirs(r))
         .map(|d| d.join(bare).join("SKILL.md").display().to_string())
         .collect::<Vec<_>>()
         .join(" or ");
@@ -124,9 +128,30 @@ pub async fn memory_recall(env: &ToolEnv, input: &Value) -> ToolOutput {
         .map(|l| l as usize)
         .unwrap_or(DEFAULT_RECALL_LIMIT)
         .clamp(1, MAX_RECALL_LIMIT);
-    let db = env.config().memory_db.clone();
+    // Rule WD1: recall searches the main project's lessons, then each other work dir's that has
+    // a store. New lessons go to the main project only.
+    let mut dbs: Vec<(Option<String>, std::path::PathBuf)> =
+        vec![(None, env.config().memory_db.clone())];
+    for w in env.config().other_work_dirs() {
+        let db = ostra_core::paths::project_memory_db(&w.path);
+        if db.is_file() && !dbs.iter().any(|(_, d)| *d == db) {
+            dbs.push((Some(w.project.clone()), db));
+        }
+    }
+    let labeled = dbs.len() > 1;
+    let main_key = env.config().work_dirs.first().map(|w| w.project.clone());
     let result = tokio::task::spawn_blocking(move || {
-        MemoryStore::open(&db).and_then(|s| s.recall(area.as_deref(), query.as_deref(), limit))
+        let mut all = vec![];
+        for (key, db) in dbs {
+            let found = MemoryStore::open(&db)
+                .and_then(|s| s.recall(area.as_deref(), query.as_deref(), limit))?;
+            all.extend(found.into_iter().map(|l| (key.clone(), l)));
+            if all.len() >= limit {
+                break;
+            }
+        }
+        all.truncate(limit);
+        Ok::<_, ostra_store::StoreError>(all)
     })
     .await;
     let lessons = match result {
@@ -142,10 +167,14 @@ pub async fn memory_recall(env: &ToolEnv, input: &Value) -> ToolOutput {
         lessons.len(),
         if lessons.len() == 1 { "" } else { "s" }
     );
-    for (i, l) in lessons.iter().enumerate() {
+    for (i, (key, l)) in lessons.iter().enumerate() {
         let date = l.created_at.get(..10).unwrap_or(&l.created_at);
+        let project = match (labeled, key.as_ref().or(main_key.as_ref())) {
+            (true, Some(k)) => format!("{k}: "),
+            _ => String::new(),
+        };
         out.push_str(&format!(
-            "{}. [{}] {} (source: {}, {date})\n",
+            "{}. [{project}{}] {} (source: {}, {date})\n",
             i + 1,
             l.area,
             l.lesson,
@@ -245,6 +274,74 @@ mod tests {
         );
         assert!(!out.text.contains("budget"), "{}", out.text);
         assert!(out.text.contains("app/slots.md"), "{}", out.text);
+    }
+
+    #[tokio::test]
+    async fn skill_loads_from_each_work_dir_main_first() {
+        let d = tempfile::tempdir().unwrap();
+        let env = crate::testutil::env_with_api(d.path());
+        let api = env.config().work_dirs[1].path.clone();
+        let skill = |root: &std::path::Path, name: &str, text: &str| {
+            let dir = root.join(".agents/skills").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("SKILL.md"), text).unwrap();
+        };
+        skill(&api, "routes", "# Routes in api");
+        skill(&api, "shared", "# Shared from api");
+        skill(&env.config().repo_root, "shared", "# Shared from web");
+        let out = run(&env, "Skill", json!({"name": "routes"})).await;
+        assert!(
+            !out.is_error && out.text.contains("Routes in api"),
+            "{}",
+            out.text
+        );
+        let out = run(&env, "Skill", json!({"name": "shared"})).await;
+        assert!(out.text.contains("Shared from web"), "{}", out.text);
+        let out = run(&env, "Skill", json!({"name": "missing"})).await;
+        assert!(
+            out.is_error && out.text.contains(&*api.to_string_lossy()),
+            "{}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_writes_main_and_recalls_every_work_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let env = crate::testutil::env_with_api(d.path());
+        let api_db = ostra_core::paths::project_memory_db(&env.config().work_dirs[1].path);
+        ostra_store::memory::MemoryStore::open(&api_db)
+            .unwrap()
+            .record("routes", "Version every route under /v1.", "user")
+            .unwrap();
+        let out = run(
+            &env,
+            "Memory",
+            json!({"area": "ui", "lesson": "Use the design tokens."}),
+        )
+        .await;
+        assert!(!out.is_error, "{}", out.text);
+        assert!(env.config().memory_db.is_file());
+        let api_lessons = ostra_store::memory::MemoryStore::open(&api_db)
+            .unwrap()
+            .recall(None, None, 10)
+            .unwrap();
+        assert_eq!(
+            api_lessons.len(),
+            1,
+            "a new lesson goes to the main project only"
+        );
+        let out = run(&env, "MemoryRecall", json!({})).await;
+        assert!(
+            out.text.contains("[web: ui] Use the design tokens."),
+            "{}",
+            out.text
+        );
+        assert!(
+            out.text.contains("[api: routes] Version every route"),
+            "{}",
+            out.text
+        );
     }
 
     #[tokio::test]

@@ -340,11 +340,12 @@ Ostra gets the page itself:
 
 Loads a `SKILL.md` and returns its text with the instruction to follow it. Give `name` or `path`.
 
-With `name`, the tool looks in three locations, in this order:
+With `name`, the tool looks in these locations, in this order:
 
-1. The `.agents/skills/<name>/SKILL.md` of the project.
-2. The older `.ostra/skills/<name>/SKILL.md`.
-3. The skills that Ostra ships, such as `meta-author`.
+1. The `.agents/skills/<name>/SKILL.md` of the main project, then the older `.ostra/skills/<name>/SKILL.md`.
+2. The same two folders in each other work dir of the run (Rule WD1), in the order of the work dirs.
+3. The `skills/<name>/SKILL.md` of the workspace artifacts.
+4. The skills that Ostra ships, such as `meta-author`.
 
 The tool refuses a name with `/` or `..`, because a name is not a path. With `path`, the tool reads that file,
 and the policy judges it as a `Read` of that path. The tool marks the skill file as read. Thus a later `Edit` of
@@ -431,6 +432,10 @@ If an agent records the same area and lesson again, the tool updates the lesson.
 
 `MemoryRecall` returns recorded lessons, the most relevant first. Inputs: `query`, an optional `area` that
 limits the results to a module and its sub-scopes, and `limit` (default 8, at most 50).
+
+A run with more than one work dir (Rule WD1) records each lesson in the main project's database.
+`MemoryRecall` searches the main project first, then the database of each other work dir that has one, until it
+has `limit` lessons. Then each lesson starts with its project key, for example `[api: routes]`.
 
 The engine owns the database. Agents can use it only through these two tools, and no file tool can write it.
 The build streak also uses it. After the second failed build in a row, Ostra adds the recalled lessons for that
@@ -521,6 +526,10 @@ These tools exist for two reasons. An outline costs a fraction of a file read. A
 does not include the mentions that a text search cannot tell apart from a different definition with the same
 name. On a harness, the tools are `code_outline`, `code_find`, and the other `code_*` names. The `ostra` MCP
 server serves them. [The code index](code-index.md) describes how Ostra builds the index.
+
+Each call goes to one project's index (Rule WD1). An absolute `path` selects the work dir that contains it. A
+relative `path` that does not exist in the main project and starts with the folder name or the key of another
+work dir selects that work dir, and the tool removes that first part. Each other call goes to the main project.
 
 ### Messaging tools
 

@@ -1172,3 +1172,37 @@ async fn each_response_reports_its_own_cost_before_its_tool_calls() {
             < at(&|d| matches!(d, ExecutionDelta::ToolCall { call_id, .. } if call_id == "r10"))
     );
 }
+
+#[test]
+fn policy_inputs_merge_every_work_dir_profile() {
+    let f = fixture();
+    let api = f.outside.join("api");
+    std::fs::create_dir_all(api.join(".ostra")).unwrap();
+    std::fs::write(
+        f.repo.join(".ostra/project.toml"),
+        "[commands]\nbuild = \"npm run build\"\ntest = \"npm test\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        api.join(".ostra/project.toml"),
+        "[commands]\ntest = \"cargo test\"\n",
+    )
+    .unwrap();
+    let mut s = spec(&f, AgentName::Implementer, PermissionMode::Default, vec![]);
+    s.ctx.work_dirs = vec![
+        ostra_core::exec::WorkDir {
+            project: "app".into(),
+            path: f.repo.clone(),
+        },
+        ostra_core::exec::WorkDir {
+            project: "api".into(),
+            path: api,
+        },
+    ];
+    let inputs = policy_inputs(&s.ctx);
+    assert_eq!(
+        inputs.build_commands,
+        vec!["npm run build", "npm test", "cargo test"]
+    );
+    assert_eq!(inputs.test_commands, vec!["npm test", "cargo test"]);
+}
