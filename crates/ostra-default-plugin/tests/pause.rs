@@ -11,6 +11,7 @@ use ostra_core::exec::{
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{ExecutionId, SessionId, WorkspaceId};
 use ostra_core::model::Effort;
+use ostra_default_plugin::data::OsExt;
 use ostra_default_plugin::factory::AgentsFactory;
 use ostra_engine::runner::{PAUSE_RESUME_NOTE, RESUMED_STATUS};
 use ostra_engine::{Engine, Notice, Services, SpawnFactory};
@@ -70,6 +71,9 @@ struct Fake {
 
 #[async_trait]
 impl Services for Fake {
+    fn pipeline(&self) -> std::sync::Arc<dyn ostra_engine::pipeline::Pipeline> {
+        ostra_default_plugin::pipeline()
+    }
     fn global(&self) -> GlobalConfig {
         let mut g = GlobalConfig::default();
         let t = g.tiers.get_mut("native").unwrap();
@@ -633,7 +637,7 @@ async fn a_skipped_research_task_stops_and_opens_no_gate() {
     })
     .await;
     let st = e.state(&s).unwrap();
-    assert!(st.explore[0].abandoned);
+    assert!(st.ext.os().explore[0].abandoned);
     assert_eq!(st.open_gates().count(), 0, "no failure gate");
     // Rule D1: the only research task was skipped, so there is nothing to answer from.
     assert!(st.failed.unwrap().contains("no research document"));

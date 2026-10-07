@@ -14,9 +14,10 @@ use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::WorkspaceId;
 use ostra_core::model::Effort;
 use ostra_core::pipeline::StageKind;
+use ostra_default_plugin::data::OsExt;
 use ostra_default_plugin::factory::AgentsFactory;
 use ostra_default_plugin::view;
-use ostra_engine::{Engine, EngineNotice, Notice, Services, SessionState, SpawnFactory};
+use ostra_engine::{Engine, EngineNotice, Notice, Services, SpawnFactory};
 use ostra_store::WorkspaceDb;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -31,6 +32,9 @@ struct Fake {
 
 #[async_trait]
 impl Services for Fake {
+    fn pipeline(&self) -> std::sync::Arc<dyn ostra_engine::pipeline::Pipeline> {
+        ostra_default_plugin::pipeline()
+    }
     fn global(&self) -> GlobalConfig {
         let mut g = GlobalConfig::default();
         for t in g.tiers.values_mut() {
@@ -346,7 +350,7 @@ async fn implement_session_runs_to_completion_under_yolo() {
         })
         .unwrap();
     assert!(started < ran);
-    let mid = SessionState::fold(summary.id.clone(), &events[..=started]);
+    let mid = ostra_default_plugin::fold_session(summary.id.clone(), &events[..=started]);
     assert_eq!(view::inferred_stage(&mid).1, "Formatting app");
     assert!(view::stages(&mid).iter().any(|c| {
         c.stage == StageKind::Format
@@ -354,7 +358,10 @@ async fn implement_session_runs_to_completion_under_yolo() {
             && c.detail.as_deref() == Some("true")
     }));
     assert!(
-        SessionState::fold(summary.id.clone(), &events[..=ran]).project_tracks["app"]
+        ostra_default_plugin::fold_session(summary.id.clone(), &events[..=ran])
+            .ext
+            .os()
+            .project_tracks["app"]
             .running
             .is_none()
     );

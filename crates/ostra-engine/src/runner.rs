@@ -1,12 +1,11 @@
 //! The runner: one driver task per live session. It folds events, asks the planner for the next
 //! steps, performs them, and appends what happened. Every state change is an event first.
 
-use crate::pipeline::{self, ProjectFacts, YoloPlan};
+use crate::pipeline::{PipelineRef, ProjectFacts, YoloPlan};
 use crate::plan::{PlanCtx, SpawnRequest, Step, next_steps};
 use crate::services::{BuiltSpawn, Notice, Services, SpawnEnv};
 use crate::state::{Interrupt, SessionState, purpose_key};
 use crate::uploads;
-use ostra_core::agent::AgentName;
 use ostra_core::api::{
     ActivityItem, CreateSession, ExecutionView, GateView, SessionDetail, SessionSummary,
     TreeSession, UploadRef,
@@ -86,6 +85,7 @@ struct Live {
 }
 
 struct Inner {
+    pipeline: PipelineRef,
     workspace_root: PathBuf,
     workspace_id: WorkspaceId,
     db: WorkspaceDb,
@@ -141,6 +141,10 @@ impl StepHost {
         self.0.snapshot(session)
     }
 
+    pub fn pipeline(&self) -> &PipelineRef {
+        &self.0.pipeline
+    }
+
     pub fn db(&self) -> &WorkspaceDb {
         &self.0.db
     }
@@ -156,6 +160,11 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Engine {
+    /// The pipeline that runs the built-in stages.
+    pub fn pipeline(&self) -> &PipelineRef {
+        &self.inner.pipeline
+    }
+
     pub fn new(
         workspace_root: PathBuf,
         workspace_id: WorkspaceId,
@@ -165,6 +174,7 @@ impl Engine {
         let (tx, _) = broadcast::channel(4096);
         Engine {
             inner: Arc::new(Inner {
+                pipeline: services.pipeline().into(),
                 workspace_root,
                 workspace_id,
                 db,
@@ -416,7 +426,8 @@ impl Engine {
     ) -> Result<(), EngineError> {
         let st = self.state(session)?;
         if let Some(why) =
-            pipeline::get().project_creation_refusal(&st, &project.execution, &project.key)
+            self.pipeline()
+                .project_creation_refusal(&st, &project.execution, &project.key)
         {
             return Err(EngineError::Invalid(why));
         }
@@ -499,7 +510,7 @@ impl Engine {
             yolo: options.yolo,
         })?;
         let live = Arc::new(Live {
-            state: Mutex::new(SessionState::new(id.clone())),
+            state: Mutex::new(SessionState::new(self.pipeline().clone(), id.clone())),
             wake: Notify::new(),
             inflight: Mutex::new(HashSet::new()),
             driving: AtomicBool::new(false),
@@ -535,7 +546,7 @@ impl Engine {
 
     pub fn detail(&self, session: &SessionId) -> Result<SessionDetail, EngineError> {
         let st = self.state(session)?;
-        pipeline::get().detail(
+        self.pipeline().detail(
             &st,
             &self.inner.db,
             &self.inner.workspace_id,
@@ -548,7 +559,7 @@ impl Engine {
         let executions = self.inner.db.list_executions(&summary.id)?;
         let live = self.inner.load(&summary.id)?;
         let st = lock(&live.state);
-        Ok(pipeline::get().tree_session(&st, summary, executions))
+        Ok(self.pipeline().tree_session(&st, summary, executions))
     }
 
     /// Numbered run labels of a session's executions.
@@ -558,7 +569,7 @@ impl Engine {
     ) -> Result<HashMap<ExecutionId, String>, EngineError> {
         let live = self.inner.load(session)?;
         let st = lock(&live.state);
-        Ok(pipeline::get().run_labels(&st))
+        Ok(self.pipeline().run_labels(&st))
     }
 
     fn live_executions(&self) -> HashSet<ExecutionId> {
@@ -594,7 +605,7 @@ impl Engine {
                 source: AnswerSource::User,
                 answer: answer.clone(),
                 reason: None,
-                routed: pipeline::get().answer_needs_route(&view.payload, &answer),
+                routed: self.pipeline().answer_needs_route(&view.payload, &answer),
             },
         )?;
         if let GateAnswer::Permission { answer } = answer
@@ -624,10 +635,10 @@ impl Engine {
             .decisions
             .get(id)
             .ok_or_else(|| EngineError::NotFound(format!("decision {id}")))?;
-        if !pipeline::get().can_override(&st, id) {
+        if !self.pipeline().can_override(&st, id) {
             return Err(EngineError::Invalid("Work that depends on this decision has already started, so it can no longer be overridden.".into()));
         }
-        let valid = pipeline::get().override_ok(d.judge, &output);
+        let valid = self.pipeline().override_ok(d.judge, &output);
         if !valid {
             return Err(EngineError::Invalid(
                 "The override does not match the decision's output shape.".into(),
@@ -821,7 +832,7 @@ impl Engine {
             .ok_or_else(|| {
                 EngineError::Invalid("A side-panel answer has no task to skip.".into())
             })?;
-        if !pipeline::get().can_skip(&self.state(&session)?, id) {
+        if !self.pipeline().can_skip(&self.state(&session)?, id) {
             return Err(EngineError::Invalid(
                 "Only a running research, test analysis, docs, or architecture task can be skipped. Cancel the execution instead.".into(),
             ));
@@ -1105,7 +1116,7 @@ impl Engine {
         if let Some(sid) = &session
             && let Ok(st) = self.state(sid)
         {
-            let d = pipeline::get().artifacts(&st);
+            let d = self.pipeline().artifacts(&st);
             context.push_str("\n# Artifacts of the session this was asked from\n\n");
             for a in d {
                 context.push_str(&format!(
@@ -1248,12 +1259,16 @@ fn validate_files(
 /// Stop a session while no server holds it, so a later start does not recover and re-run its
 /// executions. Running executions become cancelled and keep what they spent. Returns how many
 /// executions were cancelled.
-pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usize, EngineError> {
+pub fn stop_session_offline(
+    pipeline: Arc<dyn crate::pipeline::Pipeline>,
+    db: &WorkspaceDb,
+    session: &SessionId,
+) -> Result<usize, EngineError> {
     let events = db.events(session)?;
     if events.is_empty() {
         return Err(EngineError::NotFound(format!("session {session}")));
     }
-    let st = SessionState::fold(session.clone(), &events);
+    let st = SessionState::fold(pipeline.into(), session.clone(), &events);
     if st.is_terminal() {
         return Err(EngineError::Invalid(
             "This session has already ended.".into(),
@@ -1299,7 +1314,7 @@ fn validate_answer(
     payload: &GatePayload,
     answer: &GateAnswer,
 ) -> Result<(), EngineError> {
-    if let Some(r) = pipeline::get().validate_answer(st, payload, answer) {
+    if let Some(r) = st.pipeline.validate_answer(st, payload, answer) {
         return r.map_err(EngineError::Invalid);
     }
     let ok = matches!(
@@ -1350,11 +1365,6 @@ fn validate_answer(
     Ok(())
 }
 
-/// Rule PL4: the side panel's agent, the standard agent for answers.
-fn quick_agent() -> AgentName {
-    pipeline::get().default_agent(ostra_core::Contract::Answer)
-}
-
 /// The rule "always in this workspace" adds for a call.
 pub fn suggest_rule(call: &ToolCall, repo_root: &Path) -> Option<String> {
     match call.tool.as_str() {
@@ -1397,6 +1407,10 @@ pub fn suggest_rule(call: &ToolCall, repo_root: &Path) -> Option<String> {
 }
 
 impl Inner {
+    fn pipeline(&self) -> &PipelineRef {
+        &self.pipeline
+    }
+
     fn load(&self, id: &SessionId) -> Result<Arc<Live>, EngineError> {
         if let Some(l) = lock(&self.sessions).get(id) {
             return Ok(l.clone());
@@ -1405,7 +1419,7 @@ impl Inner {
             return Err(EngineError::NotFound(format!("session {id}")));
         }
         let events = self.db.events(id)?;
-        let state = SessionState::fold(id.clone(), &events);
+        let state = SessionState::fold(self.pipeline.clone(), id.clone(), &events);
         let live = Arc::new(Live {
             state: Mutex::new(state),
             wake: Notify::new(),
@@ -1448,7 +1462,7 @@ impl Inner {
             let init_changed = matches!(st.kind, SessionKind::Init { .. })
                 && (matches!(event, SessionEvent::SessionCreated { .. }) || ended);
             let cost = lock(&self.judge_cost).get(session).copied().unwrap_or(0.0);
-            let summary = pipeline::get().summary(&st, &self.workspace_id, cost);
+            let summary = self.pipeline().summary(&st, &self.workspace_id, cost);
             let _ = self.db.update_session(
                 session,
                 &SessionUpdate {
@@ -1728,7 +1742,8 @@ impl Inner {
     }
 
     async fn perform(self: &Arc<Self>, session: &SessionId, step: Step) -> Result<(), EngineError> {
-        let step = match pipeline::get()
+        let step = match self
+            .pipeline()
             .perform(&StepHost(self.clone()), session, step)
             .await
         {
@@ -1769,7 +1784,10 @@ impl Inner {
                 let path = st.session_root.join(paths::report::completion());
                 let md = report_markdown.unwrap_or_else(|| "# Session complete\n".into());
                 std::fs::write(&path, &md).map_err(|e| EngineError::Invalid(e.to_string()))?;
-                if pipeline::get().completing(&StepHost(self.clone()), session, &st)? {
+                if self
+                    .pipeline()
+                    .completing(&StepHost(self.clone()), session, &st)?
+                {
                     return Ok(());
                 }
                 let summary = md
@@ -2088,7 +2106,7 @@ impl Inner {
                 Ok((value, usage)) => {
                     *lock(&self.judge_cost).entry(session.clone()).or_insert(0.0) += usage.cost_usd;
                     if validate(&value) {
-                        let reason = pipeline::get().judge_reason(&value);
+                        let reason = self.pipeline().judge_reason(&value);
                         self.append(
                             session,
                             SessionEvent::DecisionMade {
@@ -2122,9 +2140,11 @@ impl Inner {
     ) -> Result<(), EngineError> {
         let st = self.snapshot(session)?;
         let (input, summary) =
-            pipeline::get().judge_input(&st, kind, subject.as_deref(), &self.project_facts());
-        let schema = pipeline::get().judge_schema(kind, None);
-        let validate = move |v: &Value| -> bool { pipeline::get().judge_output_ok(kind, v) };
+            self.pipeline()
+                .judge_input(&st, kind, subject.as_deref(), &self.project_facts());
+        let schema = self.pipeline().judge_schema(kind, None);
+        let pipeline = self.pipeline().clone();
+        let validate = move |v: &Value| -> bool { pipeline.judge_output_ok(kind, v) };
         match self
             .call_judge(session, kind, subject, input, summary, schema, validate)
             .await
@@ -2137,7 +2157,7 @@ impl Inner {
                     // The session's work is done; a report without prose beats no report.
                     let md = format!(
                         "# Session complete\n\nThe completion judge failed ({e}), so this report lists the state only.\n\n{}",
-                        pipeline::get()
+                        self.pipeline()
                             .judge_input(&st, JudgeKind::Completion, None, &[])
                             .0
                     );
@@ -2173,19 +2193,21 @@ impl Inner {
         gate: GateId,
     ) -> Result<(), EngineError> {
         let st = self.snapshot(session)?;
-        let Some(plan) = pipeline::get().yolo_plan(&st, &gate) else {
+        let Some(plan) = self.pipeline().yolo_plan(&st, &gate) else {
             return Ok(());
         };
         let (answer, reason) = match plan {
             YoloPlan::Fixed { answer, reason } => (answer, reason),
             YoloPlan::Judge { schema } => {
-                let (input, summary) = pipeline::get().judge_input(
+                let (input, summary) = self.pipeline().judge_input(
                     &st,
                     JudgeKind::YoloAnswer,
                     Some(gate.as_str()),
                     &[],
                 );
-                let full = pipeline::get().judge_schema(JudgeKind::YoloAnswer, Some(schema));
+                let full = self
+                    .pipeline()
+                    .judge_schema(JudgeKind::YoloAnswer, Some(schema));
                 let value = match self
                     .call_judge(
                         session,
@@ -2215,9 +2237,9 @@ impl Inner {
                         return Ok(());
                     }
                 };
-                let reason = pipeline::get().judge_reason(&value);
+                let reason = self.pipeline().judge_reason(&value);
                 let st = self.snapshot(session)?;
-                match pipeline::get().yolo_answer_from_judge(
+                match self.pipeline().yolo_answer_from_judge(
                     &st,
                     &gate,
                     value.get("answer").unwrap_or(&Value::Null),
@@ -2241,7 +2263,7 @@ impl Inner {
         let Some(g) = st.gates.get(&gate).filter(|g| g.answer.is_none()) else {
             return Ok(());
         };
-        let routed = pipeline::get().answer_needs_route(&g.payload, &answer);
+        let routed = self.pipeline().answer_needs_route(&g.payload, &answer);
         self.append(
             session,
             SessionEvent::GateAnswered {
@@ -2437,10 +2459,10 @@ impl Inner {
         if st.is_terminal() || st.paused {
             return Ok(());
         }
-        if pipeline::get().spawn_dropped(&st, &req) {
+        if self.pipeline().spawn_dropped(&st, &req) {
             return Ok(());
         }
-        pipeline::get()
+        self.pipeline()
             .before_spawn(&st, &req)
             .map_err(EngineError::Invalid)?;
         // Rule P2: a run the pause interrupted continues under its own id, where it stopped.
@@ -2498,8 +2520,8 @@ impl Inner {
             );
         };
         let complexity = req.complexity();
-        let tier_override = pipeline::get().tier_override(&req);
-        let executor_override = pipeline::get().forced_executor(&st, req.agent);
+        let tier_override = self.pipeline().tier_override(&req);
+        let executor_override = self.pipeline().forced_executor(&st, req.agent);
         let mut route = match resolve_route(
             &global,
             &settings,
@@ -2573,7 +2595,8 @@ impl Inner {
         let creates_project = meta
             .capabilities
             .contains(&ostra_core::Capability::ManageProjects)
-            && pipeline::get()
+            && self
+                .pipeline()
                 .project_to_create(&st, &req.project)
                 .is_some();
         let repo_root = if creates_project {
@@ -2587,7 +2610,7 @@ impl Inner {
         let inventory = std::fs::read_to_string(paths::project_inventory(&repo_root)).ok();
         let project_docs = ostra_agents::brief::project_docs(&repo_root);
         let _ = std::fs::create_dir_all(&req.session_dir);
-        pipeline::get().spawn_files(&st, &req);
+        self.pipeline().spawn_files(&st, &req);
         // A paused run, and a run that continues a subagent for its messages, carry on with their
         // own transcript, so they need the prompt and the spawn they had, not a new spawn block:
         // their steps carry no stage inputs (Rules SM3 and SM4).
@@ -2640,7 +2663,8 @@ impl Inner {
             }
         };
         let mut params = built.params.clone();
-        pipeline::get().spawn_params(&req, profile.as_ref(), &mut params);
+        self.pipeline()
+            .spawn_params(&req, profile.as_ref(), &mut params);
         let hint = lock(&self.resume_hints).remove(&purpose_key(&req.purpose));
         let (id, resume, report_file) = match paused {
             Some(rec) => (
@@ -2846,7 +2870,7 @@ impl Inner {
             execution: id.clone(),
             status: result.status,
         });
-        let after = pipeline::get().after_run(&req, &result);
+        let after = self.pipeline().after_run(&req, &result);
         self.append(session, SessionEvent::ExecutionFinished { id, result })?;
         for event in after {
             self.append(session, event)?;
@@ -2867,7 +2891,7 @@ impl Inner {
         let settings = self.services.workspace();
         let factory = self.services.factory();
         // Rule PL4: the side panel runs the standard agent for answers.
-        let agent = quick_agent();
+        let agent = self.pipeline().default_agent(ostra_core::Contract::Answer);
         let meta = factory
             .agent_meta(agent, &self.services.agents())
             .ok_or_else(|| EngineError::Invalid(format!("{agent} is missing")))?;
@@ -3194,7 +3218,7 @@ impl ExecutionHost for EngineHost {
             .executions
             .get(&self.execution)
             .map(|r| r.agent)
-            .unwrap_or_else(quick_agent);
+            .unwrap_or_else(|| st.pipeline.default_agent(ostra_core::Contract::Answer));
         let repo = st
             .executions
             .get(&self.execution)
@@ -3342,7 +3366,8 @@ impl Engine {
             && lock(&self.inner.execs).contains_key(id);
         if let Some(session) = v.session.clone() {
             let st = self.state(&session)?;
-            pipeline::get().decorate(&st, &pipeline::get().run_labels(&st), &mut v);
+            self.pipeline()
+                .decorate(&st, &self.pipeline().run_labels(&st), &mut v);
         }
         Ok(v)
     }

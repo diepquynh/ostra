@@ -7,6 +7,7 @@ use ostra_core::exec::{ExecutionResult, ExecutionStatus, Usage};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
 use ostra_core::pipeline::{Category, QuestionAnswer, StageKind, Track};
 use ostra_core::{AgentName, ExecutorKind};
+use ostra_default_plugin::data::OsExt;
 use ostra_default_plugin::prelude::*;
 use ostra_engine::plan::{PlanCtx, SpawnRequest, Step, next_steps};
 use ostra_engine::state::SessionState;
@@ -69,7 +70,7 @@ impl H {
 
     fn state(&self) -> SessionState {
         ostra_default_plugin::install();
-        SessionState::fold(self.id.clone(), &self.events)
+        ostra_default_plugin::fold_session(self.id.clone(), &self.events)
     }
 
     fn steps(&self) -> Vec<Step> {
@@ -318,7 +319,7 @@ impl H {
             &format!("spawn code-reviewer review phase {phase} #1"),
             review(&[]),
         );
-        let project = self.state().phases[&phase].info.project.clone();
+        let project = self.state().ext.os().phases[&phase].info.project.clone();
         self.command(CommandPurpose::Stage, &project);
     }
 }
@@ -793,7 +794,7 @@ fn approval_without_pass_is_ignored_by_the_fold() {
             feedback: None,
         },
     );
-    assert!(!h.state().spec.approved);
+    assert!(!h.state().ext.os().spec.approved);
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1017,7 +1018,7 @@ fn a1_an_unapproved_format_command_is_skipped_once() {
         output_tail: ostra_engine::runner::FORMAT_NOT_APPROVED.into(),
     });
     let st = h.state();
-    assert_eq!(st.project_tracks["p"].format, Some(None));
+    assert_eq!(st.ext.os().project_tracks["p"].format, Some(None));
     assert!(
         !h.summaries()
             .iter()
@@ -1426,7 +1427,7 @@ fn c2_context_that_changes_no_requirement_leaves_the_spec() {
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "deliver"}], "research": [], "reason": "r"}),
     );
     let st = h.state();
-    assert!(st.spec.approved, "the approved spec stands");
+    assert!(st.ext.os().spec.approved, "the approved spec stands");
     assert!(st.full_request().contains("name the module orders_cancel"));
 }
 
@@ -1529,7 +1530,11 @@ fn u2_a_correction_resumes_the_run_in_place() {
     h.ev(SessionEvent::ExecutionResumed { id: spec.clone() });
     let st = h.state();
     assert!(st.steers.is_empty());
-    assert_eq!(st.spec.runs, vec![spec], "a correction is not a new run");
+    assert_eq!(
+        st.ext.os().spec.runs,
+        vec![spec],
+        "a correction is not a new run"
+    );
 }
 
 #[test]
@@ -1674,7 +1679,7 @@ fn p2_a_resume_continues_the_same_execution() {
     let running: Vec<_> = st.running_executions().map(|r| r.id.clone()).collect();
     assert_eq!(running, vec![spec.clone()]);
     assert_eq!(
-        st.spec.runs,
+        st.ext.os().spec.runs,
         vec![spec.clone()],
         "a resume is not a new run"
     );
@@ -1688,7 +1693,7 @@ fn p2_a_resume_continues_the_same_execution() {
 fn p2_a_resumed_work_run_is_not_counted_twice() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     let (id, _) = h.start("spawn implementer");
-    let work = |h: &H| h.state().phases[&1].impl_loop.work_count;
+    let work = |h: &H| h.state().ext.os().phases[&1].impl_loop.work_count;
     let before = work(&h);
     h.ev(SessionEvent::SessionPaused);
     h.finish(&id, ExecutionStatus::Interrupted, None);
@@ -1696,7 +1701,7 @@ fn p2_a_resumed_work_run_is_not_counted_twice() {
     assert_eq!(h.spawn_step("spawn implementer").resumes, Some(id.clone()));
     h.ev(SessionEvent::ExecutionResumed { id: id.clone() });
     assert_eq!(work(&h), before);
-    assert_eq!(h.state().phases[&1].impl_loop.running, Some(id));
+    assert_eq!(h.state().ext.os().phases[&1].impl_loop.running, Some(id));
 }
 
 #[test]
@@ -2244,7 +2249,7 @@ fn o8_a_fix_sends_an_implementer_then_the_stuck_run_continues() {
             && ctx.contains("gen/client.ts")
     );
     assert!(
-        h.state().phases[&1]
+        h.state().ext.os().phases[&1]
             .impl_loop
             .changed
             .contains("gen/client.ts")
@@ -3618,7 +3623,7 @@ fn track_is_judged_after_research_and_light_skips_spec_and_plan() {
     assert_eq!(req.inputs.research_docs.len(), 1);
     assert!(req.inputs.phase.unwrap().file.is_none());
     let st = h.state();
-    assert!(st.spec.runs.is_empty() && st.stakes.is_none());
+    assert!(st.ext.os().spec.runs.is_empty() && st.ext.os().stakes.is_none());
 }
 
 #[test]
@@ -3651,7 +3656,7 @@ fn track_forced_on_the_new_task_form_skips_the_judge() {
 #[test]
 fn track_can_be_overridden_until_a_phase_starts() {
     let mut h = light(&["p"]);
-    let id = h.state().track_decision.clone().unwrap();
+    let id = h.state().ext.os().track_decision.clone().unwrap();
     assert!(h.state().can_override(&id));
     h.ev(SessionEvent::DecisionOverridden {
         id: id.clone(),
@@ -3659,7 +3664,7 @@ fn track_can_be_overridden_until_a_phase_starts() {
         reason: "user".into(),
     });
     assert_eq!(h.summaries(), vec!["spawn generate-spec spec#1"]);
-    assert!(h.state().phases.is_empty());
+    assert!(h.state().ext.os().phases.is_empty());
 }
 
 // ------------------------------------------------------------------------------------------
@@ -3742,7 +3747,7 @@ fn f1_feedback_across_projects_is_judged_and_builds_one_revision_per_target() {
             "spawn implementer phase 4 initial"
         ]
     );
-    assert_eq!(h.state().phases[&4].info.project, "web");
+    assert_eq!(h.state().ext.os().phases[&4].info.project, "web");
 }
 
 #[test]
@@ -3777,7 +3782,7 @@ fn f1_a_requirement_change_goes_into_the_spec_before_the_revision() {
     );
     // The approved plan stays; the change builds as a revision phase.
     assert_eq!(h.summaries(), vec!["spawn implementer phase 2 initial"]);
-    assert_eq!(h.state().plan.runs.len(), 1);
+    assert_eq!(h.state().ext.os().plan.runs.len(), 1);
 }
 
 #[test]
@@ -3870,10 +3875,10 @@ fn j1_research_is_capped_and_kept_in_the_session_projects() {
     );
     let st = h.state();
     assert_eq!(
-        st.explore.len(),
+        st.ext.os().explore.len(),
         1 + ostra_default_plugin::judge::MAX_ANSWER_RESEARCH
     );
-    assert!(st.explore.iter().all(|t| t.project == "p"));
+    assert!(st.ext.os().explore.iter().all(|t| t.project == "p"));
 }
 
 #[test]
@@ -3950,7 +3955,7 @@ fn j1_approval_text_waits_for_the_judge() {
         },
     );
     assert_eq!(h.summaries(), vec![format!("judge route-answer {g}")]);
-    assert!(!h.state().spec.approved);
+    assert!(!h.state().ext.os().spec.approved);
     h.route(
         &g,
         json!({"route": "implementation_detail", "items": [
@@ -3959,7 +3964,7 @@ fn j1_approval_text_waits_for_the_judge() {
     );
     let st = h.state();
     assert!(
-        st.spec.approved,
+        st.ext.os().spec.approved,
         "a note for later stages keeps the approval"
     );
     assert_eq!(
@@ -3983,7 +3988,7 @@ fn j1_a_delivered_approval_text_changes_the_spec_even_when_approved() {
         },
     );
     h.deliver(&g);
-    assert!(!h.state().spec.approved);
+    assert!(!h.state().ext.os().spec.approved);
     let rev = h.spawn_step("spawn generate-spec");
     assert_eq!(
         rev.inputs.changes,
@@ -4043,7 +4048,7 @@ fn j1_a_discarded_stuck_answer_leaves_the_phase_blocked() {
         &g,
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard", "stages": [], "note": ""}], "research": [], "reason": "r"}),
     );
-    assert!(h.state().phases[&1].impl_loop.is_blocked());
+    assert!(h.state().ext.os().phases[&1].impl_loop.is_blocked());
 }
 
 #[test]
@@ -4059,7 +4064,7 @@ fn j1_feedback_kept_for_later_accepts_and_discarded_feedback_asks_again() {
         Some("0"),
         json!({"route": "implementation_detail", "targets": [{"project": "p", "instruction": "x"}], "items": [{"id": "answer", "disposition": "remember", "stages": ["docs"], "note": "Mention the flag."}], "research": [], "reason": "r"}),
     );
-    assert!(h.state().feedback.accepted);
+    assert!(h.state().ext.os().feedback.accepted);
     assert_eq!(h.summaries(), vec!["command format p"]);
 
     let mut h = light(&["p"]);
@@ -4070,7 +4075,7 @@ fn j1_feedback_kept_for_later_accepts_and_discarded_feedback_asks_again() {
         Some("0"),
         json!({"route": "implementation_detail", "targets": [{"project": "p", "instruction": "x"}], "items": [{"id": "answer", "disposition": "discard", "stages": [], "note": ""}], "research": [], "reason": "r"}),
     );
-    assert_eq!(h.state().phases.len(), 1, "no revision is built");
+    assert_eq!(h.state().ext.os().phases.len(), 1, "no revision is built");
     assert_eq!(h.summaries(), vec!["gate implementation_review"]);
 }
 
@@ -4174,14 +4179,17 @@ fn j1_a_later_answer_forgets_a_kept_note() {
         &g,
         json!({"route": "implementation_detail", "items": [], "research": [], "forget": ["N1"], "reason": "stale"}),
     );
-    assert!(!h.state().user_notes[0].forgotten);
+    assert!(!h.state().ext.os().user_notes[0].forgotten);
     h.route(
         &a,
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "remember", "note": "Use sqlx.", "stages": ["implement"]}], "research": [], "forget": ["N1"], "reason": "r"}),
     );
     let st = h.state();
-    assert!(st.user_notes[0].forgotten, "the note stays in the log");
-    assert_eq!(st.user_notes[1].id, "N2");
+    assert!(
+        st.ext.os().user_notes[0].forgotten,
+        "the note stays in the log"
+    );
+    assert_eq!(st.ext.os().user_notes[1].id, "N2");
     h.decide(
         JudgeKind::Stakes,
         None,
@@ -4912,7 +4920,11 @@ fn sm3_a_helper_result_wakes_the_sender_in_place() {
     let st = h.state();
     assert!(st.messages.iter().all(|x| x.delivered_to.is_some()), "{m}");
     assert!(!st.is_waiting(&spec));
-    assert_eq!(st.spec.runs.len(), 1, "a woken run is the same run");
+    assert_eq!(
+        st.ext.os().spec.runs.len(),
+        1,
+        "a woken run is the same run"
+    );
     assert!(
         h.summaries().is_empty(),
         "the author runs again: {:?}",
@@ -5366,10 +5378,13 @@ fn u1_context_can_skip_running_and_queued_research() {
     );
     let st = h.state();
     assert!(
-        st.explore[1].abandoned,
+        st.ext.os().explore[1].abandoned,
         "the interrupted task does not re-run"
     );
-    assert!(st.explore[2].abandoned, "the queued task never starts");
+    assert!(
+        st.ext.os().explore[2].abandoned,
+        "the queued task never starts"
+    );
     assert_eq!(h.summaries(), vec!["judge track"]);
 }
 
@@ -5400,7 +5415,7 @@ fn u1_queued_context_skips_research_once_running_work_finishes() {
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard"}], "research": [], "skip": [2], "reason": "r"}),
     );
     assert!(
-        h.state().explore[1].abandoned,
+        h.state().ext.os().explore[1].abandoned,
         "the held-back task never starts"
     );
     assert_eq!(h.summaries(), vec!["judge track"]);
@@ -5579,7 +5594,7 @@ fn wf1_a_named_workflow_resolves_first_and_sets_the_category() {
 #[test]
 fn wf3_a_fixed_track_skips_the_track_judge() {
     let h = H::with_workflow(&["p"], workflow(AUDIT));
-    assert_eq!(h.state().track, Some(Track::Full));
+    assert_eq!(h.state().ext.os().track, Some(Track::Full));
     assert_eq!(h.summaries(), vec!["spawn generate-spec spec#1"]);
 }
 
@@ -5982,7 +5997,10 @@ fn wf8_a_built_in_stage_runs_the_agent_its_workflow_binds() {
     );
     h.run("spawn strict-reviewer review phase 1 #1", review(&[]));
     let st = h.state();
-    assert!(st.phases[&1].impl_loop.is_done() || !st.phases[&1].impl_loop.is_terminal());
+    assert!(
+        st.ext.os().phases[&1].impl_loop.is_done()
+            || !st.ext.os().phases[&1].impl_loop.is_terminal()
+    );
 }
 
 #[test]

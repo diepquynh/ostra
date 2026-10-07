@@ -33,11 +33,12 @@ use ostra_core::model::{Effort, Tier};
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, PolicyDecision, RuleRef, ToolCall};
 use ostra_core::submit::AdvisorSubmit;
+use ostra_default_plugin::data::InitTrack;
 use ostra_default_plugin::factory::AgentsFactory;
 use ostra_default_plugin::init::{AdviceInputs, advisor_request, failed_step_label};
 use ostra_engine::plan::{SpawnInputs, SpawnRequest};
 use ostra_engine::services::{BuiltSpawn, SpawnEnv, SpawnFactory};
-use ostra_engine::state::{InitTrack, SessionState, stage_of};
+use ostra_engine::state::{SessionState, stage_of};
 use ostra_exec_native::NativeExecutor;
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -253,7 +254,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
         })
         .collect();
     ostra_default_plugin::install();
-    let state = SessionState::fold(SessionId::from("s_eval"), &stored);
+    let state = ostra_default_plugin::fold_session(SessionId::from("s_eval"), &stored);
     let focus = InitTrack::created_focus(&project);
 
     let settings = WorkspaceSettings::seeded("eval");

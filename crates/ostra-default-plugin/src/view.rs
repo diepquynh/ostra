@@ -4,6 +4,7 @@
 use crate::book::DocsTrack;
 use crate::prelude::*;
 
+use crate::data::{DocsState, EpaState, LoopNext, StageRun, WorkLoop};
 use crate::planner::removed_phases;
 use ostra_core::agent::AgentName;
 use ostra_core::api::{
@@ -19,9 +20,7 @@ use ostra_core::paths;
 use ostra_core::pipeline::{Lane, StageKind};
 use ostra_core::submit::Verdict;
 use ostra_engine::runner::EngineError;
-use ostra_engine::state::{
-    DocsState, EpaState, ExecRecord, LoopNext, SessionState, StageRun, WorkLoop,
-};
+use ostra_engine::state::{ExecRecord, SessionState};
 use ostra_store::WorkspaceDb;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
@@ -112,6 +111,8 @@ pub fn inferred_stage(s: &SessionState) -> (Lane, String) {
         return (r.stage.lane(), label);
     }
     if let Some((key, purpose)) = s
+        .ext
+        .os()
         .project_tracks
         .iter()
         .find_map(|(k, t)| t.running.as_ref().map(|(p, _)| (k, *p)))
@@ -266,7 +267,7 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
     let mut out = vec![];
     use ostra_core::event::ExecPurpose as P;
     if let SessionKind::Init { project } = &s.kind {
-        if let Some(i) = &s.init {
+        if let Some(i) = &s.ext.os().init {
             let st = |exec: &Option<ExecutionId>, done: bool| {
                 if done {
                     StageStatus::Done
@@ -353,7 +354,7 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
     );
     c.detail = s.category.map(|c| c.to_string());
     out.push(c);
-    for t in &s.explore {
+    for t in &s.ext.os().explore {
         let status = if t.result.is_some() {
             StageStatus::Done
         } else if t.abandoned {
@@ -388,10 +389,10 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             "Check research coverage".into(),
             StageStatus::Done,
         );
-        c.detail = Some(format!("{} rounds", s.sufficiency_rounds));
+        c.detail = Some(format!("{} rounds", s.ext.os().sufficiency_rounds));
         out.push(c);
     }
-    if let Some(track) = s.track
+    if let Some(track) = s.ext.os().track
         && s.category == Some(ostra_core::pipeline::Category::Implement)
     {
         let mut c = card(
@@ -405,7 +406,7 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         });
         out.push(c);
     }
-    let t = &s.spec;
+    let t = &s.ext.os().spec;
     if !t.runs.is_empty() || t.running.is_some() {
         let mut c = card(
             StageKind::Spec,
@@ -478,7 +479,7 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             out.push(c);
         }
     }
-    if let Some((_, stakes)) = s.stakes {
+    if let Some((_, stakes)) = s.ext.os().stakes {
         let mut c = card(
             StageKind::Stakes,
             "Judge the stakes".into(),
@@ -494,7 +495,7 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             ));
         }
     }
-    let t = &s.plan;
+    let t = &s.ext.os().plan;
     if !t.runs.is_empty() {
         let mut c = card(
             StageKind::Plan,
@@ -548,7 +549,7 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         }
     }
     // Rule O4: a created project's init shows in the build lane, ahead of its phases.
-    for (key, i) in &s.project_inits {
+    for (key, i) in &s.ext.os().project_inits {
         let executions: Vec<ExecutionId> = s
             .executions
             .values()
@@ -595,7 +596,7 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         out.push(c);
     }
     let removed = removed_phases(s);
-    for p in s.phases.values() {
+    for p in s.ext.os().phases.values() {
         let id = p.info.id;
         let status = if removed.contains(&id) {
             StageStatus::Skipped
@@ -647,7 +648,7 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             out.push(c);
         }
     }
-    for (i, r) in s.feedback.rounds.iter().enumerate() {
+    for (i, r) in s.ext.os().feedback.rounds.iter().enumerate() {
         let mut c = card(
             StageKind::ImplementationReview,
             format!("Feedback round {}", i + 1),
@@ -656,20 +657,20 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         c.detail = Some(first(&r.text));
         out.push(c);
     }
-    if s.feedback.gate.is_some() || s.feedback.accepted {
+    if s.ext.os().feedback.gate.is_some() || s.ext.os().feedback.accepted {
         let mut c = card(
             StageKind::ImplementationReview,
             "Review the implementation".into(),
-            if s.feedback.accepted {
+            if s.ext.os().feedback.accepted {
                 StageStatus::Done
             } else {
                 StageStatus::Waiting
             },
         );
-        c.gate = s.feedback.gate.clone();
+        c.gate = s.ext.os().feedback.gate.clone();
         out.push(c);
     }
-    for (key, t) in &s.project_tracks {
+    for (key, t) in &s.ext.os().project_tracks {
         if t.format.is_none()
             && let Some((CommandPurpose::Format, cmd)) = &t.running
         {
@@ -758,17 +759,17 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         c.detail = Some(w.error.clone().unwrap_or_else(|| w.projects.join(", ")));
         out.push(c);
     }
-    if s.quick.exec.is_some() {
+    if s.ext.os().quick.exec.is_some() {
         let mut c = card(
             StageKind::QuickAnswer,
             "Answer".into(),
-            if s.quick.answer.is_some() {
+            if s.ext.os().quick.answer.is_some() {
                 StageStatus::Done
             } else {
                 StageStatus::Running
             },
         );
-        c.executions = s.quick.exec.iter().cloned().collect();
+        c.executions = s.ext.os().quick.exec.iter().cloned().collect();
         out.push(c);
     }
     out.push(completion_card(s));
@@ -791,7 +792,9 @@ fn completion_card(s: &SessionState) -> StageCard {
 
 pub fn phases(s: &SessionState) -> Vec<PhaseView> {
     let removed = removed_phases(s);
-    s.phases
+    s.ext
+        .os()
+        .phases
         .values()
         .map(|p| {
             let l = &p.impl_loop;
@@ -860,7 +863,7 @@ pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef> {
             None,
         );
     }
-    for t in &s.explore {
+    for t in &s.ext.os().explore {
         if let Some(r) = &t.result {
             add(
                 PathBuf::from(&r.research_path),
@@ -870,10 +873,10 @@ pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef> {
             );
         }
     }
-    if let Some(spec) = &s.spec.current {
+    if let Some(spec) = &s.ext.os().spec.current {
         add(PathBuf::from(&spec.spec_path), "spec", "Spec".into(), None);
     }
-    if let Some(plan) = &s.plan.current {
+    if let Some(plan) = &s.ext.os().plan.current {
         add(
             PathBuf::from(&plan.master_plan_path),
             "plan",
@@ -889,7 +892,7 @@ pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef> {
             );
         }
     }
-    for p in s.phases.values() {
+    for p in s.ext.os().phases.values() {
         if let Some(r) = &p.implementer_report {
             add(
                 r.clone(),
@@ -1100,7 +1103,7 @@ pub fn file_changes(s: &SessionState, project: &str) -> BTreeMap<String, Changed
         else {
             continue;
         };
-        let staged = s.phases.get(&phase).is_some_and(|p| {
+        let staged = s.ext.os().phases.get(&phase).is_some_and(|p| {
             if tests {
                 p.test_loop.staged
             } else {
@@ -1236,7 +1239,7 @@ pub fn detail(
 }
 
 pub fn fact_checks(s: &SessionState) -> Vec<FactCheckView> {
-    fn track<T>(t: &ostra_engine::state::ArtifactTrack<T>, target: &str) -> Vec<FactCheckView> {
+    fn track<T>(t: &crate::data::ArtifactTrack<T>, target: &str) -> Vec<FactCheckView> {
         t.checks
             .iter()
             .map(|c| FactCheckView {
@@ -1253,8 +1256,8 @@ pub fn fact_checks(s: &SessionState) -> Vec<FactCheckView> {
             })
             .collect()
     }
-    let mut out = track(&s.spec, "spec");
-    out.extend(track(&s.plan, "plan"));
+    let mut out = track(&s.ext.os().spec, "spec");
+    out.extend(track(&s.ext.os().plan, "plan"));
     out
 }
 
@@ -1370,7 +1373,7 @@ mod tests {
     fn titles_come_from_classify_and_init() {
         crate::install();
         let id = SessionId::from("s1");
-        let init = SessionState::fold(
+        let init = crate::fold_session(
             id.clone(),
             &log(vec![created(SessionKind::Init {
                 project: "web".into(),
@@ -1386,7 +1389,7 @@ mod tests {
         let d = DecisionId::new();
         let mut events = vec![created(SessionKind::Pipeline)];
         assert_eq!(
-            SessionState::fold(id.clone(), &log(events.clone())).title,
+            crate::fold_session(id.clone(), &log(events.clone())).title,
             None
         );
         events.push(SessionEvent::DecisionMade {
@@ -1398,7 +1401,7 @@ mod tests {
             reason: "r".into(),
         });
         assert_eq!(
-            SessionState::fold(id.clone(), &log(events.clone()))
+            crate::fold_session(id.clone(), &log(events.clone()))
                 .title
                 .as_deref(),
             Some("Order cancellation")
@@ -1410,14 +1413,14 @@ mod tests {
         };
         events.push(over("Cancel orders"));
         assert_eq!(
-            SessionState::fold(id.clone(), &log(events.clone()))
+            crate::fold_session(id.clone(), &log(events.clone()))
                 .title
                 .as_deref(),
             Some("Cancel orders")
         );
         events.push(over(""));
         assert_eq!(
-            SessionState::fold(id, &log(events)).title.as_deref(),
+            crate::fold_session(id, &log(events)).title.as_deref(),
             Some("Cancel orders"),
             "an override without a title keeps it"
         );
@@ -1435,7 +1438,7 @@ mod tests {
             tests: false,
             iteration,
         };
-        let s = SessionState::fold(
+        let s = crate::fold_session(
             SessionId::from("s1"),
             &log(vec![
                 created(SessionKind::Pipeline),
@@ -1570,7 +1573,7 @@ mod tests {
     #[test]
     fn tree_nodes_group_runs_with_numbered_labels() {
         crate::install();
-        let s = SessionState::fold(
+        let s = crate::fold_session(
             SessionId::from("s1"),
             &log(vec![
                 created(SessionKind::Pipeline),
@@ -1674,7 +1677,7 @@ mod tests {
     fn decorate_numbers_labels_and_finds_transcripts() {
         crate::install();
         let tmp = tempfile::tempdir().unwrap();
-        let mut s = SessionState::new(SessionId::from("s1"));
+        let mut s = SessionState::new(crate::pipeline().into(), SessionId::from("s1"));
         s.session_root = tmp.path().to_path_buf();
         let harness = ExecutorKind::Harness(ostra_core::HarnessKind::Claude);
         let mut h = view(
@@ -1712,7 +1715,7 @@ mod tests {
     #[test]
     fn decorate_finds_the_project_folder_and_the_open_gate_of_an_execution() {
         crate::install();
-        let mut s = SessionState::new(SessionId::from("s1"));
+        let mut s = SessionState::new(crate::pipeline().into(), SessionId::from("s1"));
         s.projects.push(ProjectRef {
             key: "backend".into(),
             path: PathBuf::from("/code/backend"),

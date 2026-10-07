@@ -6,12 +6,13 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+use crate::data::InitTrack;
 use ostra_core::Contract;
 use ostra_core::agent::{AgentName, InitializerMode};
 use ostra_core::event::{ExecPurpose, GatePayload, SkillProposal};
 use ostra_core::ids::ExecutionId;
 use ostra_engine::plan::{SpawnInputs, SpawnRequest, Step};
-use ostra_engine::state::{InitTrack, SessionState};
+use ostra_engine::state::SessionState;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -325,14 +326,14 @@ fn advise(s: &SessionState, i: &InitTrack, exec: &ExecutionId, err: &str, focus:
 }
 
 pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
-    let Some(i) = &s.init else { return };
+    let Some(i) = &s.ext.os().init else { return };
     plan_track(s, i, s.request.trim(), Ending::Session, push);
 }
 
 /// Rule O4: the init of every project an agent created, seeded from its `ProjectCreate` call.
 pub fn plan_created(s: &SessionState, push: &mut dyn FnMut(Step)) {
     for c in &s.created_projects {
-        if let Some(i) = s.project_inits.get(&c.key).filter(|i| !i.finished) {
+        if let Some(i) = s.ext.os().project_inits.get(&c.key).filter(|i| !i.finished) {
             let focus = InitTrack::created_focus(c);
             plan_track(s, i, &focus, Ending::CreatedProject, push);
         }

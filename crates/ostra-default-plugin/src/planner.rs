@@ -40,7 +40,9 @@ pub fn book_node(s: &SessionState) -> bool {
 
 /// The phases of `project` whose build passed.
 fn passed_phases<'a>(s: &'a SessionState, project: &str) -> Vec<&'a PhaseRun> {
-    s.phases
+    s.ext
+        .os()
+        .phases
         .values()
         .filter(|p| p.info.project == project && p.impl_loop.is_done())
         .collect()
@@ -49,7 +51,7 @@ fn passed_phases<'a>(s: &'a SessionState, project: &str) -> Vec<&'a PhaseRun> {
 /// Rule B10: the closing gate chose docs for `project`, or the request asked for tests and docs,
 /// and no BLOCKER is open (Hard rule 21). `None` while the choice is not made.
 pub fn docs_chosen(s: &SessionState, project: &str) -> Option<bool> {
-    let track = s.project_tracks.get(project)?;
+    let track = s.ext.os().project_tracks.get(project)?;
     let passed = passed_phases(s, project);
     if passed.is_empty() {
         return Some(false);
@@ -70,12 +72,24 @@ pub fn stage_value(
     stage: BuiltinStage,
     scope: Option<&str>,
 ) -> serde_json::Value {
+    let os = s.ext.os();
     match stage {
+        BuiltinStage::Research => serde_json::json!({ "research_docs": s.research_docs() }),
+        BuiltinStage::Track => serde_json::json!({ "track": os.track }),
+        BuiltinStage::Spec => serde_json::json!({
+            "spec_file": os.spec.current.as_ref().map(|c| c.spec_path.clone())
+        }),
+        BuiltinStage::Stakes => serde_json::json!({ "stakes": os.stakes.as_ref().map(|(_, s)| s) }),
+        BuiltinStage::Plan => serde_json::json!({
+            "master_plan": os.plan.current.as_ref().map(|c| c.master_plan_path.clone()),
+            "phases": os.phases.len(),
+        }),
+        BuiltinStage::Build => serde_json::json!({ "phases": os.phases.len() }),
         BuiltinStage::Closing => match scope.and_then(|sc| sc.strip_prefix("project:")) {
             Some(p) => serde_json::json!({ "docs": docs_chosen(s, p).unwrap_or(false) }),
             None => serde_json::json!({
                 "docs": s
-                    .project_tracks
+                    .ext.os().project_tracks
                     .keys()
                     .filter(|k| docs_chosen(s, k) == Some(true))
                     .collect::<Vec<_>>()
@@ -84,7 +98,7 @@ pub fn stage_value(
         BuiltinStage::Book => {
             serde_json::json!({ "book": s.book_written.as_ref().map(|w| w.book.clone()) })
         }
-        _ => serde_json::json!({}),
+        BuiltinStage::Feedback => serde_json::json!({}),
     }
 }
 
@@ -110,7 +124,7 @@ pub fn created_projects_section(s: &SessionState) -> String {
         .created_projects
         .iter()
         .map(|p| {
-            let init = match s.project_inits.get(&p.key).and_then(|i| i.note.as_deref()) {
+            let init = match s.ext.os().project_inits.get(&p.key).and_then(|i| i.note.as_deref()) {
                 Some(note) => format!("not initialized: {note} Initialize it from the project list before its next session."),
                 None => "initialized".into(),
             };
@@ -203,6 +217,8 @@ pub fn deps_passed(s: &SessionState, p: &PhaseRun) -> bool {
     let deps: Vec<u32> = match &p.info.depends_on {
         Some(d) => d.clone(),
         None => s
+            .ext
+            .os()
             .phases
             .keys()
             .copied()
@@ -211,7 +227,12 @@ pub fn deps_passed(s: &SessionState, p: &PhaseRun) -> bool {
     };
     // Rule WF4: the phase stages of a dependency are part of it passing.
     deps.iter().all(|d| {
-        s.phases.get(d).is_some_and(|dp| dp.impl_loop.is_done()) && s.phase_stages_done(*d)
+        s.ext
+            .os()
+            .phases
+            .get(d)
+            .is_some_and(|dp| dp.impl_loop.is_done())
+            && s.phase_stages_done(*d)
     })
 }
 
@@ -219,6 +240,8 @@ pub fn deps_passed(s: &SessionState, p: &PhaseRun) -> bool {
 /// from the queue. Independent phases continue.
 pub fn removed_phases(s: &SessionState) -> BTreeSet<u32> {
     let mut failed: BTreeSet<u32> = s
+        .ext
+        .os()
         .phases
         .values()
         .filter(|p| p.impl_loop.is_blocked())
@@ -227,7 +250,7 @@ pub fn removed_phases(s: &SessionState) -> BTreeSet<u32> {
     let mut removed = BTreeSet::new();
     loop {
         let mut changed = false;
-        for p in s.phases.values() {
+        for p in s.ext.os().phases.values() {
             if failed.contains(&p.info.id) || removed.contains(&p.info.id) || !p.impl_loop.is_idle()
             {
                 continue;
@@ -235,6 +258,8 @@ pub fn removed_phases(s: &SessionState) -> BTreeSet<u32> {
             let deps: Vec<u32> = match &p.info.depends_on {
                 Some(d) => d.clone(),
                 None => s
+                    .ext
+                    .os()
                     .phases
                     .keys()
                     .copied()
@@ -325,7 +350,7 @@ pub trait OstraPlanner<'a> {
     fn docs_run<T>(
         &mut self,
         project: &str,
-        state: &ostra_engine::state::StageRun<T>,
+        state: &crate::data::StageRun<T>,
         agent: AgentName,
         purpose: ExecPurpose,
         inputs: SpawnInputs,
@@ -355,38 +380,40 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
     fn builtin_stage(&mut self, b: BuiltinStage, wf: &WorkflowDef) -> bool {
         let s = self.s;
         let implement = wf.base == Category::Implement;
-        let light = implement && s.track == Some(Track::Light);
+        let light = implement && s.ext.os().track == Some(Track::Light);
         match b {
             BuiltinStage::Research => self.explore_complete(),
             // Light by default: the Track judge escalates to the full track on evidence.
             BuiltinStage::Track => {
-                if s.track.is_none() {
+                if s.ext.os().track.is_none() {
                     self.push(Step::Judge {
                         judge: JudgeKind::Track,
                         subject: None,
                     });
                 }
-                s.track.is_some()
+                s.ext.os().track.is_some()
             }
             BuiltinStage::Spec => light || self.spec_flow(wf.base != Category::Spec),
             BuiltinStage::Stakes => {
                 if light {
                     return true;
                 }
-                if s.stakes.is_none() {
+                if s.ext.os().stakes.is_none() {
                     self.push(Step::Judge {
                         judge: JudgeKind::Stakes,
                         subject: None,
                     });
                 }
-                s.stakes.is_some()
+                s.ext.os().stakes.is_some()
             }
             BuiltinStage::Plan if implement => {
                 if light {
                     return true;
                 }
-                let low = matches!(s.stakes, Some((_, Stakes::Low)));
-                (low || self.plan_flow()) && !s.plan.invalidated && !s.spec.needs_run
+                let low = matches!(s.ext.os().stakes, Some((_, Stakes::Low)));
+                (low || self.plan_flow())
+                    && !s.ext.os().plan.invalidated
+                    && !s.ext.os().spec.needs_run
             }
             BuiltinStage::Plan => self.plan_flow(),
             BuiltinStage::Build => {
@@ -411,6 +438,8 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         let s = self.s;
         let removed = removed_phases(s);
         let phases_done = s
+            .ext
+            .os()
             .phases
             .values()
             .all(|p| removed.contains(&p.info.id) || p.impl_loop.is_terminal());
@@ -420,7 +449,9 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             .any(|d| d.scope == StageScope::Phase && d.builtin().is_none());
         phases_done
             && (!staged
-                || s.phases
+                || s.ext
+                    .os()
+                    .phases
                     .values()
                     .filter(|p| !removed.contains(&p.info.id) && p.impl_loop.is_done())
                     .all(|p| s.phase_stages_done(p.info.id)))
@@ -430,14 +461,14 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         self.s.running_executions().next().is_none()
             && self.s.open_gates().all(|g| matches!(g.payload, GatePayload::Permission { .. }))
             // A blocked phase is announced before the completion report is written.
-            && self.s.phases.values().all(|p| {
+            && self.s.ext.os().phases.values().all(|p| {
                 [&p.impl_loop, &p.test_loop].iter().all(|l| !l.is_blocked() || l.announced_block)
             })
     }
 
     fn explore_tasks(&mut self) {
         let s = self.s;
-        for t in &s.explore {
+        for t in &s.ext.os().explore {
             if t.exec.is_none() && !t.abandoned && t.failed.is_none() {
                 // Rule M1: read-only stages fan out; every ready explore spawns at once.
                 let inputs = SpawnInputs {
@@ -475,6 +506,8 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
     fn explore_complete(&mut self) -> bool {
         let s = self.s;
         let tasks: Vec<&ExploreTask> = s
+            .ext
+            .os()
             .explore
             .iter()
             .filter(|t| !t.origin.loop_bound())
@@ -486,7 +519,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             .iter()
             .filter(|t| !t.judged && t.result.as_ref().is_some_and(|r| !r.not_covered.is_empty()))
             .collect();
-        if !unjudged.is_empty() && s.sufficiency_rounds < SUFFICIENCY_ROUNDS {
+        if !unjudged.is_empty() && s.ext.os().sufficiency_rounds < SUFFICIENCY_ROUNDS {
             let subject = unjudged
                 .iter()
                 .map(|t| t.idx.to_string())
@@ -515,7 +548,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
 
     fn spec_flow(&mut self, needs_approval: bool) -> bool {
         let s = self.s;
-        let t = &s.spec;
+        let t = &s.ext.os().spec;
         let primary = s.primary();
         if t.stopped {
             self.push(Step::Fail {
@@ -688,7 +721,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
 
     fn plan_flow(&mut self) -> bool {
         let s = self.s;
-        let t = &s.plan;
+        let t = &s.ext.os().plan;
         let primary = s.primary();
         if t.stopped {
             self.push(Step::Fail {
@@ -704,7 +737,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         {
             return false;
         }
-        let Some(spec) = &s.spec.current else {
+        let Some(spec) = &s.ext.os().spec.current else {
             return false;
         };
         let spec_path = PathBuf::from(&spec.spec_path);
@@ -839,13 +872,13 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         let s = self.s;
         let removed = removed_phases(s);
         let mut busy: BTreeSet<String> = BTreeSet::new();
-        for p in s.phases.values() {
+        for p in s.ext.os().phases.values() {
             let l = &p.impl_loop;
             if !l.is_idle() && !l.is_terminal() {
                 busy.insert(p.info.project.clone());
             }
         }
-        for p in s.phases.values() {
+        for p in s.ext.os().phases.values() {
             if removed.contains(&p.info.id) {
                 continue;
             }
@@ -914,7 +947,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             Contract::Prompt => {
                 inputs.task = Some(s.full_request());
                 inputs.target_files = Some("Determine them from the task.".into());
-                inputs.report_file = Some(dir.join(report::prompt_gen(s.prompt_gens + 1)));
+                inputs.report_file = Some(dir.join(report::prompt_gen(s.ext.os().prompt_gens + 1)));
                 ExecPurpose::PromptGen { handoff_for: None }
             }
             _ => {
@@ -928,7 +961,8 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                 } else {
                     if p.info.file.is_none() {
                         inputs.task = Some(s.full_request());
-                        if s.category == Some(Category::Implement) && s.track == Some(Track::Light)
+                        if s.category == Some(Category::Implement)
+                            && s.ext.os().track == Some(Track::Light)
                         {
                             inputs.research_docs = s.research_docs();
                         }
@@ -939,6 +973,8 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                         inputs.task = Some(revision_task(r, &s.full_request()));
                         inputs.context_files = vec![s.session_context_path()];
                         inputs.prior_reports = s
+                            .ext
+                            .os()
                             .phases
                             .values()
                             .filter(|q| q.info.project == project && q.info.id != phase)
@@ -1153,7 +1189,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                     } else {
                         handoff.target_files.join("\n")
                     }),
-                    report_file: Some(dir.join(report::prompt_gen(s.prompt_gens + 1))),
+                    report_file: Some(dir.join(report::prompt_gen(s.ext.os().prompt_gens + 1))),
                     ..Default::default()
                 };
                 self.spawn(
@@ -1237,8 +1273,8 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
 
     fn implementation_review(&mut self) -> bool {
         let s = self.s;
-        let f = &s.feedback;
-        if f.accepted || s.phases.is_empty() {
+        let f = &s.ext.os().feedback;
+        if f.accepted || s.ext.os().phases.is_empty() {
             return true;
         }
         if f.gate.is_some() || !self.nothing_running() {
@@ -1246,6 +1282,8 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         }
         let removed = removed_phases(s);
         if !s
+            .ext
+            .os()
             .phases
             .values()
             .all(|p| removed.contains(&p.info.id) || p.impl_loop.is_terminal())
@@ -1264,6 +1302,8 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         }
         // Rule F1: every phase finished, so the user reviews the result before the closing stages.
         let blocked = s
+            .ext
+            .os()
             .phases
             .values()
             .filter_map(|p| match &p.impl_loop.next {
@@ -1278,7 +1318,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                 round: f.rounds.len() as u32 + 1,
                 context_path: s.session_context_path(),
                 reports: s
-                    .phases
+                    .ext.os().phases
                     .values()
                     .filter_map(|p| p.implementer_report.clone())
                     .collect(),
@@ -1290,6 +1330,8 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
 
     fn project_phases(&self, project: &str) -> Vec<&'a PhaseRun> {
         self.s
+            .ext
+            .os()
             .phases
             .values()
             .filter(|p| p.info.project == project)
@@ -1305,7 +1347,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
     fn closing_stages(&mut self) {
         let s = self.s;
         let removed = removed_phases(s);
-        let projects: Vec<String> = s.project_tracks.keys().cloned().collect();
+        let projects: Vec<String> = s.ext.os().project_tracks.keys().cloned().collect();
         let mut closing_items = vec![];
         for key in &projects {
             if !self.project_code_done(key, &removed) {
@@ -1319,7 +1361,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             if passed.is_empty() {
                 continue;
             }
-            let track = &s.project_tracks[key];
+            let track = &s.ext.os().project_tracks[key];
             // Rule D8: format runs once per project after its last phase, not gated.
             if track.format.is_none() {
                 let command = self.ctx.format_commands.get(key).cloned().flatten();
@@ -1456,7 +1498,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
 
     fn docs_stage(&mut self, project: &str, passed: &[&PhaseRun]) {
         let s = self.s;
-        let track = &s.project_tracks[project];
+        let track = &s.ext.os().project_tracks[project];
         // Hard rule 21: an open BLOCKER blocks documentation.
         if blocker_open(passed) {
             return;
@@ -1571,13 +1613,13 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             let state = current
                 .and_then(|r| r.checks.get(page))
                 .cloned()
-                .unwrap_or(ostra_engine::state::StageRun::NotStarted);
+                .unwrap_or(crate::data::StageRun::NotStarted);
             checking |= !state.is_settled();
             let prior = (1..round)
                 .rev()
                 .find_map(
                     |k| match track.docs_rounds[k as usize - 1].checks.get(page) {
-                        Some(ostra_engine::state::StageRun::Done(c)) => Some(c.findings_text()),
+                        Some(crate::data::StageRun::Done(c)) => Some(c.findings_text()),
                         _ => None,
                     },
                 )
@@ -1610,7 +1652,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                     r.checks
                         .iter()
                         .filter_map(|(page, c)| match c {
-                            ostra_engine::state::StageRun::Done(c) => {
+                            crate::data::StageRun::Done(c) => {
                                 Some(format!("{page}: {:?}, {}", c.verdict, c.findings_text()))
                             }
                             _ => None,
@@ -1708,14 +1750,14 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
     fn docs_run<T>(
         &mut self,
         project: &str,
-        state: &ostra_engine::state::StageRun<T>,
+        state: &crate::data::StageRun<T>,
         agent: AgentName,
         purpose: ExecPurpose,
         inputs: SpawnInputs,
     ) {
         let s = self.s;
         match state {
-            ostra_engine::state::StageRun::NotStarted => {
+            crate::data::StageRun::NotStarted => {
                 // Rule B7: docs runs fan out at once, and the workspace's slot limit bounds them.
                 self.spawn(
                     agent,
@@ -1725,7 +1767,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                     inputs,
                 );
             }
-            ostra_engine::state::StageRun::Failed {
+            crate::data::StageRun::Failed {
                 exec,
                 error,
                 gate: None,
@@ -1742,7 +1784,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         let s = self.s;
         let removed = removed_phases(s);
         let mut parts = vec![];
-        for key in s.project_tracks.keys() {
+        for key in s.ext.os().project_tracks.keys() {
             if !self.project_code_done(key, &removed) {
                 return None;
             }
@@ -1754,7 +1796,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             if passed.is_empty() {
                 continue;
             }
-            let track = &s.project_tracks[key];
+            let track = &s.ext.os().project_tracks[key];
             let docs_on = match track.closing {
                 Some(c) => c.1,
                 None if s.tests_requested() && s.docs_requested() => true,
@@ -1796,13 +1838,13 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             return true;
         }
         let mut settled = true;
-        for key in s.project_tracks.keys() {
+        for key in s.ext.os().project_tracks.keys() {
             if docs_chosen(s, key) != Some(true) {
                 continue;
             }
             let passed = passed_phases(s, key);
             self.docs_stage(key, &passed);
-            settled &= s.project_tracks[key].docs_aggregate().is_settled();
+            settled &= s.ext.os().project_tracks[key].docs_aggregate().is_settled();
         }
         self.book_stage();
         settled
@@ -1819,7 +1861,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             return false;
         }
         let removed = removed_phases(s);
-        for key in s.project_tracks.keys() {
+        for key in s.ext.os().project_tracks.keys() {
             if !self.project_code_done(key, &removed) {
                 return false;
             }
@@ -1831,7 +1873,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             if passed.is_empty() {
                 continue;
             }
-            let track = &s.project_tracks[key];
+            let track = &s.ext.os().project_tracks[key];
             if track.format.is_none() {
                 return false;
             }
@@ -1876,7 +1918,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         let s = self.s;
         // Rule H9: nothing completes while a subagent waits for an answer.
         if !self.nothing_running()
-            || s.project_inits.values().any(|i| !i.finished)
+            || s.ext.os().project_inits.values().any(|i| !i.finished)
             || s.coordination_open()
         {
             return;
@@ -1906,7 +1948,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
 
     fn quick_answer(&mut self) {
         let s = self.s;
-        let q = &s.quick;
+        let q = &s.ext.os().quick;
         if let Some(a) = &q.answer {
             self.push(Step::Complete {
                 report_markdown: Some(a.answer.clone()),
@@ -1995,7 +2037,7 @@ impl<'a> OstraFlows<'a> for Planner<'a> {
             return;
         };
         // Rule J1: a spec or plan answer waits for the judge before any agent sees it.
-        for gate in s.held_answers.keys() {
+        for gate in s.ext.os().held_answers.keys() {
             self.push(Step::Judge {
                 judge: JudgeKind::RouteAnswer,
                 subject: Some(gate.to_string()),

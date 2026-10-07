@@ -2,6 +2,7 @@
 //! code in this crate.
 
 use crate::book::DocsTrack;
+use crate::data::{AUTO_FIXABLE_PARAM, InitTrack};
 use crate::judge;
 use crate::judge_input;
 use crate::view;
@@ -9,17 +10,22 @@ use ostra_core::config::{ProjectProfile, load_toml};
 use ostra_core::event::{
     ExecPurpose, GateAnswer, GatePayload, JudgeKind, SessionEvent, SessionKind, StoredEvent,
 };
+use ostra_core::event::{FactTarget, WorkKind};
 use ostra_core::exec::ExecutionResult;
+use ostra_core::exec::ExecutionStatus;
+use ostra_core::ids::MessageId;
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
 use ostra_core::manage::CreatedProject;
 use ostra_core::paths;
 use ostra_core::pipeline::Category;
 use ostra_core::workflow::{BuiltinStage, WorkflowDef, WorkflowSet};
 use ostra_core::{AgentName, Contract};
-use ostra_engine::pipeline::{Pipeline, ProjectFacts, YoloPlan};
+use ostra_engine::pipeline::{
+    HelperResult, PhaseFacts, Pipeline, PipelineBox, ProjectFacts, YoloPlan,
+};
 use ostra_engine::plan::{Planner, SpawnRequest, Step};
 use ostra_engine::runner::{EngineError, StepHost};
-use ostra_engine::state::{AUTO_FIXABLE_PARAM, ExecRecord, InitTrack, SessionState};
+use ostra_engine::state::{ExecRecord, SessionState};
 use ostra_store::WorkspaceDb;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -34,10 +40,14 @@ pub struct OstraPipeline;
 
 #[async_trait::async_trait]
 impl Pipeline for OstraPipeline {
+    fn new_state(&self) -> PipelineBox {
+        PipelineBox::new(OstraState::default())
+    }
+
     fn created(&self, s: &mut SessionState) {
-        s.track = s.options.track;
+        s.ext.os_mut().track = s.options.track;
         if let SessionKind::Init { project } = &s.kind {
-            s.init = Some(InitTrack {
+            s.ext.os_mut().init = Some(InitTrack {
                 project: project.clone(),
                 ..Default::default()
             });
@@ -45,7 +55,7 @@ impl Pipeline for OstraPipeline {
     }
 
     fn project_created(&self, s: &mut SessionState, project: &CreatedProject) {
-        s.project_inits.insert(
+        s.ext.os_mut().project_inits.insert(
             project.key.clone(),
             InitTrack {
                 project: project.key.clone(),
@@ -178,6 +188,264 @@ impl Pipeline for OstraPipeline {
 
     fn stage_value(&self, s: &SessionState, stage: BuiltinStage, scope: Option<&str>) -> Value {
         crate::planner::stage_value(s, stage, scope)
+    }
+
+    fn session_facts(&self, s: &SessionState) -> serde_json::Map<String, Value> {
+        let os = s.ext.os();
+        let mut m = serde_json::Map::new();
+        m.insert("track".into(), serde_json::json!(os.track));
+        m.insert(
+            "stakes".into(),
+            serde_json::json!(os.stakes.as_ref().map(|(_, s)| s)),
+        );
+        m
+    }
+
+    fn workflow_resolved(&self, s: &mut SessionState, wf: &WorkflowDef) {
+        // Rule WF3: a workflow's `track` fixes the track unless the New task form forced one.
+        let os = s.ext.os_mut();
+        if os.track.is_none() {
+            os.track = wf.track;
+        }
+    }
+
+    fn research_docs(&self, s: &SessionState) -> Vec<PathBuf> {
+        s.research_docs()
+    }
+
+    fn spec_file(&self, s: &SessionState) -> Option<PathBuf> {
+        s.ext
+            .os()
+            .spec
+            .current
+            .as_ref()
+            .map(|c| PathBuf::from(&c.spec_path))
+    }
+
+    fn master_plan(&self, s: &SessionState) -> Option<PathBuf> {
+        s.ext
+            .os()
+            .plan
+            .current
+            .as_ref()
+            .map(|c| PathBuf::from(&c.master_plan_path))
+    }
+
+    fn phase(&self, s: &SessionState, id: u32) -> Option<PhaseFacts> {
+        s.ext.os().phases.get(&id).map(|p| PhaseFacts {
+            info: p.info.clone(),
+            implementer_report: p.implementer_report.clone(),
+        })
+    }
+
+    fn passed_phases(&self, s: &SessionState) -> Vec<u32> {
+        let removed = crate::planner::removed_phases(s);
+        s.ext
+            .os()
+            .phases
+            .values()
+            .filter(|p| !removed.contains(&p.info.id) && p.impl_loop.is_done())
+            .map(|p| p.info.id)
+            .collect()
+    }
+
+    fn changed_files(
+        &self,
+        s: &SessionState,
+        project: &str,
+        phase: Option<u32>,
+    ) -> BTreeSet<String> {
+        let mut files = BTreeSet::new();
+        for p in s
+            .ext
+            .os()
+            .phases
+            .values()
+            .filter(|p| p.info.project == project && phase.is_none_or(|n| n == p.info.id))
+        {
+            files.extend(p.impl_loop.changed.iter().cloned());
+            files.extend(p.test_loop.changed.iter().cloned());
+        }
+        files
+    }
+
+    fn helper_task(
+        &self,
+        s: &mut SessionState,
+        ask: &MessageId,
+        agent: AgentName,
+        contract: Option<Contract>,
+        project: &str,
+        asker: &str,
+        text: &str,
+    ) -> Option<u32> {
+        // Rule SM7: a research helper runs as a research task, whose document joins the
+        // session's research. Logs from before contracts name only `explore`.
+        if !contract.map_or(agent == AgentName::Explore, |c| c == Contract::Research) {
+            return None;
+        }
+        let task = format!("{asker} asks for this research and waits for your findings:\n{text}");
+        let t = s.push_explore(
+            project.to_string(),
+            task,
+            ExploreOrigin::Ask { ask: ask.clone() },
+        );
+        if let Some(x) = s.ext.os_mut().explore.get_mut(t as usize) {
+            x.agent = Some(agent);
+        }
+        Some(t)
+    }
+
+    fn helper_ask(&self, s: &SessionState, purpose: &ExecPurpose) -> Option<MessageId> {
+        let ExecPurpose::Explore { task } = purpose else {
+            return None;
+        };
+        match &s.ext.os().explore.get(*task as usize)?.origin {
+            ExploreOrigin::Ask { ask } => Some(ask.clone()),
+            _ => None,
+        }
+    }
+
+    fn helper_result(
+        &self,
+        s: &SessionState,
+        rec: &ExecRecord,
+        result: &ExecutionResult,
+    ) -> Option<HelperResult> {
+        let ExecPurpose::Explore { task } = &rec.purpose else {
+            return None;
+        };
+        let t = s.ext.os().explore.get(*task as usize);
+        match result.status {
+            ExecutionStatus::Ok => {
+                let Some(sub) = t.and_then(|t| t.result.as_ref()) else {
+                    return Some(HelperResult::NotYet);
+                };
+                let mut text = format!(
+                    "{}\n\nResearch document: {}",
+                    sub.findings_summary, sub.research_path
+                );
+                if !sub.not_covered.is_empty() {
+                    text.push_str(&format!("\nNot covered: {}", sub.not_covered.join("; ")));
+                }
+                Some(HelperResult::Text(text))
+            }
+            // Interrupted or waiting for its own message: the helper is not done yet.
+            ExecutionStatus::Interrupted | ExecutionStatus::Waiting => Some(HelperResult::NotYet),
+            // An explore that errors is retried once before it counts as failed.
+            _ if t.is_some_and(|t| t.failed.is_none() && !t.abandoned) => {
+                Some(HelperResult::NotYet)
+            }
+            _ => None,
+        }
+    }
+
+    fn previous_run(&self, s: &SessionState, purpose: &ExecPurpose) -> Option<ExecutionId> {
+        let last = |f: &dyn Fn(&ExecPurpose) -> bool| {
+            s.executions
+                .values()
+                .filter(|r| f(&r.purpose))
+                .max_by_key(|r| r.id.clone())
+                .map(|r| r.id.clone())
+        };
+        let os = s.ext.os();
+        match purpose {
+            ExecPurpose::Spec { .. } if os.spec.current.is_some() => {
+                last(&|p| matches!(p, ExecPurpose::Spec { .. }))
+            }
+            ExecPurpose::Plan { .. } if os.plan.current.is_some() => {
+                last(&|p| matches!(p, ExecPurpose::Plan { .. }))
+            }
+            ExecPurpose::FactCheck { target, .. } => {
+                let t = *target;
+                last(&|p| matches!(p, ExecPurpose::FactCheck { target, .. } if *target == t))
+            }
+            ExecPurpose::Review { phase, tests, .. } => {
+                let (ph, te) = (*phase, *tests);
+                last(
+                    &|p| matches!(p, ExecPurpose::Review { phase, tests, .. } if *phase == ph && *tests == te),
+                )
+            }
+            ExecPurpose::Implement { phase, work } | ExecPurpose::WriteTest { phase, work }
+                if matches!(
+                    work,
+                    WorkKind::Fix | WorkKind::BlockerFix | WorkKind::Rescue | WorkKind::Resume
+                ) =>
+            {
+                let (ph, test) = (*phase, matches!(purpose, ExecPurpose::WriteTest { .. }));
+                last(&|p| match p {
+                    ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
+                        !test && *phase == ph
+                    }
+                    ExecPurpose::WriteTest { phase, .. } => test && *phase == ph,
+                    _ => false,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn partners(&self, s: &SessionState, rec: &ExecRecord) -> Vec<(ExecutionId, String)> {
+        let latest = |f: &dyn Fn(&ExecRecord) -> bool| {
+            s.executions
+                .values()
+                .filter(|r| f(r))
+                .max_by_key(|r| r.id.clone())
+                .map(|r| s.subagent_of(&r.id))
+        };
+        let mut out: Vec<(ExecutionId, String)> = vec![];
+        let checked = |target: FactTarget| -> Option<ExecutionId> {
+            latest(
+                &|r| matches!(&r.purpose, ExecPurpose::FactCheck { target: t, .. } if *t == target),
+            )
+        };
+        match &rec.purpose {
+            ExecPurpose::Spec { .. } => {
+                out.extend(checked(FactTarget::Spec).map(|c| (c, "your fact checker".to_string())))
+            }
+            ExecPurpose::Plan { .. } => {
+                out.extend(checked(FactTarget::Plan).map(|c| (c, "your fact checker".to_string())))
+            }
+            ExecPurpose::FactCheck { target, .. } => {
+                let author = match target {
+                    FactTarget::Spec => latest(&|r| matches!(r.purpose, ExecPurpose::Spec { .. })),
+                    FactTarget::Plan => latest(&|r| matches!(r.purpose, ExecPurpose::Plan { .. })),
+                };
+                out.extend(author.map(|a| (a, "the author of the document you check".to_string())));
+            }
+            _ if rec.loop_key.is_some() => {
+                let key = rec.loop_key;
+                let review = matches!(rec.purpose, ExecPurpose::Review { .. });
+                let other = latest(&|r| {
+                    r.loop_key == key && matches!(r.purpose, ExecPurpose::Review { .. }) != review
+                });
+                out.extend(other.map(|o| {
+                    (
+                        o,
+                        if review {
+                            "the implementer of the phase you review"
+                        } else {
+                            "the reviewer of your phase"
+                        }
+                        .to_string(),
+                    )
+                }));
+            }
+            _ => {}
+        }
+        out
+    }
+
+    fn session_wide(&self, purpose: &ExecPurpose) -> bool {
+        matches!(
+            purpose,
+            ExecPurpose::Spec { .. }
+                | ExecPurpose::Plan { .. }
+                | ExecPurpose::FactCheck {
+                    target: FactTarget::Spec | FactTarget::Plan,
+                    ..
+                }
+        )
     }
 
     fn judge_input(
@@ -322,7 +590,7 @@ impl Pipeline for OstraPipeline {
     fn spawn_dropped(&self, st: &SessionState, req: &SpawnRequest) -> bool {
         // Rule U1: research skipped while this spawn waited for a slot does not start.
         matches!(&req.purpose, ExecPurpose::Explore { task }
-            if st.explore.get(*task as usize).is_some_and(|t| t.abandoned))
+            if st.ext.os().explore.get(*task as usize).is_some_and(|t| t.abandoned))
     }
 
     fn before_spawn(&self, st: &SessionState, req: &SpawnRequest) -> Result<(), String> {
@@ -545,6 +813,8 @@ async fn perform_own(host: &StepHost, session: &SessionId, step: Step) -> Result
             let st = host.snapshot(session)?;
             let root = st.project_path(&project).unwrap_or_default();
             let inventory = st
+                .ext
+                .os()
                 .project_inits
                 .get(&project)
                 .and_then(|i| i.inventory.clone());
@@ -646,7 +916,7 @@ fn init_problem(root: &Path) -> Option<String> {
 
 /// Rule B10: the drafts of a project as Markdown, the inventory, and an index of the page plan.
 fn write_docs_drafts(st: &SessionState, project: &str) {
-    let Some(track) = st.project_tracks.get(project) else {
+    let Some(track) = st.ext.os().project_tracks.get(project) else {
         return;
     };
     let dir = st.docs_drafts_dir(project);

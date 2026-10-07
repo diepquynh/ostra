@@ -1690,15 +1690,7 @@ async fn diff(
     let root = st
         .project_path(&q.project)
         .ok_or_else(|| ApiErr::not_found("No such project in this session."))?;
-    let mut files: std::collections::BTreeSet<String> = Default::default();
-    for p in st
-        .phases
-        .values()
-        .filter(|p| p.info.project == q.project && q.phase.is_none_or(|n| n == p.info.id))
-    {
-        files.extend(p.impl_loop.changed.iter().cloned());
-        files.extend(p.test_loop.changed.iter().cloned());
-    }
+    let files = st.pipeline.changed_files(&st, &q.project, q.phase);
     let mut out = vec![];
     for f in files.into_iter().take(200) {
         // Resolved, because an agent can leave a symlink in the project that points outside it.

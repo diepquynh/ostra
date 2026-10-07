@@ -5,7 +5,8 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-use ostra_engine::state::{LoopNext, SessionState};
+use crate::data::LoopNext;
+use ostra_engine::state::SessionState;
 use std::fmt::Write;
 
 pub fn render(s: &SessionState) -> String {
@@ -20,7 +21,7 @@ pub fn render(s: &SessionState) -> String {
         m,
         "## Route\n\n- Category: {}\n- Track: {}\n- Projects in scope: {}\n",
         s.category.map(|c| c.to_string()).unwrap_or_default(),
-        s.track.map(|t| t.as_str()).unwrap_or("none"),
+        s.ext.os().track.map(|t| t.as_str()).unwrap_or("none"),
         s.scope.join(", ")
     );
     let docs = s.research_docs();
@@ -31,23 +32,25 @@ pub fn render(s: &SessionState) -> String {
         }
         m.push('\n');
     }
-    if let Some(spec) = &s.spec.current {
+    if let Some(spec) = &s.ext.os().spec.current {
         let _ = writeln!(
             m,
             "## Spec\n\n- `{}`: {} (approved: {})\n",
-            spec.spec_path, spec.summary, s.spec.approved
+            spec.spec_path,
+            spec.summary,
+            s.ext.os().spec.approved
         );
     }
-    if let Some(plan) = &s.plan.current {
+    if let Some(plan) = &s.ext.os().plan.current {
         let _ = writeln!(
             m,
             "## Plan\n\n- `{}`: {}\n",
             plan.master_plan_path, plan.summary
         );
     }
-    if !s.phases.is_empty() {
+    if !s.ext.os().phases.is_empty() {
         let _ = writeln!(m, "## Phases\n");
-        for p in s.phases.values() {
+        for p in s.ext.os().phases.values() {
             let status = match &p.impl_loop.next {
                 LoopNext::Done => "passed review".to_string(),
                 LoopNext::Blocked { reason } => format!("blocked: {reason}"),
@@ -69,9 +72,9 @@ pub fn render(s: &SessionState) -> String {
         }
         m.push('\n');
     }
-    if !s.feedback.rounds.is_empty() {
+    if !s.ext.os().feedback.rounds.is_empty() {
         let _ = writeln!(m, "## Feedback rounds\n");
-        for (i, r) in s.feedback.rounds.iter().enumerate() {
+        for (i, r) in s.ext.os().feedback.rounds.iter().enumerate() {
             let _ = writeln!(m, "### Round {}\n\n{}\n", i + 1, r.text.trim());
             if r.awaiting_spec {
                 let _ = writeln!(

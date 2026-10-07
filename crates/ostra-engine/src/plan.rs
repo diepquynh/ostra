@@ -478,10 +478,10 @@ impl<'a> Planner<'a> {
                 !matches!(
                     r.purpose,
                     ExecPurpose::Init { .. } | ExecPurpose::Advise { .. }
-                ) && crate::pipeline::get().awaiting_init(self.s, &r.project)
+                ) && self.s.pipeline.awaiting_init(self.s, &r.project)
             }
             Step::Command { project, .. } | Step::Autofix { project, .. } => {
-                crate::pipeline::get().awaiting_init(self.s, project)
+                self.s.pipeline.awaiting_init(self.s, project)
             }
             _ => false,
         };
@@ -678,13 +678,13 @@ impl<'a> Planner<'a> {
             for g in s.open_gates() {
                 // A budget is never raised by YOLO: spending more is the user's decision.
                 if !matches!(g.payload, GatePayload::Permission { .. })
-                    && !crate::pipeline::get().yolo_leaves_open(s, &g.payload)
+                    && !self.s.pipeline.yolo_leaves_open(s, &g.payload)
                 {
                     self.push(Step::YoloAnswer { gate: g.id.clone() });
                 }
             }
         }
-        crate::pipeline::get().plan(self);
+        self.s.pipeline.plan(self);
     }
 
     // -------------------------------------------------------------------------------------
@@ -706,9 +706,7 @@ impl<'a> Planner<'a> {
                 continue;
             }
             let ok = match &d.run {
-                StageRun::Builtin { stage } => {
-                    crate::pipeline::get().builtin_stage(self, *stage, &wf)
-                }
+                StageRun::Builtin { stage } => self.s.pipeline.builtin_stage(self, *stage, &wf),
                 // A phase stage runs inside the build stage, which is done only after it.
                 _ if d.scope == StageScope::Phase => true,
                 StageRun::Agent { agent } => self.agent_stage(&wf, d, *agent),
@@ -722,7 +720,7 @@ impl<'a> Planner<'a> {
             }
         }
         if all {
-            crate::pipeline::get().completion(self);
+            self.s.pipeline.completion(self);
         }
     }
 

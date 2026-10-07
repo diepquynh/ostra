@@ -109,8 +109,9 @@ impl ExecManage {
     async fn create(&self, app: &App, w: &WorkspaceRt, input: &Value) -> Result<String, String> {
         let req = ProjectCreateInput::parse(input)?;
         let st = w.engine.state(&self.session).map_err(|e| e.to_string())?;
-        if let Some(why) =
-            ostra_engine::pipeline::get().project_creation_refusal(&st, &self.execution, &req.key)
+        if let Some(why) = st
+            .pipeline
+            .project_creation_refusal(&st, &self.execution, &req.key)
         {
             return Err(why);
         }

@@ -48,6 +48,9 @@ struct Fake {
 
 #[async_trait]
 impl Services for Fake {
+    fn pipeline(&self) -> std::sync::Arc<dyn ostra_engine::pipeline::Pipeline> {
+        ostra_default_plugin::pipeline()
+    }
     fn global(&self) -> GlobalConfig {
         let mut g = GlobalConfig::default();
         let t = g.tiers.get_mut("native").unwrap();
@@ -232,7 +235,8 @@ async fn offline_stop_prevents_rerun_on_recovery() {
     // The server "died"; stop the session before starting again.
     let db = WorkspaceDb::open(&path).unwrap();
     assert_eq!(
-        ostra_engine::runner::stop_session_offline(&db, &s.id).unwrap(),
+        ostra_engine::runner::stop_session_offline(ostra_default_plugin::pipeline(), &db, &s.id)
+            .unwrap(),
         1
     );
     ostra_default_plugin::install();

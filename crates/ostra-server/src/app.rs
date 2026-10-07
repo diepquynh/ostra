@@ -305,8 +305,12 @@ pub fn stop_offline(session: &str) -> anyhow::Result<usize> {
         }
         let db = ostra_store::WorkspaceDb::open(&db_path)?;
         if db.get_session(&id)?.is_some() {
-            return ostra_engine::runner::stop_session_offline(&db, &id)
-                .map_err(|e| anyhow::anyhow!("{e}"));
+            return ostra_engine::runner::stop_session_offline(
+                ostra_default_plugin::pipeline(),
+                &db,
+                &id,
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"));
         }
     }
     anyhow::bail!("No registered workspace has a session {session}.")

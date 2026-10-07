@@ -3,8 +3,8 @@
 //! adds the stages' own state changes, planning, judges, views, and step effects, in process.
 //!
 //! The fold stays a pure function of the log (pattern 1), because a pipeline is deterministic
-//! Rust code in the process, never a call over stdio. One pipeline serves the process. The server
-//! installs the standard plugin's pipeline at startup, and tests install it before they fold.
+//! Rust code in the process, never a call over stdio. The server gives each engine the standard
+//! plugin's pipeline through `Services::pipeline`, and each session state carries it.
 
 use crate::plan::{Planner, SpawnRequest, Step};
 use crate::runner::{EngineError, StepHost};
@@ -22,7 +22,7 @@ use ostra_store::WorkspaceDb;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 /// A project as the judges see it.
 pub struct ProjectFacts {
@@ -32,6 +32,22 @@ pub struct ProjectFacts {
     pub stack: Option<String>,
     /// Module map rows from `project.toml`, as `area (glob)`.
     pub areas: Vec<String>,
+}
+
+/// One phase of the plan, as generic stages see it.
+#[derive(Debug, Clone)]
+pub struct PhaseFacts {
+    pub info: ostra_core::pipeline::PhaseInfo,
+    pub implementer_report: Option<PathBuf>,
+}
+
+/// What a helper task gives back to the run that asked for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HelperResult {
+    /// The text of the result message.
+    Text(String),
+    /// The task is not finished, for example because it runs again after an error.
+    NotYet,
 }
 
 /// How the engine answers a gate under YOLO.
@@ -48,6 +64,8 @@ pub trait Pipeline: Send + Sync {
     // Fold. Each hook runs at the point of `SessionState::apply` where the built-in stages read
     // the event, so the order of state changes is the same as one fold.
 
+    /// The pipeline's state of a session before its first event.
+    fn new_state(&self) -> PipelineBox;
     /// `SessionCreated`, after the generic fields are set.
     fn created(&self, s: &mut SessionState);
     /// Rule O3: a run created `project`, before the session records it.
@@ -127,8 +145,65 @@ pub trait Pipeline: Send + Sync {
     /// Whether overriding a decision can still change what happens.
     fn can_override(&self, s: &SessionState, id: &DecisionId) -> bool;
     /// Rule WB4: what a reference to a built-in stage's node reads, seen from an instance in
-    /// `scope`, for the stages whose facts the pipeline settles.
+    /// `scope`: the facts the stage settled.
     fn stage_value(&self, s: &SessionState, stage: BuiltinStage, scope: Option<&str>) -> Value;
+    /// Rule WB4: the pipeline's facts in the `session` value, such as the track.
+    fn session_facts(&self, s: &SessionState) -> serde_json::Map<String, Value>;
+    /// Rules WF1 and WF3: the session recorded its workflow.
+    fn workflow_resolved(&self, s: &mut SessionState, wf: &WorkflowDef);
+    /// Research documents, oldest first (Rule D2).
+    fn research_docs(&self, s: &SessionState) -> Vec<PathBuf>;
+    /// The current spec, once one exists.
+    fn spec_file(&self, s: &SessionState) -> Option<PathBuf>;
+    /// The current master plan, once one exists.
+    fn master_plan(&self, s: &SessionState) -> Option<PathBuf>;
+    /// One phase of the plan, as a phase-scoped stage sees it.
+    fn phase(&self, s: &SessionState, id: u32) -> Option<PhaseFacts>;
+    /// Rule WF4: the phases whose phase-scoped stages run: built, reviewed, and not removed.
+    fn passed_phases(&self, s: &SessionState) -> Vec<u32>;
+    /// The files the work loops of `project` changed, in one phase or in all, for the diff view.
+    fn changed_files(
+        &self,
+        s: &SessionState,
+        project: &str,
+        phase: Option<u32>,
+    ) -> BTreeSet<String>;
+
+    // Messages between subagents (Rules SM3 to SM7).
+
+    /// Rule SM7: take a message to an agent as one of the pipeline's own tasks, such as a
+    /// research task. Returns the task's number, or `None` to start the agent as a helper.
+    fn helper_task(
+        &self,
+        s: &mut SessionState,
+        ask: &ostra_core::ids::MessageId,
+        agent: AgentName,
+        contract: Option<Contract>,
+        project: &str,
+        asker: &str,
+        text: &str,
+    ) -> Option<u32>;
+    /// Rule SM7: the message a run of one of the pipeline's tasks answers.
+    fn helper_ask(
+        &self,
+        s: &SessionState,
+        purpose: &ExecPurpose,
+    ) -> Option<ostra_core::ids::MessageId>;
+    /// Rule SM7: what a run of one of the pipeline's helper tasks returns to its asker. `None`
+    /// when the run is no such task.
+    fn helper_result(
+        &self,
+        s: &SessionState,
+        rec: &ExecRecord,
+        result: &ExecutionResult,
+    ) -> Option<HelperResult>;
+    /// Rules H5 and H6: the earlier run of the same loop whose conversation a run of `purpose`
+    /// continues, for the pipeline's own purposes.
+    fn previous_run(&self, s: &SessionState, purpose: &ExecPurpose) -> Option<ExecutionId>;
+    /// Rule SM2: the subagents a run of the pipeline works with, and their role toward it.
+    fn partners(&self, s: &SessionState, rec: &ExecRecord) -> Vec<(ExecutionId, String)>;
+    /// The session dir of a run that works for the whole session, not for its project.
+    fn session_wide(&self, purpose: &ExecPurpose) -> bool;
 
     // Judges and YOLO.
 
@@ -232,18 +307,82 @@ pub trait Pipeline: Send + Sync {
     );
 }
 
-static PIPELINE: OnceLock<Arc<dyn Pipeline>> = OnceLock::new();
-
-/// Install the process's pipeline. The first install wins, because a session folded with one
-/// pipeline must not fold with another.
-pub fn install(pipeline: Arc<dyn Pipeline>) {
-    let _ = PIPELINE.set(pipeline);
+/// The pipeline's own part of a session's state. The engine clones it with the session state and
+/// never reads it.
+pub trait PipelineData: std::any::Any + Send + Sync + std::fmt::Debug {
+    fn clone_data(&self) -> Box<dyn PipelineData>;
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
-/// The process's pipeline.
-pub fn get() -> &'static dyn Pipeline {
-    PIPELINE
-        .get()
-        .map(|p| p.as_ref())
-        .expect("no pipeline installed: call ostra_default_plugin::install() at startup")
+impl<T: std::any::Any + Send + Sync + std::fmt::Debug + Clone> PipelineData for T {
+    fn clone_data(&self) -> Box<dyn PipelineData> {
+        Box::new(self.clone())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+/// A pipeline's state inside `SessionState::ext`. Only its pipeline knows the type.
+pub struct PipelineBox(Box<dyn PipelineData>);
+
+impl PipelineBox {
+    pub fn new<T: PipelineData>(data: T) -> Self {
+        PipelineBox(Box::new(data))
+    }
+
+    /// The state as its pipeline's type. A session always holds the state its pipeline made.
+    pub fn get<T: 'static>(&self) -> &T {
+        self.0
+            .as_any()
+            .downcast_ref()
+            .expect("the session holds its pipeline's own state")
+    }
+
+    pub fn get_mut<T: 'static>(&mut self) -> &mut T {
+        self.0
+            .as_any_mut()
+            .downcast_mut()
+            .expect("the session holds its pipeline's own state")
+    }
+}
+
+impl Clone for PipelineBox {
+    fn clone(&self) -> Self {
+        PipelineBox(self.0.clone_data())
+    }
+}
+
+impl std::fmt::Debug for PipelineBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// The pipeline a session folds and plans with. The engine gets it from `Services::pipeline`, and
+/// every `SessionState` carries it, so a fold needs no process-wide state.
+#[derive(Clone)]
+pub struct PipelineRef(pub Arc<dyn Pipeline>);
+
+impl std::fmt::Debug for PipelineRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PipelineRef")
+    }
+}
+
+impl std::ops::Deref for PipelineRef {
+    type Target = dyn Pipeline;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl From<Arc<dyn Pipeline>> for PipelineRef {
+    fn from(p: Arc<dyn Pipeline>) -> Self {
+        PipelineRef(p)
+    }
 }

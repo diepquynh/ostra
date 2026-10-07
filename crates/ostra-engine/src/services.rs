@@ -79,8 +79,10 @@ pub trait Services: Send + Sync {
     }
     /// Rule WF1: the workspace's workflow files, re-read like the settings.
     fn workflows(&self) -> ostra_core::workflow::WorkflowSet {
-        crate::pipeline::get().workflow_set()
+        self.pipeline().workflow_set()
     }
+    /// The pipeline that runs the built-in stages, from the standard plugin.
+    fn pipeline(&self) -> Arc<dyn crate::pipeline::Pipeline>;
     /// Rule PL3: the plugin stages the workspace can run, as `(plugin, stage)`.
     fn plugin_stages(&self) -> Vec<(String, String)> {
         vec![]

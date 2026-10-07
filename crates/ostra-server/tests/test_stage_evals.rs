@@ -1042,6 +1042,9 @@ struct EvalServices {
 
 #[async_trait::async_trait]
 impl Services for EvalServices {
+    fn pipeline(&self) -> std::sync::Arc<dyn ostra_engine::pipeline::Pipeline> {
+        ostra_default_plugin::pipeline()
+    }
     fn global(&self) -> GlobalConfig {
         let mut g = GlobalConfig::default();
         if let Some(t) = g.tiers.get_mut("native") {

@@ -24,7 +24,7 @@ fn work_source(inputs: &SpawnInputs, s: &SessionState) -> WorkSource {
     match inputs.phase.as_ref().and_then(|p| p.file.clone()) {
         Some(f) => WorkSource::PhaseFile(f),
         None => WorkSource::NoPlan(
-            match (inputs.revision, s.category, s.track) {
+            match (inputs.revision, s.category, s.ext.os().track) {
                 (Some(_), _, _) => "A revision the user asked for after reviewing the implementation. The request below and the session context file describe it.",
                 (_, Some(Category::Verify), _) => "A verification request: no code change is planned.",
                 (_, Some(Category::Test), _) => "The user asked for tests directly, so no plan exists.",

@@ -41,8 +41,10 @@ use ostra_core::ids::{ExecutionId, SessionId, WorkspaceId};
 use ostra_core::model::Effort;
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, RuleRef, ToolCall};
+use ostra_default_plugin::data::ExploreOrigin;
+use ostra_default_plugin::data::OsExt;
 use ostra_default_plugin::factory::AgentsFactory;
-use ostra_engine::state::{ExploreOrigin, SessionState};
+use ostra_engine::state::SessionState;
 use ostra_engine::{Engine, Notice, Services, SpawnFactory};
 use ostra_exec_native::NativeExecutor;
 use ostra_providers::{Providers, ScriptedProvider};
@@ -517,6 +519,8 @@ fn stage_of(agent: AgentName, st: &SessionState, exec: &ExecutionId) -> String {
         AgentName::Explore => {
             let helper = match rec.map(|x| &x.purpose) {
                 Some(ExecPurpose::Explore { task }) => st
+                    .ext
+                    .os()
                     .explore
                     .get(*task as usize)
                     .is_some_and(|t| matches!(t.origin, ExploreOrigin::Ask { .. })),
@@ -691,6 +695,9 @@ impl EvalServices {
 
 #[async_trait::async_trait]
 impl Services for EvalServices {
+    fn pipeline(&self) -> std::sync::Arc<dyn ostra_engine::pipeline::Pipeline> {
+        ostra_default_plugin::pipeline()
+    }
     fn global(&self) -> GlobalConfig {
         let mut g = GlobalConfig::default();
         if let Some(t) = g.tiers.get_mut("native") {

@@ -575,15 +575,17 @@ pub trait OstraFold {
 
 impl OstraFold for SessionState {
     fn tests_requested(&self) -> bool {
-        self.options.tests || self.opts_in.tests
+        self.options.tests || self.ext.os().opts_in.tests
     }
 
     fn docs_requested(&self) -> bool {
-        self.options.docs || self.opts_in.docs
+        self.options.docs || self.ext.os().opts_in.docs
     }
 
     fn project_docs_on(&self, key: &str) -> bool {
-        self.project_tracks
+        self.ext
+            .os()
+            .project_tracks
             .get(key)
             .and_then(|t| t.closing)
             .map(|c| c.1)
@@ -591,11 +593,15 @@ impl OstraFold for SessionState {
     }
 
     fn docs_projects(&self) -> Vec<String> {
-        self.project_tracks
+        self.ext
+            .os()
+            .project_tracks
             .keys()
             .filter(|k| {
                 self.project_docs_on(k)
                     && self
+                        .ext
+                        .os()
                         .phases
                         .values()
                         .any(|p| &p.info.project == *k && p.impl_loop.is_done())
@@ -606,6 +612,8 @@ impl OstraFold for SessionState {
 
     fn book_update(&self) -> ostra_core::book::BookUpdate {
         let parts = self
+            .ext
+            .os()
             .project_tracks
             .iter()
             .filter_map(|(k, t)| match t.docs_aggregate() {
@@ -651,7 +659,7 @@ impl OstraFold for SessionState {
     }
 
     fn loop_mut(&mut self, key: (u32, bool)) -> Option<&mut WorkLoop> {
-        self.phases.get_mut(&key.0).map(|p| {
+        self.ext.os_mut().phases.get_mut(&key.0).map(|p| {
             if key.1 {
                 &mut p.test_loop
             } else {
@@ -661,7 +669,9 @@ impl OstraFold for SessionState {
     }
 
     fn loop_ref(&self, key: (u32, bool)) -> Option<&WorkLoop> {
-        self.phases
+        self.ext
+            .os()
+            .phases
             .get(&key.0)
             .map(|p| if key.1 { &p.test_loop } else { &p.impl_loop })
     }
@@ -706,7 +716,7 @@ impl OstraFold for SessionState {
             .executions
             .get(execution)
             .and_then(|r| r.loop_key)
-            .and_then(|(phase, _)| self.phases.get(&phase))
+            .and_then(|(phase, _)| self.ext.os().phases.get(&phase))
             .map(|p| p.info.project.as_str());
         if phase_project != Some(key) {
             return Some(format!(
@@ -717,7 +727,7 @@ impl OstraFold for SessionState {
     }
 
     fn project_to_create(&self, key: &str) -> Option<PathBuf> {
-        let plan = self.plan.current.as_ref()?;
+        let plan = self.ext.os().plan.current.as_ref()?;
         (plan.new_projects.iter().any(|k| k == key)
             && ostra_core::slug::is_project_key(key)
             && !self.valid_project(key))
@@ -725,36 +735,42 @@ impl OstraFold for SessionState {
     }
 
     fn awaiting_init(&self, project: &str) -> bool {
-        self.project_inits.get(project).is_some_and(|i| !i.finished)
+        self.ext
+            .os()
+            .project_inits
+            .get(project)
+            .is_some_and(|i| !i.finished)
     }
 
     fn requirement_change(&mut self, text: String) {
-        self.spec.changes.push(text);
-        self.spec.needs_run = true;
-        self.spec.revoke_approval();
-        if self.plan.current.is_some() || self.plan.running.is_some() || !self.plan.runs.is_empty()
+        self.ext.os_mut().spec.changes.push(text);
+        self.ext.os_mut().spec.needs_run = true;
+        self.ext.os_mut().spec.revoke_approval();
+        if self.ext.os().plan.current.is_some()
+            || self.ext.os().plan.running.is_some()
+            || !self.ext.os().plan.runs.is_empty()
         {
-            self.plan.revoke_approval();
-            self.plan.invalidated = true;
+            self.ext.os_mut().plan.revoke_approval();
+            self.ext.os_mut().plan.invalidated = true;
         }
     }
 
     fn track_mut(&mut self, target: FactTarget) -> &mut dyn RoutingTrack {
         match target {
-            FactTarget::Spec => &mut self.spec,
-            FactTarget::Plan => &mut self.plan,
+            FactTarget::Spec => &mut self.ext.os_mut().spec,
+            FactTarget::Plan => &mut self.ext.os_mut().plan,
         }
     }
 
     fn approve_spec(&mut self) {
-        self.spec.approved = true;
-        self.spec.approved_version = self.spec.version;
-        if self.plan.invalidated {
-            self.plan.needs_run = true;
+        self.ext.os_mut().spec.approved = true;
+        self.ext.os_mut().spec.approved_version = self.ext.os_mut().spec.version;
+        if self.ext.os().plan.invalidated {
+            self.ext.os_mut().plan.needs_run = true;
         }
-        for i in 0..self.feedback.rounds.len() {
-            if self.feedback.rounds[i].awaiting_spec {
-                self.feedback.rounds[i].awaiting_spec = false;
+        for i in 0..self.ext.os().feedback.rounds.len() {
+            if self.ext.os().feedback.rounds[i].awaiting_spec {
+                self.ext.os_mut().feedback.rounds[i].awaiting_spec = false;
                 self.add_revision_phases(i);
             }
         }
@@ -762,11 +778,11 @@ impl OstraFold for SessionState {
 
     fn hold_approval(&mut self, id: &GateId, target: FactTarget, approve: bool, text: String) {
         let version = match target {
-            FactTarget::Spec => self.spec.version,
-            FactTarget::Plan => self.plan.version,
+            FactTarget::Spec => self.ext.os().spec.version,
+            FactTarget::Plan => self.ext.os().plan.version,
         };
         self.track_mut(target).set_routing(Some(id.clone()));
-        self.held_answers.insert(
+        self.ext.os_mut().held_answers.insert(
             id.clone(),
             HeldAnswer::Approval {
                 target,
@@ -810,8 +826,9 @@ impl OstraFold for SessionState {
         let mut stages = item.stages.clone();
         stages.sort();
         stages.dedup();
-        self.user_notes.push(UserNote {
-            id: format!("N{}", self.user_notes.len() + 1),
+        let notes = &mut self.ext.os_mut().user_notes;
+        notes.push(UserNote {
+            id: format!("N{}", notes.len() + 1),
             forgotten: false,
             stages,
             text,
@@ -820,7 +837,7 @@ impl OstraFold for SessionState {
     }
 
     fn forget(&mut self, ids: &[String]) {
-        for n in &mut self.user_notes {
+        for n in &mut self.ext.os_mut().user_notes {
             if ids.iter().any(|i| i.trim() == n.id) {
                 n.forgotten = true;
             }
@@ -867,7 +884,10 @@ impl OstraFold for SessionState {
         self.remember_parts(None, &out.items, ANSWER_ITEM, &text);
         self.queue_research(&out.research, ExploreOrigin::Amendment);
         // Rule D10: a requirement change after the spec exists restarts at the spec.
-        if deliver && out.route == AnswerRoute::RequirementChange && !self.spec.runs.is_empty() {
+        if deliver
+            && out.route == AnswerRoute::RequirementChange
+            && !self.ext.os().spec.runs.is_empty()
+        {
             self.requirement_change(format!("The user extended the request: {text}"));
         }
     }
@@ -880,13 +900,15 @@ impl OstraFold for SessionState {
             return false;
         }
         match &rec.purpose {
-            ExecPurpose::Explore { task } => self.explore.get(*task as usize).is_some_and(|t| {
-                !t.finished()
-                    && !matches!(
-                        t.origin,
-                        ExploreOrigin::Ask { .. } | ExploreOrigin::Rescue { .. }
-                    )
-            }),
+            ExecPurpose::Explore { task } => {
+                self.ext.os().explore.get(*task as usize).is_some_and(|t| {
+                    !t.finished()
+                        && !matches!(
+                            t.origin,
+                            ExploreOrigin::Ask { .. } | ExploreOrigin::Rescue { .. }
+                        )
+                })
+            }
             ExecPurpose::Epa { .. } | ExecPurpose::Docs { .. } => true,
             _ => false,
         }
@@ -897,7 +919,7 @@ impl OstraFold for SessionState {
     }
 
     fn skippable_research(&self) -> impl Iterator<Item = &ExploreTask> + '_ {
-        self.explore.iter().filter(|t| {
+        self.ext.os().explore.iter().filter(|t| {
             !t.finished()
                 && t.failed.is_none()
                 && !matches!(
@@ -914,7 +936,7 @@ impl OstraFold for SessionState {
             .map(|t| t.idx)
             .collect();
         for i in idx {
-            let running = self.explore[i as usize]
+            let running = self.ext.os().explore[i as usize]
                 .exec
                 .clone()
                 .filter(|e| self.executions.get(e).is_some_and(|r| r.result.is_none()));
@@ -924,7 +946,7 @@ impl OstraFold for SessionState {
                     self.skip_task(&e);
                 }
                 None => {
-                    let t = &mut self.explore[i as usize];
+                    let t = &mut self.ext.os_mut().explore[i as usize];
                     t.abandoned = true;
                     if let ExploreOrigin::LoopAnswer { phase, tests } = t.origin {
                         self.release_answer_research((phase, tests));
@@ -969,8 +991,8 @@ impl OstraFold for SessionState {
                 match target {
                     FactTarget::Spec => {
                         // Rule D3: every answer re-runs generate-spec.
-                        self.spec.answers.extend(sent);
-                        self.spec.needs_run = true;
+                        self.ext.os_mut().spec.answers.extend(sent);
+                        self.ext.os_mut().spec.needs_run = true;
                     }
                     FactTarget::Plan => {
                         let text = sent
@@ -1000,24 +1022,28 @@ impl OstraFold for SessionState {
                 };
                 match (target, change) {
                     (FactTarget::Spec, Some(c)) => {
-                        self.spec.changes.push(c);
-                        self.spec.needs_run = true;
+                        self.ext.os_mut().spec.changes.push(c);
+                        self.ext.os_mut().spec.needs_run = true;
                     }
                     // Rule D10: a change after the plan exists goes into the spec first.
                     (FactTarget::Plan, Some(c)) => self.requirement_change(c),
                     (FactTarget::Spec, None) => {
-                        if approve && self.spec.version == version && !self.spec.needs_run {
+                        if approve
+                            && self.ext.os().spec.version == version
+                            && !self.ext.os().spec.needs_run
+                        {
                             self.approve_spec();
                         }
                     }
                     (FactTarget::Plan, None) => {
                         if approve
-                            && self.plan.version == version
-                            && !self.plan.needs_run
-                            && !self.plan.invalidated
+                            && self.ext.os().plan.version == version
+                            && !self.ext.os().plan.needs_run
+                            && !self.ext.os().plan.invalidated
                         {
-                            self.plan.approved = true;
-                            self.plan.approved_version = self.plan.version;
+                            self.ext.os_mut().plan.approved = true;
+                            self.ext.os_mut().plan.approved_version =
+                                self.ext.os_mut().plan.version;
                             self.adopt_plan_phases();
                         }
                     }
@@ -1032,8 +1058,8 @@ impl OstraFold for SessionState {
                 };
                 match (target, change) {
                     (FactTarget::Spec, Some(c)) => {
-                        self.spec.changes.push(c);
-                        self.spec.needs_run = true;
+                        self.ext.os_mut().spec.changes.push(c);
+                        self.ext.os_mut().spec.needs_run = true;
                     }
                     (FactTarget::Plan, Some(c)) => self.requirement_change(c),
                     (_, None) => {}
@@ -1064,7 +1090,10 @@ impl OstraFold for SessionState {
         self.remember_parts(Some(gate), &out.items, ANSWER_ITEM, &text);
         let deliver = item.disposition == Disposition::Deliver;
         // With no spec there is nothing to change first, so the answer goes to the phase.
-        if deliver && out.route == AnswerRoute::RequirementChange && self.spec.current.is_some() {
+        if deliver
+            && out.route == AnswerRoute::RequirementChange
+            && self.ext.os().spec.current.is_some()
+        {
             // Rule D10: stop the phase and restart at the spec.
             if let Some(l) = self.loop_mut(key) {
                 l.next = LoopNext::Blocked {
@@ -1124,7 +1153,7 @@ impl OstraFold for SessionState {
         };
         let found: Vec<&ExploreTask> = tasks
             .iter()
-            .filter_map(|i| self.explore.get(*i as usize))
+            .filter_map(|i| self.ext.os().explore.get(*i as usize))
             .collect();
         if found.iter().any(|t| !t.finished()) {
             return;
@@ -1151,7 +1180,9 @@ impl OstraFold for SessionState {
     }
 
     fn notes_for(&self, stage: NoteStage) -> Vec<String> {
-        self.user_notes
+        self.ext
+            .os()
+            .user_notes
             .iter()
             .filter(|n| !n.forgotten && n.stages.contains(&stage))
             .map(|n| n.text.clone())
@@ -1177,7 +1208,7 @@ impl OstraFold for SessionState {
                 ExploreOrigin::Amendment,
             );
         }
-        if !self.spec.runs.is_empty() {
+        if !self.ext.os().spec.runs.is_empty() {
             self.requirement_change(format!("The user extended the request: {text}"));
         }
     }
@@ -1212,9 +1243,12 @@ impl OstraFold for SessionState {
             }
         }
         self.scope = scope;
-        self.opts_in = out.opts_in;
-        self.explore.retain(|t| t.origin != ExploreOrigin::Classify);
-        self.phases.clear();
+        self.ext.os_mut().opts_in = out.opts_in;
+        self.ext
+            .os_mut()
+            .explore
+            .retain(|t| t.origin != ExploreOrigin::Classify);
+        self.ext.os_mut().phases.clear();
         let explores = matches!(
             out.category,
             Category::Research | Category::Spec | Category::Plan | Category::Implement
@@ -1263,13 +1297,22 @@ impl OstraFold for SessionState {
                         inline_phase(id, key, "Documentation requested by the user", i),
                         l,
                     );
-                    if let Some(p) = self.phases.get_mut(&id) {
+                    if let Some(p) = self.ext.os_mut().phases.get_mut(&id) {
                         p.implementer_report = Some(report);
                         p.info.depends_on = Some(vec![]);
                     }
-                    self.project_tracks.entry(key.clone()).or_default().closing =
-                        Some((false, true));
-                    self.project_tracks.entry(key.clone()).or_default().format = Some(None);
+                    self.ext
+                        .os_mut()
+                        .project_tracks
+                        .entry(key.clone())
+                        .or_default()
+                        .closing = Some((false, true));
+                    self.ext
+                        .os_mut()
+                        .project_tracks
+                        .entry(key.clone())
+                        .or_default()
+                        .format = Some(None);
                 }
             }
             Category::Test => {
@@ -1282,13 +1325,22 @@ impl OstraFold for SessionState {
                         .project_session_dir(key)
                         .join(paths::report::test_request());
                     self.insert_phase(inline_phase(id, key, "Tests requested by the user", i), l);
-                    if let Some(p) = self.phases.get_mut(&id) {
+                    if let Some(p) = self.ext.os_mut().phases.get_mut(&id) {
                         p.implementer_report = Some(report);
                         p.info.depends_on = Some(vec![]);
                     }
-                    self.project_tracks.entry(key.clone()).or_default().closing =
-                        Some((true, false));
-                    self.project_tracks.entry(key.clone()).or_default().format = Some(None);
+                    self.ext
+                        .os_mut()
+                        .project_tracks
+                        .entry(key.clone())
+                        .or_default()
+                        .closing = Some((true, false));
+                    self.ext
+                        .os_mut()
+                        .project_tracks
+                        .entry(key.clone())
+                        .or_default()
+                        .format = Some(None);
                 }
             }
             // Quick change (HANDOVER 8.2): one pass per project, no review, staged when it changed files.
@@ -1309,17 +1361,17 @@ impl OstraFold for SessionState {
             }
             _ => {}
         }
-        if let Some(track) = self.track {
+        if let Some(track) = self.ext.os().track {
             self.set_track(track);
         }
     }
 
     fn set_track(&mut self, track: Track) {
-        self.track = Some(track);
+        self.ext.os_mut().track = Some(track);
         if self.category != Some(Category::Implement) {
             return;
         }
-        self.phases.clear();
+        self.ext.os_mut().phases.clear();
         if track == Track::Light {
             let scope = self.scope.clone();
             for (i, key) in scope.iter().enumerate() {
@@ -1330,7 +1382,7 @@ impl OstraFold for SessionState {
     }
 
     fn add_feedback(&mut self, text: String, routed: bool) {
-        self.feedback.rounds.push(FeedbackRound {
+        self.ext.os_mut().feedback.rounds.push(FeedbackRound {
             text: text.clone(),
             route: None,
             reason: None,
@@ -1339,8 +1391,8 @@ impl OstraFold for SessionState {
             phases: vec![],
         });
         // Before Rule J1, a round with no spec and one project was built without the judge.
-        if !routed && self.spec.current.is_none() && self.scope.len() == 1 {
-            let i = self.feedback.rounds.len() - 1;
+        if !routed && self.ext.os().spec.current.is_none() && self.scope.len() == 1 {
+            let i = self.ext.os().feedback.rounds.len() - 1;
             let targets = vec![FeedbackTarget {
                 project: self.primary(),
                 instruction: text,
@@ -1356,7 +1408,7 @@ impl OstraFold for SessionState {
         targets: Vec<FeedbackTarget>,
         reason: Option<String>,
     ) {
-        let text = self.feedback.rounds[i].text.clone();
+        let text = self.ext.os().feedback.rounds[i].text.clone();
         let mut targets: Vec<FeedbackTarget> = targets
             .into_iter()
             .filter(|t| self.valid_project(&t.project) && !t.instruction.trim().is_empty())
@@ -1368,18 +1420,19 @@ impl OstraFold for SessionState {
             });
         }
         // Rule D10: a requirement change goes into the spec before anything is built from it.
-        let spec_first = route == AnswerRoute::RequirementChange && self.spec.current.is_some();
-        let r = &mut self.feedback.rounds[i];
+        let spec_first =
+            route == AnswerRoute::RequirementChange && self.ext.os().spec.current.is_some();
+        let r = &mut self.ext.os_mut().feedback.rounds[i];
         r.route = Some(route);
         r.reason = reason;
         r.targets = targets;
         if spec_first {
             r.awaiting_spec = true;
-            self.spec.changes.push(format!(
+            self.ext.os_mut().spec.changes.push(format!(
                 "The user reviewed the implementation and asked for: {text}"
             ));
-            self.spec.needs_run = true;
-            self.spec.revoke_approval();
+            self.ext.os_mut().spec.needs_run = true;
+            self.ext.os_mut().spec.revoke_approval();
         } else {
             self.add_revision_phases(i);
         }
@@ -1387,12 +1440,14 @@ impl OstraFold for SessionState {
 
     fn add_revision_phases(&mut self, i: usize) {
         let round = i as u32 + 1;
-        let targets = self.feedback.rounds[i].targets.clone();
+        let targets = self.ext.os().feedback.rounds[i].targets.clone();
         for t in targets {
             let id = self
+                .ext
+                .os()
                 .phases
                 .keys()
-                .chain(self.superseded_phases.iter().map(|p| &p.info.id))
+                .chain(self.ext.os().superseded_phases.iter().map(|p| &p.info.id))
                 .max()
                 .copied()
                 .unwrap_or(0)
@@ -1412,13 +1467,13 @@ impl OstraFold for SessionState {
                 info,
                 WorkLoop::new(false, Contract::Implementation, Contract::Implementation),
             );
-            if let Some(p) = self.phases.get_mut(&id) {
+            if let Some(p) = self.ext.os_mut().phases.get_mut(&id) {
                 p.revision = Some(Revision {
                     round,
                     instruction: t.instruction,
                 });
             }
-            self.feedback.rounds[i].phases.push(id);
+            self.ext.os_mut().feedback.rounds[i].phases.push(id);
         }
     }
 
@@ -1441,8 +1496,12 @@ impl OstraFold for SessionState {
     }
 
     fn insert_phase(&mut self, info: PhaseInfo, impl_loop: WorkLoop) {
-        self.project_tracks.entry(info.project.clone()).or_default();
-        self.phases.insert(
+        self.ext
+            .os_mut()
+            .project_tracks
+            .entry(info.project.clone())
+            .or_default();
+        self.ext.os_mut().phases.insert(
             info.id,
             PhaseRun {
                 info,
@@ -1457,11 +1516,13 @@ impl OstraFold for SessionState {
     }
 
     fn any_explore_started(&self) -> bool {
-        self.explore.iter().any(|t| t.exec.is_some())
+        self.ext.os().explore.iter().any(|t| t.exec.is_some())
     }
 
     fn any_phase_started(&self) -> bool {
-        self.phases
+        self.ext
+            .os()
+            .phases
             .values()
             .any(|p| !p.impl_loop.is_idle() && p.impl_loop.work_count > 0)
     }
@@ -1476,11 +1537,16 @@ impl OstraFold for SessionState {
         match d.judge {
             JudgeKind::Classify => {
                 !self.any_explore_started()
-                    && self.phases.values().all(|p| p.impl_loop.work_count == 0)
+                    && self
+                        .ext
+                        .os()
+                        .phases
+                        .values()
+                        .all(|p| p.impl_loop.work_count == 0)
             }
-            JudgeKind::Stakes => self.plan.runs.is_empty() && !self.any_phase_started(),
-            JudgeKind::Track => self.spec.runs.is_empty() && !self.any_phase_started(),
-            JudgeKind::Sufficiency => self.spec.runs.is_empty(),
+            JudgeKind::Stakes => self.ext.os().plan.runs.is_empty() && !self.any_phase_started(),
+            JudgeKind::Track => self.ext.os().spec.runs.is_empty() && !self.any_phase_started(),
+            JudgeKind::Sufficiency => self.ext.os().spec.runs.is_empty(),
             _ => false,
         }
     }
@@ -1515,13 +1581,21 @@ impl OstraFold for SessionState {
                     .filter_map(|s| s.trim().parse().ok())
                     .collect();
                 if !overriding {
-                    self.sufficiency_rounds += 1;
+                    self.ext.os_mut().sufficiency_rounds += 1;
                 }
-                for t in self.explore.iter_mut().filter(|t| covered.contains(&t.idx)) {
+                for t in self
+                    .ext
+                    .os_mut()
+                    .explore
+                    .iter_mut()
+                    .filter(|t| covered.contains(&t.idx))
+                {
                     t.judged = true;
                 }
                 if overriding {
-                    self.explore
+                    self.ext
+                        .os_mut()
+                        .explore
                         .retain(|t| !(t.origin == ExploreOrigin::Sufficiency && t.exec.is_none()));
                 }
                 if let Ok(out) = serde_json::from_value::<SufficiencyOut>(output.clone()) {
@@ -1536,6 +1610,8 @@ impl OstraFold for SessionState {
                         };
                         // Rule D2: the judge often maps several items to one task; research it once.
                         if self
+                            .ext
+                            .os()
                             .explore
                             .iter()
                             .any(|t| !t.finished() && t.project == project && t.task == task)
@@ -1549,12 +1625,14 @@ impl OstraFold for SessionState {
             }
             JudgeKind::Stakes => {
                 if let Ok(out) = serde_json::from_value::<StakesOut>(output.clone()) {
-                    if overriding && !(self.plan.runs.is_empty() && !self.any_phase_started()) {
+                    if overriding
+                        && !(self.ext.os().plan.runs.is_empty() && !self.any_phase_started())
+                    {
                         return;
                     }
-                    self.stakes = Some((id.clone(), out.stakes));
+                    self.ext.os_mut().stakes = Some((id.clone(), out.stakes));
                     if overriding {
-                        self.phases.clear();
+                        self.ext.os_mut().phases.clear();
                     }
                     if out.stakes == Stakes::Low && self.category == Some(Category::Implement) {
                         // Plan skipped for a lower-stakes request: inline phases, one per project,
@@ -1584,6 +1662,8 @@ impl OstraFold for SessionState {
                 let key = self.executions.get(&exec).and_then(|r| r.loop_key);
                 let Some(key) = key else { return };
                 let project = self
+                    .ext
+                    .os()
                     .phases
                     .get(&key.0)
                     .map(|p| p.info.project.clone())
@@ -1656,6 +1736,8 @@ impl OstraFold for SessionState {
                     return;
                 };
                 let project = self
+                    .ext
+                    .os()
                     .phases
                     .get(&key.0)
                     .map(|p| p.info.project.clone())
@@ -1714,8 +1796,8 @@ impl OstraFold for SessionState {
                 let Some(gate) = subject.map(GateId::from) else {
                     return;
                 };
-                if !self.held_answers.contains_key(&gate)
-                    && !self.phases.values().any(|p| {
+                if !self.ext.os().held_answers.contains_key(&gate)
+                    && !self.ext.os().phases.values().any(|p| {
                         [&p.impl_loop, &p.test_loop].iter().any(
                         |l| matches!(&l.next, LoopNext::AwaitRoute { gate: g, .. } if *g == gate),
                     )
@@ -1725,11 +1807,13 @@ impl OstraFold for SessionState {
                 }
                 self.forget(&out.forget);
                 self.skip_research(&out.skip);
-                if let Some(held) = self.held_answers.remove(&gate) {
+                if let Some(held) = self.ext.os_mut().held_answers.remove(&gate) {
                     self.apply_held(&gate, held, &out);
                     return;
                 }
                 let target = self
+                    .ext
+                    .os()
                     .phases
                     .iter()
                     .flat_map(|(id, p)| [((*id, false), &p.impl_loop), ((*id, true), &p.test_loop)])
@@ -1750,7 +1834,7 @@ impl OstraFold for SessionState {
                 if overriding && !self.can_override(id) {
                     return;
                 }
-                self.track_decision = Some(id.clone());
+                self.ext.os_mut().track_decision = Some(id.clone());
                 self.set_track(out.track);
             }
             JudgeKind::Feedback => {
@@ -1761,6 +1845,8 @@ impl OstraFold for SessionState {
                     return;
                 };
                 if self
+                    .ext
+                    .os()
                     .feedback
                     .rounds
                     .get(i)
@@ -1773,7 +1859,7 @@ impl OstraFold for SessionState {
                     return;
                 };
                 let item = item_for(&out.items, ANSWER_ITEM);
-                let text = self.feedback.rounds[i].text.clone();
+                let text = self.ext.os().feedback.rounds[i].text.clone();
                 self.forget(&out.forget);
                 self.remember_parts(Some(&gate), &out.items, ANSWER_ITEM, &text);
                 self.queue_research(&out.research, ExploreOrigin::Answer);
@@ -1782,12 +1868,12 @@ impl OstraFold for SessionState {
                         self.route_feedback(i, out.route, out.targets, Some(out.reason))
                     }
                     Disposition::Remember | Disposition::Discard => {
-                        let r = &mut self.feedback.rounds[i];
+                        let r = &mut self.ext.os_mut().feedback.rounds[i];
                         r.route = Some(out.route);
                         r.reason = Some(out.reason);
                         // Keeping the feedback only for later stages accepts what was built.
                         if item.disposition == Disposition::Remember {
-                            self.feedback.accepted = true;
+                            self.ext.os_mut().feedback.accepted = true;
                         }
                     }
                 }
@@ -1805,7 +1891,13 @@ impl OstraFold for SessionState {
     }
 
     fn can_override_classify_now(&self) -> bool {
-        !self.any_explore_started() && self.phases.values().all(|p| p.impl_loop.work_count == 0)
+        !self.any_explore_started()
+            && self
+                .ext
+                .os()
+                .phases
+                .values()
+                .all(|p| p.impl_loop.work_count == 0)
     }
 
     fn on_started(
@@ -1819,7 +1911,7 @@ impl OstraFold for SessionState {
         // inputs its conversation already saw.
         match purpose {
             ExecPurpose::Explore { task } => {
-                if let Some(t) = self.explore.get_mut(*task as usize) {
+                if let Some(t) = self.ext.os_mut().explore.get_mut(*task as usize) {
                     t.exec = Some(id.clone());
                     t.running = true;
                     t.failed = None;
@@ -1827,7 +1919,7 @@ impl OstraFold for SessionState {
             }
             ExecPurpose::Spec { .. } => {
                 let docs = self.research_docs();
-                let t = &mut self.spec;
+                let t = &mut self.ext.os_mut().spec;
                 t.running = Some(id.clone());
                 t.needs_run = false;
                 if !resumed {
@@ -1840,24 +1932,24 @@ impl OstraFold for SessionState {
                 }
             }
             ExecPurpose::Plan { .. } => {
-                self.plan.running = Some(id.clone());
+                self.ext.os_mut().plan.running = Some(id.clone());
                 if !resumed {
-                    self.plan.runs.push(id.clone());
+                    self.ext.os_mut().plan.runs.push(id.clone());
                 }
-                self.plan.needs_run = false;
+                self.ext.os_mut().plan.needs_run = false;
                 // Rule D10: the plan is revised in place against the changed spec, not replaced.
-                if self.plan.invalidated {
-                    self.plan.invalidated = false;
-                    self.plan.pending_findings = None;
-                    self.plan.consecutive_fails = 0;
+                if self.ext.os().plan.invalidated {
+                    self.ext.os_mut().plan.invalidated = false;
+                    self.ext.os_mut().plan.pending_findings = None;
+                    self.ext.os_mut().plan.consecutive_fails = 0;
                 }
             }
             ExecPurpose::FactCheck { target, .. } => match target {
-                FactTarget::Spec => self.spec.start_check(id),
-                FactTarget::Plan => self.plan.start_check(id),
+                FactTarget::Spec => self.ext.os_mut().spec.start_check(id),
+                FactTarget::Plan => self.ext.os_mut().plan.start_check(id),
             },
             ExecPurpose::Epa { phase } => {
-                if let Some(p) = self.phases.get_mut(phase) {
+                if let Some(p) = self.ext.os_mut().phases.get_mut(phase) {
                     p.epa = EpaState::Running(id.clone());
                 }
             }
@@ -1867,13 +1959,17 @@ impl OstraFold for SessionState {
                 round,
             } => {
                 *self
+                    .ext
+                    .os_mut()
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .docs_run(page.as_deref(), *round) = DocsState::Running(id.clone());
             }
             ExecPurpose::DocsSurvey { project } => {
-                self.project_tracks
+                self.ext
+                    .os_mut()
+                    .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .survey = DocsState::Running(id.clone());
@@ -1883,7 +1979,9 @@ impl OstraFold for SessionState {
                 page,
                 round,
             } => {
-                self.project_tracks
+                self.ext
+                    .os_mut()
+                    .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .round_mut(*round)
@@ -1891,15 +1989,17 @@ impl OstraFold for SessionState {
                     .insert(page.clone(), CheckState::Running(id.clone()));
             }
             ExecPurpose::DocsSynthesis { project, round } => {
-                self.project_tracks
+                self.ext
+                    .os_mut()
+                    .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .round_mut(*round)
                     .synthesis = DocsState::Running(id.clone());
             }
             ExecPurpose::QuickAnswer => {
-                self.quick.exec = Some(id.clone());
-                self.quick.running = true;
+                self.ext.os_mut().quick.exec = Some(id.clone());
+                self.ext.os_mut().quick.running = true;
             }
             ExecPurpose::Init { mode, item } => self.init_started(id, *mode, item.clone()),
             ExecPurpose::Advise {
@@ -1909,7 +2009,7 @@ impl OstraFold for SessionState {
                     && let LoopNext::RescueAdvise { advisor, .. } = &mut l.next
                 {
                     *advisor = Some(id.clone());
-                } else if let Some(i) = self.project_inits.get_mut(project) {
+                } else if let Some(i) = self.ext.os_mut().project_inits.get_mut(project) {
                     i.advising = Some(id.clone());
                 }
             }
@@ -1920,7 +2020,9 @@ impl OstraFold for SessionState {
                     *fixer = Some(id.clone());
                 }
             }
-            ExecPurpose::PromptGen { handoff_for: None } if !resumed => self.prompt_gens += 1,
+            ExecPurpose::PromptGen { handoff_for: None } if !resumed => {
+                self.ext.os_mut().prompt_gens += 1
+            }
             _ => {}
         }
         if let Some(key) = loop_key {
@@ -1931,7 +2033,7 @@ impl OstraFold for SessionState {
                 }
             );
             if matches!(purpose, ExecPurpose::PromptGen { .. }) && !resumed {
-                self.prompt_gens += u32::from(is_handoff);
+                self.ext.os_mut().prompt_gens += u32::from(is_handoff);
             }
             if let Some(l) = self.loop_mut(key) {
                 l.running = Some(id.clone());
@@ -1958,7 +2060,7 @@ impl OstraFold for SessionState {
             ExecPurpose::Explore { task } => {
                 let idx = *task as usize;
                 let parsed: Option<ExploreSubmit> = parse(&result.submit);
-                let Some(t) = self.explore.get_mut(idx) else {
+                let Some(t) = self.ext.os_mut().explore.get_mut(idx) else {
                     return;
                 };
                 t.running = false;
@@ -2000,37 +2102,37 @@ impl OstraFold for SessionState {
                 }
             }
             ExecPurpose::Spec { .. } => {
-                self.spec.running = None;
+                self.ext.os_mut().spec.running = None;
                 match (status, parse::<GenerateSpecSubmit>(&result.submit)) {
                     (ExecutionStatus::Ok, Some(sub)) => {
-                        self.spec.current = Some(sub);
-                        self.spec.applied = self.spec.sent.clone();
-                        self.spec.version += 1;
-                        self.spec.pending_findings = None;
-                        self.spec.revoke_approval();
-                        self.spec.error_retries = 0;
+                        self.ext.os_mut().spec.current = Some(sub);
+                        self.ext.os_mut().spec.applied = self.ext.os_mut().spec.sent.clone();
+                        self.ext.os_mut().spec.version += 1;
+                        self.ext.os_mut().spec.pending_findings = None;
+                        self.ext.os_mut().spec.revoke_approval();
+                        self.ext.os_mut().spec.error_retries = 0;
                     }
-                    (ExecutionStatus::Interrupted, _) => self.spec.needs_run = true,
+                    (ExecutionStatus::Interrupted, _) => self.ext.os_mut().spec.needs_run = true,
                     _ => artifact_error(
-                        &mut self.spec,
+                        &mut self.ext.os_mut().spec,
                         status,
                         missing_submit(status, &error, result),
                     ),
                 }
             }
             ExecPurpose::Plan { .. } => {
-                self.plan.running = None;
+                self.ext.os_mut().plan.running = None;
                 match (status, parse::<PlanSubmit>(&result.submit)) {
                     (ExecutionStatus::Ok, Some(sub)) => {
-                        self.plan.current = Some(sub);
-                        self.plan.version += 1;
-                        self.plan.pending_findings = None;
-                        self.plan.revoke_approval();
-                        self.plan.error_retries = 0;
+                        self.ext.os_mut().plan.current = Some(sub);
+                        self.ext.os_mut().plan.version += 1;
+                        self.ext.os_mut().plan.pending_findings = None;
+                        self.ext.os_mut().plan.revoke_approval();
+                        self.ext.os_mut().plan.error_retries = 0;
                     }
-                    (ExecutionStatus::Interrupted, _) => self.plan.needs_run = true,
+                    (ExecutionStatus::Interrupted, _) => self.ext.os_mut().plan.needs_run = true,
                     _ => artifact_error(
-                        &mut self.plan,
+                        &mut self.ext.os_mut().plan,
                         status,
                         missing_submit(status, &error, result),
                     ),
@@ -2040,19 +2142,27 @@ impl OstraFold for SessionState {
                 let parsed: Option<FactCheckSubmit> = parse(&result.submit);
                 let (checks, failed_msg) = (parsed, missing_submit(status, &error, result));
                 match target {
-                    FactTarget::Spec => {
-                        fact_finished(&mut self.spec, &rec.id, status, checks, failed_msg)
-                    }
-                    FactTarget::Plan => {
-                        fact_finished(&mut self.plan, &rec.id, status, checks, failed_msg)
-                    }
+                    FactTarget::Spec => fact_finished(
+                        &mut self.ext.os_mut().spec,
+                        &rec.id,
+                        status,
+                        checks,
+                        failed_msg,
+                    ),
+                    FactTarget::Plan => fact_finished(
+                        &mut self.ext.os_mut().plan,
+                        &rec.id,
+                        status,
+                        checks,
+                        failed_msg,
+                    ),
                 }
             }
             ExecPurpose::Epa { phase } => {
                 let report = parse::<ReportSubmit>(&result.submit)
                     .map(|r| PathBuf::from(r.report_path))
                     .or_else(|| rec.report_path.clone());
-                if let Some(p) = self.phases.get_mut(phase) {
+                if let Some(p) = self.ext.os_mut().phases.get_mut(phase) {
                     let retries = match &p.epa {
                         EpaState::Failed { retries, .. } => *retries,
                         _ => 0,
@@ -2075,7 +2185,12 @@ impl OstraFold for SessionState {
                 page,
                 round,
             } => {
-                let t = self.project_tracks.entry(project.clone()).or_default();
+                let t = self
+                    .ext
+                    .os_mut()
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default();
                 let mut run = stage_run(
                     status,
                     parse::<DocumentationSubmit>(&result.submit),
@@ -2095,7 +2210,12 @@ impl OstraFold for SessionState {
                 *t.docs_run(page.as_deref(), *round) = run;
             }
             ExecPurpose::DocsSurvey { project } => {
-                let t = self.project_tracks.entry(project.clone()).or_default();
+                let t = self
+                    .ext
+                    .os_mut()
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default();
                 t.survey = expect_step(
                     stage_run(
                         status,
@@ -2129,7 +2249,9 @@ impl OstraFold for SessionState {
                     &rec.id,
                     error,
                 );
-                self.project_tracks
+                self.ext
+                    .os_mut()
+                    .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .round_mut(*round)
@@ -2137,7 +2259,12 @@ impl OstraFold for SessionState {
                     .insert(page.clone(), run);
             }
             ExecPurpose::DocsSynthesis { project, round } => {
-                let t = self.project_tracks.entry(project.clone()).or_default();
+                let t = self
+                    .ext
+                    .os_mut()
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default();
                 let run = expect_step(
                     stage_run(
                         status,
@@ -2199,17 +2326,17 @@ impl OstraFold for SessionState {
                 r.targets = targets;
             }
             ExecPurpose::QuickAnswer => {
-                self.quick.running = false;
+                self.ext.os_mut().quick.running = false;
                 match (status, parse::<QuickAnswerSubmit>(&result.submit)) {
-                    (ExecutionStatus::Ok, Some(a)) => self.quick.answer = Some(a),
+                    (ExecutionStatus::Ok, Some(a)) => self.ext.os_mut().quick.answer = Some(a),
                     (ExecutionStatus::Ok, None) if !result.final_text.trim().is_empty() => {
-                        self.quick.answer = Some(QuickAnswerSubmit {
+                        self.ext.os_mut().quick.answer = Some(QuickAnswerSubmit {
                             answer: result.final_text.clone(),
                             sources: vec![],
                         })
                     }
-                    (ExecutionStatus::Interrupted, _) => self.quick.exec = None,
-                    _ => self.quick.failed = Some(error),
+                    (ExecutionStatus::Interrupted, _) => self.ext.os_mut().quick.exec = None,
+                    _ => self.ext.os_mut().quick.failed = Some(error),
                 }
             }
             ExecPurpose::Init { mode, item } => {
@@ -2238,6 +2365,8 @@ impl OstraFold for SessionState {
         let yolo = self.yolo;
         let fresh = self.restart_fresh.remove(&rec.id);
         let project = self
+            .ext
+            .os()
             .phases
             .get(&key.0)
             .map(|p| p.info.project.clone())
@@ -2276,7 +2405,7 @@ impl OstraFold for SessionState {
                     .collect()
             })
             .unwrap_or_default();
-        let Some(phase) = self.phases.get_mut(&key.0) else {
+        let Some(phase) = self.ext.os_mut().phases.get_mut(&key.0) else {
             return;
         };
         let l = if key.1 {
@@ -2511,7 +2640,7 @@ impl OstraFold for SessionState {
         match &rec.purpose {
             ExecPurpose::Stage { .. } => self.stage_exec_gate(&rec, Some(gate), false),
             ExecPurpose::Explore { task } => {
-                if let Some(t) = self.explore.get_mut(*task as usize) {
+                if let Some(t) = self.ext.os_mut().explore.get_mut(*task as usize) {
                     t.gate = Some(gate.clone());
                 }
             }
@@ -2519,14 +2648,14 @@ impl OstraFold for SessionState {
             | ExecPurpose::FactCheck {
                 target: FactTarget::Spec,
                 ..
-            } => self.spec.failed_gate = Some(gate.clone()),
+            } => self.ext.os_mut().spec.failed_gate = Some(gate.clone()),
             ExecPurpose::Plan { .. }
             | ExecPurpose::FactCheck {
                 target: FactTarget::Plan,
                 ..
-            } => self.plan.failed_gate = Some(gate.clone()),
+            } => self.ext.os_mut().plan.failed_gate = Some(gate.clone()),
             ExecPurpose::Epa { phase } => {
-                if let Some(p) = self.phases.get_mut(phase)
+                if let Some(p) = self.ext.os_mut().phases.get_mut(phase)
                     && let EpaState::Failed { gate: g, .. } = &mut p.epa
                 {
                     *g = Some(gate.clone());
@@ -2538,6 +2667,8 @@ impl OstraFold for SessionState {
                 round,
             } => {
                 if let DocsState::Failed { gate: g, .. } = self
+                    .ext
+                    .os_mut()
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
@@ -2548,6 +2679,8 @@ impl OstraFold for SessionState {
             }
             ExecPurpose::DocsSurvey { project } => {
                 if let DocsState::Failed { gate: g, .. } = &mut self
+                    .ext
+                    .os_mut()
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
@@ -2562,6 +2695,8 @@ impl OstraFold for SessionState {
                 round,
             } => {
                 if let Some(CheckState::Failed { gate: g, .. }) = self
+                    .ext
+                    .os_mut()
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
@@ -2574,6 +2709,8 @@ impl OstraFold for SessionState {
             }
             ExecPurpose::DocsSynthesis { project, round } => {
                 if let DocsState::Failed { gate: g, .. } = &mut self
+                    .ext
+                    .os_mut()
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
@@ -2597,24 +2734,24 @@ impl OstraFold for SessionState {
             GatePayload::StageReview { .. } => self.stage_gate_opened(id, payload),
             GatePayload::OpenQuestions { artifact, .. } => {
                 if artifact == "plan" {
-                    self.plan.questions_gate = Some(id.clone());
-                    self.plan.questions_asked_version = self.plan.version;
+                    self.ext.os_mut().plan.questions_gate = Some(id.clone());
+                    self.ext.os_mut().plan.questions_asked_version = self.ext.os_mut().plan.version;
                 } else {
-                    self.spec.questions_gate = Some(id.clone());
-                    self.spec.questions_asked_version = self.spec.version;
+                    self.ext.os_mut().spec.questions_gate = Some(id.clone());
+                    self.ext.os_mut().spec.questions_asked_version = self.ext.os_mut().spec.version;
                 }
             }
             GatePayload::SpecApproval { .. } => {
-                self.spec.approval_gate = Some(id.clone());
-                self.spec.approval_asked_version = self.spec.version;
+                self.ext.os_mut().spec.approval_gate = Some(id.clone());
+                self.ext.os_mut().spec.approval_asked_version = self.ext.os_mut().spec.version;
             }
             GatePayload::PlanApproval { .. } => {
-                self.plan.approval_gate = Some(id.clone());
-                self.plan.approval_asked_version = self.plan.version;
+                self.ext.os_mut().plan.approval_gate = Some(id.clone());
+                self.ext.os_mut().plan.approval_asked_version = self.ext.os_mut().plan.version;
             }
             GatePayload::FactCheckRecurring { target, .. } => match target {
-                FactTarget::Spec => self.spec.recurring_gate = Some(id.clone()),
-                FactTarget::Plan => self.plan.recurring_gate = Some(id.clone()),
+                FactTarget::Spec => self.ext.os_mut().spec.recurring_gate = Some(id.clone()),
+                FactTarget::Plan => self.ext.os_mut().plan.recurring_gate = Some(id.clone()),
             },
             GatePayload::ReviewCap { phase, tests, .. } => {
                 if let Some(l) = self.loop_mut((*phase, *tests)) {
@@ -2622,7 +2759,7 @@ impl OstraFold for SessionState {
                 }
             }
             GatePayload::PhaseBlocked { phase, .. } => {
-                if let Some(p) = self.phases.get_mut(phase) {
+                if let Some(p) = self.ext.os_mut().phases.get_mut(phase) {
                     p.blocked_gate = Some(id.clone());
                 }
             }
@@ -2633,7 +2770,9 @@ impl OstraFold for SessionState {
             }
             GatePayload::ClosingGate { items } => {
                 for item in items {
-                    self.project_tracks
+                    self.ext
+                        .os_mut()
+                        .project_tracks
                         .entry(item.project.clone())
                         .or_default()
                         .closing_gate = Some(id.clone());
@@ -2647,12 +2786,16 @@ impl OstraFold for SessionState {
             GatePayload::Permission { .. } => {}
             GatePayload::BudgetReached { .. } => self.budget_gate = Some(id.clone()),
             GatePayload::DocsRounds { project, .. } => {
-                self.project_tracks
+                self.ext
+                    .os_mut()
+                    .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .docs_gate = Some(id.clone());
             }
-            GatePayload::ImplementationReview { .. } => self.feedback.gate = Some(id.clone()),
+            GatePayload::ImplementationReview { .. } => {
+                self.ext.os_mut().feedback.gate = Some(id.clone())
+            }
         }
     }
 
@@ -2687,12 +2830,14 @@ impl OstraFold for SessionState {
                     let t = self.track_mut(target);
                     t.clear_questions_gate();
                     t.set_routing(Some(id.clone()));
-                    self.held_answers
+                    self.ext
+                        .os_mut()
+                        .held_answers
                         .insert(id.clone(), HeldAnswer::Questions { target, answers });
                     return;
                 }
                 if artifact == "plan" {
-                    self.plan.questions_gate = None;
+                    self.ext.os_mut().plan.questions_gate = None;
                     if !answers.is_empty() {
                         // After the plan exists, answers go into the spec first (answer routing).
                         let text = answers
@@ -2705,24 +2850,25 @@ impl OstraFold for SessionState {
                         ));
                     }
                 } else {
-                    self.spec.questions_gate = None;
+                    self.ext.os_mut().spec.questions_gate = None;
                     // Rule D3: every answer re-runs generate-spec.
-                    self.spec.answers.extend(answers);
-                    self.spec.needs_run = true;
+                    self.ext.os_mut().spec.answers.extend(answers);
+                    self.ext.os_mut().spec.needs_run = true;
                 }
             }
             GatePayload::SpecApproval { .. } => {
                 // A change that landed after the gate opened revoked it; its answer is stale.
-                let current = self.spec.approval_gate.as_ref() == Some(id) && !self.spec.needs_run;
-                self.spec.approval_gate = None;
+                let current = self.ext.os().spec.approval_gate.as_ref() == Some(id)
+                    && !self.ext.os().spec.needs_run;
+                self.ext.os_mut().spec.approval_gate = None;
                 if routed && let Some((approved, text)) = approval_text(answer) {
-                    let approve = approved && current && self.spec.passed_current();
+                    let approve = approved && current && self.ext.os().spec.passed_current();
                     self.hold_approval(id, FactTarget::Spec, approve, text);
                     return;
                 }
                 match answer {
                     GateAnswer::Approval { approved: true, .. }
-                        if current && self.spec.passed_current() =>
+                        if current && self.ext.os().spec.passed_current() =>
                     {
                         self.approve_spec()
                     }
@@ -2730,28 +2876,28 @@ impl OstraFold for SessionState {
                         feedback: Some(text),
                         ..
                     } if !text.trim().is_empty() => {
-                        self.spec.changes.push(text.clone());
-                        self.spec.needs_run = true;
+                        self.ext.os_mut().spec.changes.push(text.clone());
+                        self.ext.os_mut().spec.needs_run = true;
                     }
                     _ => {}
                 }
             }
             GatePayload::PlanApproval { .. } => {
-                let current = self.plan.approval_gate.as_ref() == Some(id)
-                    && !self.plan.needs_run
-                    && !self.plan.invalidated;
-                self.plan.approval_gate = None;
+                let current = self.ext.os().plan.approval_gate.as_ref() == Some(id)
+                    && !self.ext.os().plan.needs_run
+                    && !self.ext.os().plan.invalidated;
+                self.ext.os_mut().plan.approval_gate = None;
                 if routed && let Some((approved, text)) = approval_text(answer) {
-                    let approve = approved && current && self.plan.passed_current();
+                    let approve = approved && current && self.ext.os().plan.passed_current();
                     self.hold_approval(id, FactTarget::Plan, approve, text);
                     return;
                 }
                 match answer {
                     GateAnswer::Approval { approved: true, .. }
-                        if current && self.plan.passed_current() =>
+                        if current && self.ext.os().plan.passed_current() =>
                     {
-                        self.plan.approved = true;
-                        self.plan.approved_version = self.plan.version;
+                        self.ext.os_mut().plan.approved = true;
+                        self.ext.os_mut().plan.approved_version = self.ext.os_mut().plan.version;
                         self.adopt_plan_phases();
                     }
                     GateAnswer::Approval {
@@ -2770,10 +2916,10 @@ impl OstraFold for SessionState {
                     let t_spec;
                     let track: &mut dyn RecurringTrack = match target {
                         FactTarget::Spec => {
-                            t_spec = &mut self.spec;
+                            t_spec = &mut self.ext.os_mut().spec;
                             t_spec
                         }
-                        FactTarget::Plan => &mut self.plan,
+                        FactTarget::Plan => &mut self.ext.os_mut().plan,
                     };
                     track.clear_recurring_gate();
                     track_changes = match choice {
@@ -2791,7 +2937,7 @@ impl OstraFold for SessionState {
                 if let Some(text) = track_changes {
                     if routed {
                         self.track_mut(*target).set_routing(Some(id.clone()));
-                        self.held_answers.insert(
+                        self.ext.os_mut().held_answers.insert(
                             id.clone(),
                             HeldAnswer::Recurring {
                                 target: *target,
@@ -2802,8 +2948,8 @@ impl OstraFold for SessionState {
                     }
                     match target {
                         FactTarget::Spec => {
-                            self.spec.changes.push(text);
-                            self.spec.needs_run = true;
+                            self.ext.os_mut().spec.changes.push(text);
+                            self.ext.os_mut().spec.needs_run = true;
                         }
                         FactTarget::Plan => self.requirement_change(text),
                     }
@@ -2816,6 +2962,8 @@ impl OstraFold for SessionState {
                 ..
             } => {
                 let project = self
+                    .ext
+                    .os()
                     .phases
                     .get(phase)
                     .map(|p| p.info.project.clone())
@@ -2910,10 +3058,12 @@ impl OstraFold for SessionState {
             }
             GatePayload::PhaseBlocked { phase, .. } => {
                 let tests = self
+                    .ext
+                    .os()
                     .phases
                     .get(phase)
                     .is_some_and(|p| p.test_loop.is_blocked() && !p.impl_loop.is_blocked());
-                if let Some(p) = self.phases.get_mut(phase) {
+                if let Some(p) = self.ext.os_mut().phases.get_mut(phase) {
                     p.blocked_gate = None;
                 }
                 if let Some(l) = self.loop_mut((*phase, tests)) {
@@ -2974,7 +3124,12 @@ impl OstraFold for SessionState {
                     } else {
                         opt_docs
                     };
-                    let t = self.project_tracks.entry(item.project.clone()).or_default();
+                    let t = self
+                        .ext
+                        .os_mut()
+                        .project_tracks
+                        .entry(item.project.clone())
+                        .or_default();
                     t.closing = Some((tests, docs));
                     t.closing_gate = None;
                 }
@@ -3005,20 +3160,25 @@ impl OstraFold for SessionState {
             }
             GatePayload::Permission { .. } => {}
             GatePayload::ImplementationReview { .. } => {
-                if self.feedback.gate.as_ref() != Some(id) {
+                if self.ext.os().feedback.gate.as_ref() != Some(id) {
                     return;
                 }
-                self.feedback.gate = None;
+                self.ext.os_mut().feedback.gate = None;
                 match choice {
                     Some(("feedback", Some(text))) => self.add_feedback(text, routed),
-                    _ => self.feedback.accepted = true,
+                    _ => self.ext.os_mut().feedback.accepted = true,
                 }
             }
             GatePayload::DocsRounds {
                 project, rounds, ..
             } => {
                 // Rule B10: another round, or the book as it is.
-                let t = self.project_tracks.entry(project.clone()).or_default();
+                let t = self
+                    .ext
+                    .os_mut()
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default();
                 t.docs_gate = None;
                 match choice {
                     Some(("accept", _)) => t.docs_accepted = true,
@@ -3079,7 +3239,7 @@ impl OstraFold for SessionState {
         match &rec.purpose {
             ExecPurpose::Stage { .. } => self.stage_exec_gate(&rec, None, retry),
             ExecPurpose::Explore { task } => {
-                if let Some(t) = self.explore.get_mut(*task as usize) {
+                if let Some(t) = self.ext.os_mut().explore.get_mut(*task as usize) {
                     t.gate = None;
                     if retry {
                         t.failed = None;
@@ -3089,8 +3249,12 @@ impl OstraFold for SessionState {
                         t.abandoned = true;
                     }
                 }
-                if let Some(ExploreOrigin::LoopAnswer { phase, tests }) =
-                    self.explore.get(*task as usize).map(|t| t.origin.clone())
+                if let Some(ExploreOrigin::LoopAnswer { phase, tests }) = self
+                    .ext
+                    .os()
+                    .explore
+                    .get(*task as usize)
+                    .map(|t| t.origin.clone())
                 {
                     self.release_answer_research((phase, tests));
                 }
@@ -3100,7 +3264,7 @@ impl OstraFold for SessionState {
                 target: FactTarget::Spec,
                 ..
             } => exec_retry(
-                &mut self.spec,
+                &mut self.ext.os_mut().spec,
                 retry,
                 matches!(rec.purpose, ExecPurpose::Spec { .. }),
             ),
@@ -3109,12 +3273,12 @@ impl OstraFold for SessionState {
                 target: FactTarget::Plan,
                 ..
             } => exec_retry(
-                &mut self.plan,
+                &mut self.ext.os_mut().plan,
                 retry,
                 matches!(rec.purpose, ExecPurpose::Plan { .. }),
             ),
             ExecPurpose::Epa { phase } => {
-                if let Some(p) = self.phases.get_mut(phase) {
+                if let Some(p) = self.ext.os_mut().phases.get_mut(phase) {
                     p.epa = if retry {
                         EpaState::NotStarted
                     } else {
@@ -3128,6 +3292,8 @@ impl OstraFold for SessionState {
                 round,
             } => {
                 *self
+                    .ext
+                    .os_mut()
                     .project_tracks
                     .entry(project.clone())
                     .or_default()
@@ -3138,7 +3304,9 @@ impl OstraFold for SessionState {
                 };
             }
             ExecPurpose::DocsSurvey { project } => {
-                self.project_tracks
+                self.ext
+                    .os_mut()
+                    .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .survey = if retry {
@@ -3157,7 +3325,9 @@ impl OstraFold for SessionState {
                 } else {
                     CheckState::Abandoned
                 };
-                self.project_tracks
+                self.ext
+                    .os_mut()
+                    .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .round_mut(*round)
@@ -3165,7 +3335,9 @@ impl OstraFold for SessionState {
                     .insert(page.clone(), st);
             }
             ExecPurpose::DocsSynthesis { project, round } => {
-                self.project_tracks
+                self.ext
+                    .os_mut()
+                    .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .round_mut(*round)
@@ -3177,12 +3349,12 @@ impl OstraFold for SessionState {
             }
             ExecPurpose::QuickAnswer => {
                 if retry {
-                    self.quick.failed = None;
-                    self.quick.exec = None;
+                    self.ext.os_mut().quick.failed = None;
+                    self.ext.os_mut().quick.exec = None;
                 }
             }
             ExecPurpose::Init { .. } => {
-                let embedded = self.project_inits.contains_key(&rec.project);
+                let embedded = self.ext.os().project_inits.contains_key(&rec.project);
                 let mut abandoned = false;
                 if let Some(i) = self.init_track_mut(&rec.project) {
                     i.failed_gate = None;
@@ -3213,11 +3385,13 @@ impl OstraFold for SessionState {
     }
 
     fn adopt_plan_phases(&mut self) {
-        let Some(plan) = self.plan.current.clone() else {
+        let Some(plan) = self.ext.os().plan.current.clone() else {
             return;
         };
-        let old = std::mem::take(&mut self.phases);
-        self.superseded_phases
+        let old = std::mem::take(&mut self.ext.os_mut().phases);
+        self.ext
+            .os_mut()
+            .superseded_phases
             .extend(old.into_values().filter(|p| p.impl_loop.work_count > 0));
         for p in &plan.phases {
             let complexity = p
@@ -3254,7 +3428,7 @@ impl OstraFold for SessionState {
                 info,
                 WorkLoop::new(false, Contract::Implementation, Contract::Implementation),
             );
-            if !valid && let Some(ph) = self.phases.get_mut(&p.id) {
+            if !valid && let Some(ph) = self.ext.os_mut().phases.get_mut(&p.id) {
                 ph.impl_loop.next = LoopNext::Blocked {
                     reason: format!(
                         "The plan names project `{}`, which is not in this workspace.",
@@ -3263,15 +3437,23 @@ impl OstraFold for SessionState {
                 };
             }
         }
-        self.project_tracks
-            .retain(|k, _| self.phases.values().any(|p| &p.info.project == k));
+        let os = self.ext.os_mut();
+        let phases = &os.phases;
+        os.project_tracks
+            .retain(|k, _| phases.values().any(|p| &p.info.project == k));
     }
 
     fn init_track_mut(&mut self, project: &str) -> Option<&mut InitTrack> {
-        if self.init.as_ref().is_some_and(|i| i.project == project) {
-            return self.init.as_mut();
+        if self
+            .ext
+            .os()
+            .init
+            .as_ref()
+            .is_some_and(|i| i.project == project)
+        {
+            return self.ext.os_mut().init.as_mut();
         }
-        self.project_inits.get_mut(project)
+        self.ext.os_mut().project_inits.get_mut(project)
     }
 
     fn init_started(
@@ -3525,7 +3707,7 @@ impl OstraFold for SessionState {
     ) {
         let key = self.init_step_key(failed);
         let parsed: Option<ostra_core::submit::AdvisorSubmit> = parse(&result.submit);
-        let Some(i) = self.project_inits.get_mut(project) else {
+        let Some(i) = self.ext.os_mut().project_inits.get_mut(project) else {
             return;
         };
         i.advising = None;
@@ -3592,25 +3774,31 @@ impl OstraEvents for SessionState {
                 exit_code,
                 ..
             } => {
-                if let Some(t) = self.project_tracks.get_mut(project) {
+                if let Some(t) = self.ext.os_mut().project_tracks.get_mut(project) {
                     t.running = None;
                 }
                 match purpose {
                     CommandPurpose::Format => {
-                        self.project_tracks
+                        self.ext
+                            .os_mut()
+                            .project_tracks
                             .entry(project.clone())
                             .or_default()
                             .format = Some(*exit_code);
                     }
                     CommandPurpose::Stage => {
                         let key = self
+                            .ext
+                            .os()
                             .phases
                             .iter()
                             .flat_map(|(id, p)| {
                                 [((*id, false), &p.impl_loop), ((*id, true), &p.test_loop)]
                             })
                             .find(|(k, l)| {
-                                self.phases
+                                self.ext
+                                    .os()
+                                    .phases
                                     .get(&k.0)
                                     .is_some_and(|p| &p.info.project == project)
                                     && l.next == LoopNext::Stage
@@ -3634,6 +3822,8 @@ impl OstraEvents for SessionState {
             } => {
                 let yolo = self.yolo;
                 let project = self
+                    .ext
+                    .os()
                     .phases
                     .get(phase)
                     .map(|p| p.info.project.clone())
@@ -3678,7 +3868,9 @@ impl OstraEvents for SessionState {
                 project,
                 command,
             } => {
-                self.project_tracks
+                self.ext
+                    .os_mut()
+                    .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .running = Some((*purpose, command.clone()));
@@ -3689,7 +3881,9 @@ impl OstraEvents for SessionState {
                 modules,
                 refs,
             } => {
-                self.project_tracks
+                self.ext
+                    .os_mut()
+                    .project_tracks
                     .entry(project.clone())
                     .or_default()
                     .docs_scan = Some(DocsScan {
@@ -3698,7 +3892,7 @@ impl OstraEvents for SessionState {
                 });
             }
             SessionEvent::ProjectInitFinished { project } => {
-                if let Some(i) = self.project_inits.get_mut(project) {
+                if let Some(i) = self.ext.os_mut().project_inits.get_mut(project) {
                     i.finished = true;
                     i.note = None;
                 }
@@ -3708,7 +3902,7 @@ impl OstraEvents for SessionState {
                 execution,
                 error,
             } => {
-                if let Some(i) = self.project_inits.get_mut(project) {
+                if let Some(i) = self.ext.os_mut().project_inits.get_mut(project) {
                     clear_init_result(i, execution);
                     i.failed = Some((execution.clone(), error.clone()));
                 }
@@ -3860,9 +4054,9 @@ pub fn check_answer(
     }
     if let GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. } = payload {
         let passed = if matches!(payload, GatePayload::SpecApproval { .. }) {
-            s.spec.passed_current()
+            s.ext.os().spec.passed_current()
         } else {
-            s.plan.passed_current()
+            s.ext.os().plan.passed_current()
         };
         if matches!(answer, GateAnswer::Approval { approved: true, .. }) && !passed {
             return Err("Approval requires a fact-check PASS on this version.".into());

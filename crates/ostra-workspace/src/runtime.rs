@@ -584,7 +584,8 @@ mod tests {
 
     #[test]
     fn an_unscoped_session_may_use_every_project_it_started_with() {
-        let mut st = ostra_engine::SessionState::new("s_1".into());
+        let mut st =
+            ostra_engine::SessionState::new(ostra_default_plugin::pipeline().into(), "s_1".into());
         assert!(
             may_use(&st, "app"),
             "a session with no log is assumed to use anything"

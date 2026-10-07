@@ -134,13 +134,13 @@ impl SessionState {
             .as_ref()
             .and_then(|w| w.stages.iter().find(|d| d.builtin() == Some(stage)))
             .and_then(|d| d.agents.get(&contract).copied())
-            .unwrap_or_else(|| crate::pipeline::get().default_agent(contract))
+            .unwrap_or_else(|| self.pipeline.default_agent(contract))
     }
 
     /// Rule PL4: the standard plugin's agent for a contract no built-in stage binds, such as a
     /// quick answer or a project's setup.
     pub fn default_agent(&self, contract: Contract) -> AgentName {
-        crate::pipeline::get().default_agent(contract)
+        self.pipeline.default_agent(contract)
     }
 
     /// Rule PL5: record what a plugin's handler made of a run's result, and apply it where the
@@ -210,7 +210,7 @@ impl SessionState {
             return Some(w.clone());
         }
         let c = self.category?;
-        (c != Category::QuickAnswer).then(|| crate::pipeline::get().default_workflow(c))
+        (c != Category::QuickAnswer).then(|| self.pipeline.default_workflow(c))
     }
 
     /// Rule WF1: the session waits for its workflow to be resolved and recorded.
@@ -235,9 +235,7 @@ impl SessionState {
 
     pub fn on_workflow_resolved(&mut self, wf: &WorkflowDef) {
         self.workflow = Some(wf.clone());
-        if self.track.is_none() {
-            self.track = wf.track;
-        }
+        self.pipeline.clone().workflow_resolved(self, wf);
         // Rule WF1: a named workflow's base is the session's category, whatever Classify picks.
         if matches!(self.workflow_choice, Some(WorkflowChoice::Named { .. }))
             && self.category.is_some()
@@ -470,35 +468,21 @@ impl SessionState {
     }
 
     fn session_value(&self) -> Value {
-        json!({
+        let mut v = json!({
             "request": self.full_request(),
             "category": self.category,
-            "track": self.track,
-            "stakes": self.stakes.as_ref().map(|(_, s)| s),
             "projects": self.scope,
             "title": self.title,
-        })
+        });
+        if let Value::Object(m) = &mut v {
+            m.extend(self.pipeline.session_facts(self));
+        }
+        v
     }
 
     /// What a reference to a built-in stage reads: the facts it settled.
     fn builtin_value(&self, stage: BuiltinStage, scope: Option<&str>) -> Value {
-        match stage {
-            BuiltinStage::Research => json!({ "research_docs": self.research_docs() }),
-            BuiltinStage::Track => json!({ "track": self.track }),
-            BuiltinStage::Spec => {
-                json!({ "spec_file": self.spec.current.as_ref().map(|c| c.spec_path.clone()) })
-            }
-            BuiltinStage::Stakes => json!({ "stakes": self.stakes.as_ref().map(|(_, s)| s) }),
-            BuiltinStage::Plan => json!({
-                "master_plan": self.plan.current.as_ref().map(|c| c.master_plan_path.clone()),
-                "phases": self.phases.len(),
-            }),
-            BuiltinStage::Build => json!({ "phases": self.phases.len() }),
-            BuiltinStage::Feedback => json!({}),
-            BuiltinStage::Closing | BuiltinStage::Book => {
-                crate::pipeline::get().stage_value(self, stage, scope)
-            }
-        }
+        self.pipeline.stage_value(self, stage, scope)
     }
 
     /// Rule WB4: the value of one reference, such as `audit.data.risk`.
@@ -803,7 +787,7 @@ fn scope_value(s: &SessionState, scope: Option<&str>) -> Value {
             json!({
                 "kind": "phase",
                 "phase": id,
-                "project": id.and_then(|i| s.phases.get(&i)).map(|p| p.info.project.clone()),
+                "project": id.and_then(|i| s.pipeline.phase(s, i)).map(|p| p.info.project),
             })
         }
         _ => json!({ "kind": "session" }),
@@ -1173,14 +1157,12 @@ pub fn stage_scopes(s: &SessionState, d: &StageDef) -> Vec<Option<String>> {
             .iter()
             .map(|p| Some(format!("project:{p}")))
             .collect(),
-        StageScope::Phase => {
-            let removed = crate::pipeline::get().removed_phases(s);
-            s.phases
-                .values()
-                .filter(|p| !removed.contains(&p.info.id) && p.impl_loop.is_done())
-                .map(|p| Some(format!("phase:{}", p.info.id)))
-                .collect()
-        }
+        StageScope::Phase => s
+            .pipeline
+            .passed_phases(s)
+            .into_iter()
+            .map(|p| Some(format!("phase:{p}")))
+            .collect(),
     }
 }
 
@@ -1344,8 +1326,8 @@ pub fn stage_request(
     let phase = scope
         .and_then(|x| x.strip_prefix("phase:"))
         .and_then(|p| p.parse::<u32>().ok())
-        .and_then(|p| s.phases.get(&p));
-    let project = match (scope.and_then(|x| x.strip_prefix("project:")), phase) {
+        .and_then(|p| s.pipeline.phase(s, p));
+    let project = match (scope.and_then(|x| x.strip_prefix("project:")), &phase) {
         (Some(p), _) => p.to_string(),
         (None, Some(p)) => p.info.project.clone(),
         _ => s.primary(),
@@ -1361,14 +1343,10 @@ pub fn stage_request(
         stage_round: Some(round),
         instructions: d.instructions.clone(),
         prior_findings: prior,
-        spec_file: s.spec.current.as_ref().map(|c| PathBuf::from(&c.spec_path)),
-        target: s
-            .plan
-            .current
-            .as_ref()
-            .map(|c| PathBuf::from(&c.master_plan_path)),
-        research_docs: s.research_docs(),
-        phase: phase.map(|p| p.info.clone()),
+        spec_file: s.pipeline.spec_file(s),
+        target: s.pipeline.master_plan(s),
+        research_docs: s.pipeline.research_docs(s),
+        phase: phase.as_ref().map(|p| p.info.clone()),
         earlier_stages: s.earlier_stage_lines(wf, &d.id, scope),
         stage_inputs: s
             .node_inputs(d, scope)
@@ -1376,7 +1354,7 @@ pub fn stage_request(
             .map(|(k, v)| format!("{k} = {v}"))
             .collect(),
         user_notes: notes.to_vec(),
-        implementer_report: phase.and_then(|p| p.implementer_report.clone()),
+        implementer_report: phase.and_then(|p| p.implementer_report),
         ..Default::default()
     };
     SpawnRequest {

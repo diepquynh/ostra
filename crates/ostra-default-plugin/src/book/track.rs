@@ -1,8 +1,8 @@
 //! Rule B10: the docs pipeline's view of a project's track: the survey, the drafts, the rounds,
 //! and the project's docs as one run.
 
+use crate::data::{CheckState, DocsRound, DocsState, ProjectTrack};
 use ostra_core::book::{DocSection, DocumentationSubmit, InventoryItem, PlannedPage};
-use ostra_engine::state::{CheckState, DocsRound, DocsState, ProjectTrack};
 use std::collections::BTreeMap;
 
 pub trait DocsTrack {

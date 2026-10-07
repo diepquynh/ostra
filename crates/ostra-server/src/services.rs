@@ -59,6 +59,9 @@ impl ServerServices {
 
 #[async_trait::async_trait]
 impl Services for ServerServices {
+    fn pipeline(&self) -> std::sync::Arc<dyn ostra_engine::pipeline::Pipeline> {
+        ostra_default_plugin::pipeline()
+    }
     fn global(&self) -> GlobalConfig {
         self.shared.global()
     }

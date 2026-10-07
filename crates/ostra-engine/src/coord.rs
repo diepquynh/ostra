@@ -2,7 +2,8 @@
 //! and what each run is handed at its next turn boundary. Everything here is a pure function of the
 //! log.
 
-use crate::state::{ExecRecord, ExploreOrigin, SessionState, purpose_key};
+use crate::pipeline::HelperResult;
+use crate::state::{ExecRecord, SessionState, purpose_key};
 use chrono::{DateTime, Utc};
 use ostra_core::Contract;
 use ostra_core::agent::AgentName;
@@ -10,7 +11,7 @@ use ostra_core::coord::{
     LIST_AGENTS, MAX_CONVERSATION_RUNS, MAX_HELPERS_PER_RUN, MAX_SESSION_MESSAGES, MessageKind,
     MessageTarget, SEND_MESSAGE, SendInput,
 };
-use ostra_core::event::{ExecPurpose, FactTarget, SessionEvent};
+use ostra_core::event::{ExecPurpose, SessionEvent};
 use ostra_core::exec::{ExecutionResult, ExecutionStatus};
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{ExecutionId, MessageId};
@@ -452,11 +453,7 @@ impl SessionState {
     pub fn helper_message(&self, rec: &ExecRecord) -> Option<&Message> {
         match &rec.purpose {
             ExecPurpose::Helper { message } => self.message(message),
-            ExecPurpose::Explore { task } => match &self.explore.get(*task as usize)?.origin {
-                ExploreOrigin::Ask { ask } => self.message(ask),
-                _ => None,
-            },
-            _ => None,
+            other => self.message(&self.pipeline.helper_ask(self, other)?),
         }
     }
 
@@ -481,22 +478,14 @@ impl SessionState {
                 agent,
                 project,
                 contract,
-            } if contract.map_or(*agent == AgentName::Explore, |c| c == Contract::Research) => {
-                let task = format!(
-                    "{} asks for this research and waits for your findings:\n{text}",
-                    self.describe(&self.subagent_of(from))
-                );
-                let t = self.push_explore(
-                    project.clone(),
-                    task,
-                    ExploreOrigin::Ask { ask: id.clone() },
-                );
-                if let Some(x) = self.explore.get_mut(t as usize) {
-                    x.agent = Some(*agent);
-                }
-                (None, Some(t))
+            } => {
+                let asker = self.describe(&self.subagent_of(from));
+                let task = self
+                    .pipeline
+                    .clone()
+                    .helper_task(self, id, *agent, *contract, project, &asker, text);
+                (None, task)
             }
-            MessageTarget::Agent { .. } => (None, None),
         };
         if wait {
             let on = match target {
@@ -594,9 +583,8 @@ impl SessionState {
                     m.delivered_to = Some(id.clone());
                 }
             }
-            ExecPurpose::Explore { task } => {
-                if let Some(ExploreOrigin::Ask { ask }) =
-                    self.explore.get(*task as usize).map(|t| t.origin.clone())
+            other => {
+                if let Some(ask) = self.pipeline.helper_ask(self, other)
                     && let Some(m) = self.message_mut(&ask)
                     && m.to.is_none()
                 {
@@ -604,7 +592,6 @@ impl SessionState {
                     m.delivered_to = Some(id.clone());
                 }
             }
-            _ => {}
         }
     }
 
@@ -616,51 +603,29 @@ impl SessionState {
         let Some(asked) = self.helper_message(rec).cloned() else {
             return;
         };
-        let text = match (&rec.purpose, result.status) {
-            (ExecPurpose::Explore { task }, ExecutionStatus::Ok) => {
-                let Some(sub) = self
-                    .explore
-                    .get(*task as usize)
-                    .and_then(|t| t.result.clone())
-                else {
-                    return;
-                };
-                let mut s = format!(
-                    "{}\n\nResearch document: {}",
-                    sub.findings_summary, sub.research_path
-                );
-                if !sub.not_covered.is_empty() {
-                    s.push_str(&format!("\nNot covered: {}", sub.not_covered.join("; ")));
+        let text = match self.pipeline.helper_result(self, rec, result) {
+            Some(HelperResult::NotYet) => return,
+            Some(HelperResult::Text(t)) => t,
+            None => match (&rec.purpose, result.status) {
+                // Interrupted or waiting for its own message: the helper is not done yet.
+                (_, ExecutionStatus::Interrupted | ExecutionStatus::Waiting) => return,
+                // Rule PL5: a plugin contract's result reaches the starter as its plugin handled it.
+                (ExecPurpose::Helper { .. }, s)
+                    if ended_ok(s) && matches!(rec.contract, Contract::Plugin(_)) =>
+                {
+                    match &rec.handled {
+                        Some(h) => render_submit(&serde_json::to_value(h).unwrap_or_default()),
+                        None => return,
+                    }
                 }
-                s
-            }
-            // Interrupted or waiting for its own message: the helper is not done yet.
-            (_, ExecutionStatus::Interrupted | ExecutionStatus::Waiting) => return,
-            // An explore that errors is retried once before it counts as failed.
-            (ExecPurpose::Explore { task }, _)
-                if self
-                    .explore
-                    .get(*task as usize)
-                    .is_some_and(|t| t.failed.is_none() && !t.abandoned) =>
-            {
-                return;
-            }
-            // Rule PL5: a plugin contract's result reaches the starter as its plugin handled it.
-            (ExecPurpose::Helper { .. }, s)
-                if ended_ok(s) && matches!(rec.contract, Contract::Plugin(_)) =>
-            {
-                match &rec.handled {
-                    Some(h) => render_submit(&serde_json::to_value(h).unwrap_or_default()),
-                    None => return,
-                }
-            }
-            (ExecPurpose::Helper { .. }, s) if ended_ok(s) => match &result.submit {
-                Some(v) => render_submit(v),
-                None => "The helper ended without a result.".into(),
+                (ExecPurpose::Helper { .. }, s) if ended_ok(s) => match &result.submit {
+                    Some(v) => render_submit(v),
+                    None => "The helper ended without a result.".into(),
+                },
+                (_, status) => format!(
+                    "The helper ended its run with status {status:?} without a result. Continue without it, or ask again."
+                ),
             },
-            (_, status) => format!(
-                "The helper ended its run with status {status:?} without a result. Continue without it, or ask again."
-            ),
         };
         let id = result_id(&asked.id);
         if self.message(&id).is_some() {
@@ -695,40 +660,6 @@ impl SessionState {
                 .map(|r| r.id.clone())
         };
         let prev = match purpose {
-            ExecPurpose::Spec { .. } if self.spec.current.is_some() => {
-                last(&|p| matches!(p, ExecPurpose::Spec { .. }))
-            }
-            ExecPurpose::Plan { .. } if self.plan.current.is_some() => {
-                last(&|p| matches!(p, ExecPurpose::Plan { .. }))
-            }
-            ExecPurpose::FactCheck { target, .. } => {
-                let t = *target;
-                last(&|p| matches!(p, ExecPurpose::FactCheck { target, .. } if *target == t))
-            }
-            ExecPurpose::Review { phase, tests, .. } => {
-                let (ph, te) = (*phase, *tests);
-                last(
-                    &|p| matches!(p, ExecPurpose::Review { phase, tests, .. } if *phase == ph && *tests == te),
-                )
-            }
-            ExecPurpose::Implement { phase, work } | ExecPurpose::WriteTest { phase, work }
-                if matches!(
-                    work,
-                    ostra_core::event::WorkKind::Fix
-                        | ostra_core::event::WorkKind::BlockerFix
-                        | ostra_core::event::WorkKind::Rescue
-                        | ostra_core::event::WorkKind::Resume
-                ) =>
-            {
-                let (ph, test) = (*phase, matches!(purpose, ExecPurpose::WriteTest { .. }));
-                last(&|p| match p {
-                    ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
-                        !test && *phase == ph
-                    }
-                    ExecPurpose::WriteTest { phase, .. } => test && *phase == ph,
-                    _ => false,
-                })
-            }
             // Rule WF5: the next round of a workflow stage continues its agent's conversation.
             ExecPurpose::Stage { node, scope, round } if *round > 1 => {
                 let (n, sc) = (node.clone(), scope.clone());
@@ -736,7 +667,7 @@ impl SessionState {
                     &|p| matches!(p, ExecPurpose::Stage { node, scope, .. } if *node == n && *scope == sc),
                 )
             }
-            _ => None,
+            other => self.pipeline.previous_run(self, other),
         }?;
         let prev_rec = self.executions.get(&prev)?;
         let prev_ok = prev_rec
@@ -751,7 +682,8 @@ impl SessionState {
             || head.agent != agent
             || !ended_ok(result.status)
             || result.submit.is_none()
-            || crate::pipeline::get()
+            || self
+                .pipeline
                 .forced_executor(self, agent)
                 .is_some_and(|e| e != head.executor)
             || (matches!(head.executor, ExecutorKind::Harness(_))
@@ -771,14 +703,10 @@ impl SessionState {
 
     /// The session dir a subagent's runs work in.
     pub fn session_dir_of(&self, rec: &ExecRecord) -> PathBuf {
-        match rec.purpose {
-            ExecPurpose::Spec { .. }
-            | ExecPurpose::Plan { .. }
-            | ExecPurpose::FactCheck {
-                target: FactTarget::Spec | FactTarget::Plan,
-                ..
-            } => self.session_root.clone(),
-            _ => self.project_session_dir(&rec.project),
+        if self.pipeline.session_wide(&rec.purpose) {
+            self.session_root.clone()
+        } else {
+            self.project_session_dir(&rec.project)
         }
     }
 
@@ -982,53 +910,7 @@ impl SessionState {
         let Some(rec) = self.executions.get(exec) else {
             return vec![];
         };
-        let latest = |f: &dyn Fn(&ExecRecord) -> bool| {
-            self.executions
-                .values()
-                .filter(|r| f(r))
-                .max_by_key(|r| r.id.clone())
-                .map(|r| self.subagent_of(&r.id))
-        };
-        let mut out: Vec<(ExecutionId, String)> = vec![];
-        let checked = |target: FactTarget| -> Option<ExecutionId> {
-            latest(
-                &|r| matches!(&r.purpose, ExecPurpose::FactCheck { target: t, .. } if *t == target),
-            )
-        };
-        match &rec.purpose {
-            ExecPurpose::Spec { .. } => {
-                out.extend(checked(FactTarget::Spec).map(|c| (c, "your fact checker".to_string())))
-            }
-            ExecPurpose::Plan { .. } => {
-                out.extend(checked(FactTarget::Plan).map(|c| (c, "your fact checker".to_string())))
-            }
-            ExecPurpose::FactCheck { target, .. } => {
-                let author = match target {
-                    FactTarget::Spec => latest(&|r| matches!(r.purpose, ExecPurpose::Spec { .. })),
-                    FactTarget::Plan => latest(&|r| matches!(r.purpose, ExecPurpose::Plan { .. })),
-                };
-                out.extend(author.map(|a| (a, "the author of the document you check".to_string())));
-            }
-            _ if rec.loop_key.is_some() => {
-                let key = rec.loop_key;
-                let review = matches!(rec.purpose, ExecPurpose::Review { .. });
-                let other = latest(&|r| {
-                    r.loop_key == key && matches!(r.purpose, ExecPurpose::Review { .. }) != review
-                });
-                out.extend(other.map(|o| {
-                    (
-                        o,
-                        if review {
-                            "the implementer of the phase you review"
-                        } else {
-                            "the reviewer of your phase"
-                        }
-                        .to_string(),
-                    )
-                }));
-            }
-            _ => {}
-        }
+        let mut out = self.pipeline.partners(self, rec);
         // Rule WF6: a workflow stage names the subagents of the stages it reads.
         out.extend(self.stage_partners(rec));
         for sender in self.owed_by(exec) {

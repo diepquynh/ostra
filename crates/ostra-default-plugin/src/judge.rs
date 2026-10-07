@@ -9,7 +9,7 @@ use ostra_core::pipeline::Category;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub use ostra_engine::state::{AnswerRoute, FeedbackTarget, NoteStage, OptsIn};
+pub use crate::data::{AnswerRoute, FeedbackTarget, NoteStage, OptsIn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExploreTaskSpec {

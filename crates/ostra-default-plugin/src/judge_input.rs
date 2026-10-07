@@ -4,15 +4,13 @@
 use crate::book::DocsTrack;
 use crate::prelude::*;
 
+use crate::data::{DocsState, EpaState, LoopNext, SUFFICIENCY_ROUNDS};
 use ostra_core::event::{
     AnswerSource, ContextDelivery, ExecPurpose, GateAnswer, GatePayload, JudgeKind,
 };
 use ostra_core::ids::{ExecutionId, GateId};
 use ostra_core::pipeline::{Category, QuestionAnswer, TestPolicy};
-use ostra_engine::state::{
-    DocsState, EpaState, Interrupt, LoopNext, SUFFICIENCY_ROUNDS, SessionState, amendment_index,
-    parse_loop_key,
-};
+use ostra_engine::state::{Interrupt, SessionState, amendment_index, parse_loop_key};
 use serde_json::{Value, json};
 use std::fmt::Write;
 use std::path::Path;
@@ -109,12 +107,16 @@ pub fn judge_input(
                 m,
                 "# Request\n\n{request}\n\nCategory: {}\nTrack: {}\nTests requested: {}\nDocs requested: {}\nResearch rounds already judged: {} of {SUFFICIENCY_ROUNDS}\n\n# Research returned\n",
                 s.category.map(|c| c.as_str()).unwrap_or("unknown"),
-                s.track.map(|t| t.as_str()).unwrap_or("not decided yet"),
+                s.ext
+                    .os()
+                    .track
+                    .map(|t| t.as_str())
+                    .unwrap_or("not decided yet"),
                 yes_no(s.tests_requested()),
                 yes_no(s.docs_requested()),
-                s.sufficiency_rounds,
+                s.ext.os().sufficiency_rounds,
             );
-            for t in &s.explore {
+            for t in &s.ext.os().explore {
                 let Some(r) = &t.result else { continue };
                 let _ = writeln!(
                     m,
@@ -139,6 +141,8 @@ pub fn judge_input(
                     .join(", ")
             );
             let n: usize = s
+                .ext
+                .os()
                 .explore
                 .iter()
                 .filter(|t| covered.contains(&t.idx))
@@ -155,7 +159,7 @@ pub fn judge_input(
         }
         JudgeKind::Stakes => {
             let _ = writeln!(m, "# Request\n\n{request}\n");
-            if let Some(spec) = &s.spec.current {
+            if let Some(spec) = &s.ext.os().spec.current {
                 let _ = writeln!(
                     m,
                     "# Approved spec\n\n{} deliverables, {} requirements.\nSummary: {}\n\n{}",
@@ -172,7 +176,7 @@ pub fn judge_input(
             let _ = writeln!(m, "# Request\n\n{request}\n");
             let _ = writeln!(m, "Projects in scope: {}\n", s.scope.join(", "));
             let _ = writeln!(m, "# Research returned\n");
-            for t in &s.explore {
+            for t in &s.ext.os().explore {
                 let Some(r) = &t.result else { continue };
                 let _ = writeln!(
                     m,
@@ -195,16 +199,16 @@ pub fn judge_input(
         JudgeKind::Feedback => {
             let round = subject
                 .and_then(|x| x.parse::<usize>().ok())
-                .and_then(|i| s.feedback.rounds.get(i));
+                .and_then(|i| s.ext.os().feedback.rounds.get(i));
             let text = round.map(|r| r.text.clone()).unwrap_or_default();
             let _ = writeln!(m, "# Request\n\n{request}\n");
             let _ = writeln!(
                 m,
                 "Track: {}\nProjects in scope: {}\n",
-                s.track.map(|t| t.as_str()).unwrap_or("full"),
+                s.ext.os().track.map(|t| t.as_str()).unwrap_or("full"),
                 s.scope.join(", ")
             );
-            match &s.spec.current {
+            match &s.ext.os().spec.current {
                 Some(spec) => {
                     let _ = writeln!(
                         m,
@@ -222,7 +226,7 @@ pub fn judge_input(
                 }
             }
             let _ = writeln!(m, "# Phases built so far\n");
-            for p in s.phases.values() {
+            for p in s.ext.os().phases.values() {
                 let _ = writeln!(
                     m,
                     "- Phase {} ({}): {}. Report: {}",
@@ -350,7 +354,7 @@ pub fn judge_input(
             if let Some(r) = rec {
                 let _ = writeln!(m, "# Stuck agent\n\n{} in project `{}`", r.agent, r.project);
                 if let Some(k) = r.loop_key
-                    && let Some(p) = s.phases.get(&k.0)
+                    && let Some(p) = s.ext.os().phases.get(&k.0)
                 {
                     let _ = writeln!(
                         m,
@@ -418,7 +422,7 @@ pub fn judge_input(
             let key = subject.and_then(parse_loop_key);
             let l = key.and_then(|k| s.loop_ref(k));
             let project = key
-                .and_then(|k| s.phases.get(&k.0))
+                .and_then(|k| s.ext.os().phases.get(&k.0))
                 .map(|p| p.info.project.clone())
                 .unwrap_or_default();
             let _ = writeln!(m, "# Review loop at its budget under YOLO\n");
@@ -444,7 +448,13 @@ pub fn judge_input(
                     ledger.display(),
                     excerpt(&ledger)
                 );
-                if let Some(p) = s.phases.get(&k.0).and_then(|p| p.info.file.clone()) {
+                if let Some(p) = s
+                    .ext
+                    .os()
+                    .phases
+                    .get(&k.0)
+                    .and_then(|p| p.info.file.clone())
+                {
                     let _ = writeln!(m, "\n# Phase file ({})\n\n{}", p.display(), excerpt(&p));
                 }
             }
@@ -463,7 +473,7 @@ pub fn judge_input(
                 match &g.payload {
                     GatePayload::OpenQuestions { .. } => {
                         let _ = writeln!(m, "# Research findings\n");
-                        for t in &s.explore {
+                        for t in &s.ext.os().explore {
                             if let Some(r) = &t.result {
                                 let _ = writeln!(
                                     m,
@@ -514,7 +524,9 @@ fn amendment_facts(
                 "- Research task {} in `{}`: {}",
                 task + 1,
                 r.project,
-                s.explore
+                s.ext
+                    .os()
+                    .explore
                     .get(*task as usize)
                     .map(|t| first_line(&t.task))
                     .unwrap_or_default()
@@ -559,7 +571,7 @@ fn session_facts(m: &mut String, s: &SessionState) {
         m,
         "Category: {}\nTrack: {}\nProjects you may target: {}\n",
         s.category.map(|c| c.as_str()).unwrap_or("unknown"),
-        s.track.map(|t| t.as_str()).unwrap_or("none"),
+        s.ext.os().track.map(|t| t.as_str()).unwrap_or("none"),
         s.scope.join(", ")
     );
     if !s.created_projects.is_empty() {
@@ -574,7 +586,7 @@ fn session_facts(m: &mut String, s: &SessionState) {
         );
     }
     research_facts(m, s);
-    match &s.spec.current {
+    match &s.ext.os().spec.current {
         Some(spec) => {
             let _ = writeln!(
                 m,
@@ -589,9 +601,9 @@ fn session_facts(m: &mut String, s: &SessionState) {
             );
         }
     }
-    if s.plan.current.is_some() {
+    if s.ext.os().plan.current.is_some() {
         let _ = writeln!(m, "# Plan phases\n");
-        for p in s.phases.values() {
+        for p in s.ext.os().phases.values() {
             let _ = writeln!(
                 m,
                 "- Phase {} ({}): {}",
@@ -606,7 +618,7 @@ fn session_facts(m: &mut String, s: &SessionState) {
 fn research_facts(m: &mut String, s: &SessionState) {
     let _ = writeln!(m, "# Research documents so far\n");
     let mut any = false;
-    for t in &s.explore {
+    for t in &s.ext.os().explore {
         let Some(r) = &t.result else { continue };
         any = true;
         let _ = writeln!(
@@ -641,9 +653,9 @@ fn research_facts(m: &mut String, s: &SessionState) {
 }
 
 fn notes_facts(m: &mut String, s: &SessionState) {
-    if s.user_notes.iter().any(|n| !n.forgotten) {
+    if s.ext.os().user_notes.iter().any(|n| !n.forgotten) {
         let _ = writeln!(m, "# Notes already kept for later stages\n");
-        for n in s.user_notes.iter().filter(|n| !n.forgotten) {
+        for n in s.ext.os().user_notes.iter().filter(|n| !n.forgotten) {
             let stages: Vec<&str> = n
                 .stages
                 .iter()
@@ -746,7 +758,7 @@ fn completion_input(s: &SessionState) -> (String, String) {
     if s.category == Some(Category::QuickAnswer) {
         return (m, "Quick answer".into());
     }
-    if let (Some(Category::Implement), Some(track)) = (s.category, s.track) {
+    if let (Some(Category::Implement), Some(track)) = (s.category, s.ext.os().track) {
         let _ = writeln!(
             m,
             "Track: {}{}\n",
@@ -758,9 +770,9 @@ fn completion_input(s: &SessionState) -> (String, String) {
             }
         );
     }
-    if !s.feedback.rounds.is_empty() {
+    if !s.ext.os().feedback.rounds.is_empty() {
         let _ = writeln!(m, "# Feedback rounds after the implementation\n");
-        for (i, r) in s.feedback.rounds.iter().enumerate() {
+        for (i, r) in s.ext.os().feedback.rounds.iter().enumerate() {
             let _ = writeln!(
                 m,
                 "- Round {}: {} (built as phases {:?})",
@@ -772,7 +784,7 @@ fn completion_input(s: &SessionState) -> (String, String) {
         m.push('\n');
     }
     let _ = writeln!(m, "# Research\n");
-    for t in &s.explore {
+    for t in &s.ext.os().explore {
         match &t.result {
             Some(r) => {
                 let _ = writeln!(m, "- {}: {}", r.research_path, r.findings_summary);
@@ -783,14 +795,16 @@ fn completion_input(s: &SessionState) -> (String, String) {
             None => {}
         }
     }
-    if let Some(spec) = &s.spec.current {
+    if let Some(spec) = &s.ext.os().spec.current {
         let _ = writeln!(
             m,
             "\n# Spec\n\n{} ({}). Approved: {}.",
-            spec.spec_path, spec.summary, s.spec.approved
+            spec.spec_path,
+            spec.summary,
+            s.ext.os().spec.approved
         );
     }
-    match (&s.stakes, &s.plan.current) {
+    match (&s.ext.os().stakes, &s.ext.os().plan.current) {
         (Some((_, st)), None) => {
             let _ = writeln!(
                 m,
@@ -806,10 +820,10 @@ fn completion_input(s: &SessionState) -> (String, String) {
         }
         _ => {}
     }
-    if !s.phases.is_empty() {
+    if !s.ext.os().phases.is_empty() {
         let removed = crate::planner::removed_phases(s);
         let _ = writeln!(m, "\n# Phases\n");
-        for p in s.phases.values() {
+        for p in s.ext.os().phases.values() {
             let status = if removed.contains(&p.info.id) {
                 "removed because a phase it depends on failed".to_string()
             } else {
@@ -852,7 +866,7 @@ fn completion_input(s: &SessionState) -> (String, String) {
             }
         }
         let _ = writeln!(m, "\n# Closing stages per project\n");
-        for (k, t) in &s.project_tracks {
+        for (k, t) in &s.ext.os().project_tracks {
             let closing = t
                 .closing
                 .map(|(a, b)| format!("tests {}, docs {}", yes(a), yes(b)))
@@ -1109,8 +1123,8 @@ pub fn yolo_answer_from_judge(
                 .map(String::from)
                 .filter(|f| !f.trim().is_empty());
             let passed = match &g.payload {
-                GatePayload::SpecApproval { .. } => s.spec.passed_current(),
-                _ => s.plan.passed_current(),
+                GatePayload::SpecApproval { .. } => s.ext.os().spec.passed_current(),
+                _ => s.ext.os().plan.passed_current(),
             };
             if approved && !passed {
                 return Err("approval requires a fact-check PASS".into());
